@@ -1,0 +1,10 @@
+# Environment
+**/.env
+venv
+
+# Cache
+**/__pycache__
+**/my_chroma_store
+
+# Test files
+playground
