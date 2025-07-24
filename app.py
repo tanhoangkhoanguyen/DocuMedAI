@@ -4,7 +4,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.messages import HumanMessage
 
 
-from src.workflow import build_graph
+from backend.src.workflow import build_graph
 
 
 if "chat_history" not in st.session_state:

@@ -146,11 +146,9 @@ Your task is to enhance the given answer for the following question thoroughly a
 
 ### Use the following context if relevant; ignore if not.
 - tavily_context - Used to validate facts, and correct outdated information.
-- wikipedia_context - Used to offer background knowledge, and conceptual clarity.
 
 ### Input:
 - tavily_context: {tavily_context}
-- wikipedia_context: {wiki_context}
 - question: {question}
 - original_answer: {original_answer}
 """

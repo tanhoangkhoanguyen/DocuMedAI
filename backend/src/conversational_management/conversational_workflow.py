@@ -1,7 +1,7 @@
 from langgraph.graph import StateGraph
 
 
-from src.state_schema import State
+from backend.src.state_schema import State
 from .conversational_node_functions import *
 
 

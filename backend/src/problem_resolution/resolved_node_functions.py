@@ -12,10 +12,9 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.schema import Document
 from langchain_community.vectorstores import Chroma
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
-from ragatouille import RAGPretrainedModel
 
 
-from src.state_schema import State, IntOuput
+from backend.src.state_schema import State, IntOuput
 from .resolved_prompt import *
 from .keywords import tag
 
@@ -70,7 +69,6 @@ class LawAdvisory(Runnable):
         #     temperature = 0
         # )
         self.chain = self.chat.with_structured_output(IntOuput, method = "function_calling")
-        self.RAG = RAGPretrainedModel.from_pretrained("colbert-ir/colbertv2.0")
 
 
     def personal_law_types(self):
@@ -116,7 +114,7 @@ class LawAdvisory(Runnable):
     
 
     def load_docs(self, law_type):
-        folder_path = f"src/problem_resolution/advisory_types/{law_type}"
+        folder_path = f"backend/src/problem_resolution/advisory_types/{law_type}"
         document_path = folder_path + "/document.py"
         keywords_list = f"{law_type}_tags"
         cleaned_docs = []
@@ -156,7 +154,7 @@ class LawAdvisory(Runnable):
 
         vectorstore = Chroma.from_documents(documents = split, 
                                             embedding = OpenAIEmbeddings(),
-                                            persist_directory = f"src/problem_resolution/advisory_types/{law_type}/my_chroma_store")
+                                            persist_directory = f"bankend/src/problem_resolution/advisory_types/{law_type}/my_chroma_store")
         retriever = vectorstore.as_retriever(search_kwargs = {"k": 3})
         return retriever
     
@@ -238,7 +236,7 @@ class LawAdvisory(Runnable):
         return response.content
     
 
-    def tavily_search(query, max_results = 3):
+    def tavily_search(self, query, max_results = 3):
         url = "https://api.tavily.com/search"
         headers = {
             "Authorization": f"Bearer {TAVILY_API_KEY}",
@@ -258,46 +256,12 @@ class LawAdvisory(Runnable):
         return response.json()
 
 
-    def wikipedia_search(title: str):
-        url = "https://en.wikipedia.org/w/api.php"
-        params = {
-            "action": "query",
-            "format": "json",
-            "titles": title,
-            "prop": "extracts",
-            "explaintext": True,
-        }
-
-        headers = {"User-Agent": "RAGatouille_tutorial/0.0.1 (ben@clavie.eu)"}
-
-        response = requests.get(
-            url, 
-            params = params, 
-            headers = headers
-        )
-        data = response.json()
-
-        page = next(iter(data["query"]["pages"].values()))
-        return page
-
-
-    def evaluate_resp(self, response, law_type):
+    def evaluate_resp(self, response):
         tavily_resp = self.tavily_search(self.message) # dict['results'] of list (len == 3) of dict['content']
         tavily_text = '\n'.join(doc['content'] for doc in tavily_resp['results'])
 
-        full_doc = self.wikipedia_search(law_type)
-        self.RAG.index(
-            collection = [full_doc],
-            index_name = "wiki_search",
-            max_document_length = 200,
-            split_documents = True,
-        )
-        wiki_chat = self.RAG.as_langchain_retriever(k = 3)
-        wiki_text = wiki_chat.invoke("message")
-
         eval_prompt = EVAL_PROMPT.format(
             tavily_context = tavily_text,
-            wiki_context = wiki_text,
             question = self.message,
             original_answer = response
         )
@@ -305,22 +269,15 @@ class LawAdvisory(Runnable):
         return resp
     
 
-    def invoke(self, state):
+    def invoke(self, state, config = None):
         self.message = state['messages'][-1].content
 
-        law_type = "criminal_law" # self.advisory_category()
+        law_type = self.advisory_category()
         if law_type != "criminal_law":
             return other()
         docs = self.load_docs(law_type)
         retriever = self.setup(docs, law_type)
         response = self.generate_resp(retriever)
-        final_resp = self.evaluate_resp(response, law_type)
+        final_resp = self.evaluate_resp(response)
 
-        return {'messages': [
-            AIMessage(content = final_resp)
-        ]}
-    
-
-if __name__ == "__main__":
-    Nhi = LawAdvisory()
-    Nhi.invoke({'messages': [HumanMessage(content = "If I commit a crime (steal property), how long will I be sentenced?.")]})
+        return {'messages': [final_resp]}

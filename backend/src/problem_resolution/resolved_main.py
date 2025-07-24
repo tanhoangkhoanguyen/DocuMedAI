@@ -6,7 +6,7 @@ from .resolved_workflow import build_resolved_graph
 
 if __name__ == "__main__":
     graph = build_resolved_graph().compile()
-    with open("src/problem_resolution/resolved_workflow.png", "wb") as f:
+    with open("backend/src/problem_resolution/resolved_workflow.png", "wb") as f:
         f.write(graph.get_graph().draw_mermaid_png())
     
     # message = [

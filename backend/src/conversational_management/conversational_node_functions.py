@@ -5,7 +5,7 @@ from langchain_core.messages import AIMessage, SystemMessage
 from pprint import pprint
 
 
-from src.state_schema import State, IntOuput
+from backend.src.state_schema import State, IntOuput
 from .conversational_prompt import *
 
 
