@@ -12,6 +12,7 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.schema import Document
 from langchain_community.vectorstores import Chroma
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from ragatouille import RAGPretrainedModel
 
 
 from src.state_schema import State, IntOuput
@@ -21,7 +22,7 @@ from .keywords import tag
 
 from dotenv import load_dotenv, find_dotenv
 _ = load_dotenv(find_dotenv())
-chat = ChatOpenAI(model = 'gpt-3.5-turbo', temperature = 0)
+chat = ChatOpenAI(model = 'gpt-4o-mini', temperature = 0)
 # GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 # chat = ChatGroq(
 #     model_name = "allam-2-7b",
@@ -29,6 +30,7 @@ chat = ChatOpenAI(model = 'gpt-3.5-turbo', temperature = 0)
 #     temperature = 0
 # )
 chain = chat.with_structured_output(IntOuput, method = "function_calling")
+TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 
 
 # ========== CONDITIONAL NODES ==========
@@ -61,13 +63,14 @@ def other(state):
 class LawAdvisory(Runnable):
     def __init__(self):
         self.message = ""
-        self.chat = ChatOpenAI(model = 'gpt-3.5-turbo', temperature = 0)
+        self.chat = ChatOpenAI(model = 'gpt-4o-mini', temperature = 0)
         # self.chat = ChatGroq(
         #     model_name = "allam-2-7b",
         #     groq_api_key = GROQ_API_KEY,
         #     temperature = 0
         # )
         self.chain = self.chat.with_structured_output(IntOuput, method = "function_calling")
+        self.RAG = RAGPretrainedModel.from_pretrained("colbert-ir/colbertv2.0")
 
 
     def personal_law_types(self):
@@ -229,15 +232,77 @@ class LawAdvisory(Runnable):
         contextQuestion_template = CONTEXT_QUESTION_PROMPT.format(
             normal_context = str_multiQuery,
             general_context = str_stepBack,
-            original_question = self.message
+            question = self.message
         )
         response = self.chat.invoke(contextQuestion_template)
         return response.content
     
 
-    def evaluate_resp(response):
-        
-        return 1
+    def tavily_search(query, max_results = 3):
+        url = "https://api.tavily.com/search"
+        headers = {
+            "Authorization": f"Bearer {TAVILY_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "query": query,
+            "search_depth": "advanced",
+            "include_answer": False,
+            "max_results": max_results
+        }
+        response = requests.post(
+                url, 
+                json = payload, 
+                headers = headers
+        )
+        return response.json()
+
+
+    def wikipedia_search(title: str):
+        url = "https://en.wikipedia.org/w/api.php"
+        params = {
+            "action": "query",
+            "format": "json",
+            "titles": title,
+            "prop": "extracts",
+            "explaintext": True,
+        }
+
+        headers = {"User-Agent": "RAGatouille_tutorial/0.0.1 (ben@clavie.eu)"}
+
+        response = requests.get(
+            url, 
+            params = params, 
+            headers = headers
+        )
+        data = response.json()
+
+        page = next(iter(data["query"]["pages"].values()))
+        return page
+
+
+    def evaluate_resp(self, response, law_type):
+        tavily_resp = self.tavily_search(self.message) # dict['results'] of list (len == 3) of dict['content']
+        tavily_text = '\n'.join(doc['content'] for doc in tavily_resp['results'])
+
+        full_doc = self.wikipedia_search(law_type)
+        self.RAG.index(
+            collection = [full_doc],
+            index_name = "wiki_search",
+            max_document_length = 200,
+            split_documents = True,
+        )
+        wiki_chat = self.RAG.as_langchain_retriever(k = 3)
+        wiki_text = wiki_chat.invoke("message")
+
+        eval_prompt = EVAL_PROMPT.format(
+            tavily_context = tavily_text,
+            wiki_context = wiki_text,
+            question = self.message,
+            original_answer = response
+        )
+        resp = self.chat.invoke(eval_prompt)
+        return resp
     
 
     def invoke(self, state):
@@ -249,9 +314,11 @@ class LawAdvisory(Runnable):
         docs = self.load_docs(law_type)
         retriever = self.setup(docs, law_type)
         response = self.generate_resp(retriever)
-        
+        final_resp = self.evaluate_resp(response, law_type)
 
-        return state
+        return {'messages': [
+            AIMessage(content = final_resp)
+        ]}
     
 
 if __name__ == "__main__":

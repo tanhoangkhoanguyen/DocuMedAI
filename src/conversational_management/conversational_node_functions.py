@@ -10,7 +10,7 @@ from .conversational_prompt import *
 
 
 _ = load_dotenv(find_dotenv())
-chat = ChatOpenAI(model = 'gpt-3.5-turbo', temperature = 0)
+chat = ChatOpenAI(model = 'gpt-4o-mini', temperature = 0)
 chain = chat.with_structured_output(IntOuput, method = "function_calling")
 
 

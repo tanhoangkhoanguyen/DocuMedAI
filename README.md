@@ -11,6 +11,5 @@ pip install -r requirements.txt
 - research US law types
 - change `other` to cover the out of scope cases
 - data legit (prioritize taking text documents)
-- change to 40-mini -> less cost compared to gpt-3.5-turbo
 - restructure fe, be
 - setup network(docker)

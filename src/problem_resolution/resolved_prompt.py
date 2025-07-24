@@ -129,13 +129,28 @@ CONTEXT_QUESTION_PROMPT = """
 You are a professional legal assistant.
 Your task is to answer the following question thoroughly and accurately.
 
-Use the following context if relevant; ignore if not. Prioritize earlier information over later, in descending importance
+### Use the following context if relevant; ignore if not. Prioritize earlier information over later, in descending importance
 - normal_context - derived from rephrasings of the original question to improve search coverage.
 - general_context - a broader, reframed version of the question. It helps provide background, prevent hallucination, especially when the original question is overly specific.
 
-Prioritize earlier information over later, in descending importance:
-
+### Input:
 - normal_context: {normal_context}
 - general_context: {general_context}
-- original_question: {original_question}
+- question: {question}
+"""
+
+
+EVAL_PROMPT = """
+You are a professional legal assistant.
+Your task is to enhance the given answer for the following question thoroughly and accurately.
+
+### Use the following context if relevant; ignore if not.
+- tavily_context - Used to validate facts, and correct outdated information.
+- wikipedia_context - Used to offer background knowledge, and conceptual clarity.
+
+### Input:
+- tavily_context: {tavily_context}
+- wikipedia_context: {wiki_context}
+- question: {question}
+- original_answer: {original_answer}
 """

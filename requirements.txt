@@ -8,5 +8,12 @@ langchain_openai
 langgraph
 pypdf
 python-dotenv
-streamlit
+ragatouille
+voyager>=2.0.2,<3.0.0
+torch
+
+
+
+
 tavily-python
+streamlit
