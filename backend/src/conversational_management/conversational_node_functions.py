@@ -41,9 +41,8 @@ def conversational_intent_detector(state):
 def greeting(state):
     greeting_prompt = "Hi, I am your law advisory chatbot. What can I do for you?"
     print (greeting_prompt)
-    return {'messages': [
-        SystemMessage(content = greeting_prompt)
-    ]}
+    state['messages'].append(SystemMessage(content = greeting_prompt))
+    return state
 
 
 def add_instruction(state):
@@ -54,10 +53,9 @@ def add_instruction(state):
     addInstruction_prompt = ADD_INSTRUCTION_PROMPT.format(input_message = message)
     response = chat.invoke(addInstruction_prompt)
 
-    return {
-        'messages': [SystemMessage(content = sys_msg)],
-        'user_intruction': response
-        }
+    state['messages'].append(SystemMessage(content = sys_msg))
+    state['user_intruction'] = response.content
+    return state
 
 
 def complain_contact(state):
@@ -66,6 +64,5 @@ Please reach out to me through my:
 - email: {EMAIL}
     """
     print (complainContact_prompt)
-    return {'messages': [
-        SystemMessage(content = complainContact_prompt)
-    ]}
+    state['messages'].append(SystemMessage(content = complainContact_prompt))
+    return state

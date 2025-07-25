@@ -52,11 +52,10 @@ def resolved_intent_detector(state):
 
 
 def other(state):
-    other_prompt = "I am sorry, this question is out-of my scope."
-    print (other_prompt)
-    return {'messages': [
-        SystemMessage(content = other_prompt)
-    ]}
+    message = state['messages'][-1].content
+    response = chat.invoke(message)
+    state['messages'].append(response)
+    return state
 
 
 class LawAdvisory(Runnable):
@@ -279,5 +278,6 @@ class LawAdvisory(Runnable):
         retriever = self.setup(docs, law_type)
         response = self.generate_resp(retriever)
         final_resp = self.evaluate_resp(response)
+        state['messages'].append(final_resp)
 
-        return {'messages': [final_resp]}
+        return state

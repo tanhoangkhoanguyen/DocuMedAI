@@ -1,4 +1,5 @@
 chromadb
+fastapi
 langchain
 langchain-community
 langchain_core
@@ -9,3 +10,4 @@ pypdf
 python-dotenv
 tavily-python
 streamlit
+uvicorn
