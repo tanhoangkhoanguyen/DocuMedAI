@@ -1,0 +1,91 @@
+services:
+  la-qdrant:
+    image: qdrant/qdrant:latest
+    restart: unless-stopped
+    container_name: la-qdrant-service
+    ports:
+      - "9001:6333"  
+      - "6335:6334"   
+    volumes:
+      - ./qdrant_data:/qdrant/storage
+      - ./qdrant_config/production.yaml:/qdrant/config/production.yaml
+    environment:
+      - QDRANT__SERVICE__API_KEY=${QDRANT_API_KEY}
+    networks:
+      - server-net
+  
+  la-elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.8.1
+    container_name: la-elasticsearch-service
+    environment:
+      node.name: ${NODE_NAME:-es-node1}
+      cluster.name: ${CLUSTER_NAME:-es-cluster}
+      discovery.type: ${DISCOVERY_TYPE:-single-node}
+      bootstrap.memory_lock: "true"
+      ES_JAVA_OPTS: "${ES_JAVA_OPTS:- -Xms1g -Xmx1g}"
+      xpack.security.enabled: "true"
+      ELASTIC_PASSWORD: ${ELASTIC_PASSWORD}
+      ELASTIC_API_KEY: ${ELASTIC_API_KEY}
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - esdata:/usr/share/elasticsearch/data
+    ports:
+      - "9002:9200" 
+    networks:
+      - server-net
+  
+  la-mongodb:
+    image: mongo:7.0
+    container_name: la-mongodb-services
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_INITDB_ROOT_USERNAME}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_INITDB_ROOT_PASSWORD}
+    ports:
+      - "9003:27017"
+    volumes:
+      - mongodb_data:/data/db
+    networks:
+      - server-net
+
+  la-server:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    container_name: la-server-service
+    volumes:
+      - ./server:/server
+    ports:
+      - "9004:9004"
+    stdin_open: true   
+    tty: true 
+    command: bash
+    environment:
+      QDRANT_URL: ${QDRANT_URL}
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY}
+      ELASTIC_HOST: ${ELASTIC_HOST}
+      ELASTIC_PASSWORD: ${ELASTIC_PASSWORD}
+      ELASTIC_API_KEY: ${ELASTIC_API_KEY}
+      MONGODB_URI: mongodb://${MONGO_INITDB_ROOT_USERNAME}:example@la-mongodb-services:27017/?authSource=admin
+    env_file:
+      - .env
+
+    depends_on:
+      - la-qdrant
+      - la-elasticsearch
+      - la-mongodb
+    networks:
+      - server-net
+
+volumes:
+  esdata:
+    driver: local
+  mongodb_data:
+    driver: local
+
+
+networks:
+  server-net:
+    driver: bridge

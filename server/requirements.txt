@@ -1,0 +1,29 @@
+# ----- Qdrant Service Dependencies -----
+qdrant-client>=1.8.0
+
+# ----- Elastic Search Dependencies -----
+elasticsearch==8.17.2
+
+# ----- MongoDB Dependencies -----
+pymongo==4.0.1
+
+# ----- Agents -----
+langchain==0.3.25
+langchain-community==0.3.24
+langchain-core==0.3.61
+langchain-openai==0.3.18
+langgraph==0.4.5
+tavily-python==0.7.2
+
+# ----- App ----
+fastapi==0.115.9
+uvicorn==0.34.2
+
+# ----- Basic -----
+python-dotenv==1.1.0
+
+# ----- Others -----
+chromadb==1.0.12
+pypdf==4.2.0
+
+
