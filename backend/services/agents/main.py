@@ -15,3 +15,9 @@ if __name__ == "__main__":
     graph = build_graph().compile()
     with open("backend/services/agents/image/workflow.png", "wb") as f:
         f.write(graph.get_graph(xray = True).draw_mermaid_png())
+
+    message = [
+        HumanMessage(content = "Hi")
+    ]
+    resp = graph.invoke({"messages": message})
+    print (resp)

@@ -139,7 +139,7 @@ class LawAdvisory(Runnable):
 
         vectorstore = Chroma.from_documents(documents = split, 
                                             embedding = OpenAIEmbeddings(),
-                                            persist_directory = f"bankend/services/agents/src/problem_resolution/advisory_types/{law_type}/my_chroma_store")
+                                            persist_directory = f"backend/services/agents/src/problem_resolution/advisory_types/{law_type}/my_chroma_store")
         retriever = vectorstore.as_retriever(search_kwargs = {"k": 3})
         return retriever
     

@@ -45,5 +45,5 @@ def mongodb_demo():
 
 
 if __name__ == "__main__":
-    demo_mongodb()
+    mongodb_demo()
     
