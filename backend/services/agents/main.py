@@ -1,7 +1,7 @@
 from langchain_core.messages import HumanMessage, SystemMessage
 
 
-from backend.src.workflow import build_graph
+from backend.services.agents.src.workflow import build_graph
 
 
 def run_graph(message):
@@ -13,5 +13,5 @@ def run_graph(message):
 
 if __name__ == "__main__":
     graph = build_graph().compile()
-    with open("backend/workflow.png", "wb") as f:
+    with open("backend/services/agents/image/workflow.png", "wb") as f:
         f.write(graph.get_graph(xray = True).draw_mermaid_png())
