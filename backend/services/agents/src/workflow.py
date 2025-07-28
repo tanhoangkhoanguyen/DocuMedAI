@@ -11,15 +11,9 @@ def build_graph():
     builder = StateGraph(State)
     builder.add_node(intent_detector)
     builder.add_node("conversational_management", build_conversational_graph().compile())
-    builder.add_node("problem_resolution", build_resolved_graph().compile())
 
     builder.set_entry_point("intent_detector")
-    builder.add_conditional_edges(
-            "intent_detector",
-            decide_node,
-            ["conversational_management", "problem_resolution"]
-        )
+    builder.add_edge("intent_detector", "conversational_management")
     builder.set_finish_point("conversational_management")
-    builder.set_finish_point("problem_resolution")
 
     return builder
