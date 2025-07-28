@@ -12,8 +12,8 @@
 2. Run demo
     ```
     docker ps 
-    # Get the la-server id
-    docker exec -it <la-server id> bash
+    # Get the la-backend id
+    docker exec -it <la-backend id> bash
     python -m test.all_demo # Run all demos
     python -m demo.elastic # Run elasticsearch demo
     python -m demo.mongodb # Run mongodb demo
