@@ -1,7 +1,7 @@
 from fastapi import APIRouter, status, Body, HTTPException
 
 
-from backend.main import run_graph, emotionGraph
+from backend.services.agents.main import run_graph
 
 
 router = APIRouter()

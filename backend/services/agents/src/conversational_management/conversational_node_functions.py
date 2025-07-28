@@ -5,7 +5,7 @@ from langchain_core.messages import AIMessage, SystemMessage
 from pprint import pprint
 
 
-from backend.src.state_schema import State, IntOuput
+from backend.services.agents.src.state_schema import State, IntOuput
 from .conversational_prompt import *
 
 
@@ -61,8 +61,7 @@ def add_instruction(state):
 def complain_contact(state):
     complainContact_prompt = f"""I am sicerely sorry for this inconvenient.
 Please reach out to me through my:
-- email: {EMAIL}
-    """
+- email: {EMAIL}"""
     print (complainContact_prompt)
     state['messages'].append(SystemMessage(content = complainContact_prompt))
     return state

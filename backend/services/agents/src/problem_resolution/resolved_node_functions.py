@@ -14,20 +14,13 @@ from langchain_community.vectorstores import Chroma
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
 
-from backend.src.state_schema import State, IntOuput
+from backend.services.agents.src.state_schema import State, IntOuput
 from .resolved_prompt import *
-from .keywords import tag
 
 
 from dotenv import load_dotenv, find_dotenv
 _ = load_dotenv(find_dotenv())
 chat = ChatOpenAI(model = 'gpt-4o-mini', temperature = 0)
-# GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-# chat = ChatGroq(
-#     model_name = "allam-2-7b",
-#     groq_api_key = GROQ_API_KEY,
-#     temperature = 0
-# )
 chain = chat.with_structured_output(IntOuput, method = "function_calling")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 
@@ -62,11 +55,6 @@ class LawAdvisory(Runnable):
     def __init__(self):
         self.message = ""
         self.chat = ChatOpenAI(model = 'gpt-4o-mini', temperature = 0)
-        # self.chat = ChatGroq(
-        #     model_name = "allam-2-7b",
-        #     groq_api_key = GROQ_API_KEY,
-        #     temperature = 0
-        # )
         self.chain = self.chat.with_structured_output(IntOuput, method = "function_calling")
 
 
@@ -113,9 +101,8 @@ class LawAdvisory(Runnable):
     
 
     def load_docs(self, law_type):
-        folder_path = f"backend/src/problem_resolution/advisory_types/{law_type}"
+        folder_path = f"backend/services/agents/src/problem_resolution/advisory_types/{law_type}"
         document_path = folder_path + "/document.py"
-        keywords_list = f"{law_type}_tags"
         cleaned_docs = []
         
         if not os.path.exists(document_path) or os.stat(document_path).st_size == 0:
@@ -129,11 +116,10 @@ class LawAdvisory(Runnable):
 
                 for doc in raw_docs:
                     clean = doc.page_content.encode('ascii', errors = 'ignore').decode()
-                    if any(keyword in clean.lower() for keyword in tag[keywords_list]):
-                        clean = re.sub(r'\s+', ' ', clean)
-                        clean = clean.replace('.', '')
-                        clean = clean.strip()
-                        cleaned_docs.append(Document(page_content = clean, metadata = doc.metadata))
+                    clean = re.sub(r'\s+', ' ', clean)
+                    clean = clean.replace('.', '')
+                    clean = clean.strip()
+                    cleaned_docs.append(Document(page_content = clean, metadata = doc.metadata))
                 
             with open(document_path, "w", encoding = "utf-8") as f:
                 print (cleaned_docs, file = f)
@@ -153,7 +139,7 @@ class LawAdvisory(Runnable):
 
         vectorstore = Chroma.from_documents(documents = split, 
                                             embedding = OpenAIEmbeddings(),
-                                            persist_directory = f"bankend/src/problem_resolution/advisory_types/{law_type}/my_chroma_store")
+                                            persist_directory = f"bankend/services/agents/src/problem_resolution/advisory_types/{law_type}/my_chroma_store")
         retriever = vectorstore.as_retriever(search_kwargs = {"k": 3})
         return retriever
     
@@ -272,8 +258,6 @@ class LawAdvisory(Runnable):
         self.message = state['messages'][-1].content
 
         law_type = self.advisory_category()
-        if law_type != "criminal_law":
-            return other()
         docs = self.load_docs(law_type)
         retriever = self.setup(docs, law_type)
         response = self.generate_resp(retriever)
