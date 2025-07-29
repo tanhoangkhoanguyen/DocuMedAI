@@ -6,6 +6,7 @@ elasticsearch==8.17.2
 
 # ----- MongoDB Dependencies -----
 pymongo==4.0.1
+pymongo[srv]
 
 # ----- Agents -----
 langchain==0.3.25
