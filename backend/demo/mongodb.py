@@ -75,4 +75,3 @@ def check_authentication():
 if __name__ == "__main__":
     # check_authentication()
     mongodb_demo()
-    
