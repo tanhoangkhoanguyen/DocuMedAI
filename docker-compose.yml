@@ -61,7 +61,7 @@ services:
       - "9004:9004"
     stdin_open: true   
     tty: true 
-    command: bash
+    command: python -m services.chatbot.app.main
     environment:
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       TAVILY_API_KEY: ${TAVILY_API_KEY}
@@ -75,7 +75,6 @@ services:
       ELASTIC_PASSWORD: ${ELASTIC_PASSWORD}
       ELASTIC_API_KEY: ${ELASTIC_API_KEY}
       MONGODB_URI: mongodb+srv://${MONGO_INITDB_ROOT_USERNAME}:${MONGO_INITDB_ROOT_PASSWORD}@cluster0.rcb50pi.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0
-      # MONGODB_URI: mongodb://${MONGO_INITDB_ROOT_USERNAME}:${MONGO_INITDB_ROOT_PASSWORD}@cluster0.rcb50pi.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0
     env_file:
       - .env
 
@@ -84,6 +83,26 @@ services:
       - la-elasticsearch
       - la-mongodb
     networks:
+      - backend-net
+  
+  la-frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: la-frontend-service
+    volumes:
+      - ./frontend:/frontend
+    ports:
+      - "9005:9005" 
+    stdin_open: true   
+    tty: true 
+    command: python -m run         
+    environment:
+      - CHATBOT_SERVICE_URL=http://la-backend-service:9004
+    depends_on:
+      - la-backend
+    networks:
+      - frontend-net
       - backend-net
 
 volumes:
@@ -95,4 +114,6 @@ volumes:
 
 networks:
   backend-net:
+    driver: bridge
+  frontend-net:
     driver: bridge
