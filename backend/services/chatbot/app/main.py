@@ -33,7 +33,7 @@ async def read_root():
     return {"message": "Law Advisory Chatbot API is running"}
 
 if __name__ == "__main__":
-    chatbot_service_port = os.getenv("CHATBOT_SERVICE_PORT", 9004)
+    chatbot_service_port = int(os.getenv("CHATBOT_SERVICE_PORT", 9004))
     uvicorn.run(
         "services.chatbot.app.main:app",
         host="0.0.0.0",

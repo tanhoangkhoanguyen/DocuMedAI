@@ -24,7 +24,6 @@ uvicorn==0.34.2
 python-dotenv==1.1.0
 
 # ----- Others -----
-chromadb==1.0.12
 pypdf==4.2.0
-
+sentence-transformers
 
