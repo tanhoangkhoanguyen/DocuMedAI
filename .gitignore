@@ -5,8 +5,3 @@ venv
 # Cache
 **/__pycache__
 **/my_chroma_store
-qdrant_config
-qdrant_data
-
-# Test files
-playground
