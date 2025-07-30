@@ -75,7 +75,6 @@ services:
       ELASTIC_PASSWORD: ${ELASTIC_PASSWORD}
       ELASTIC_API_KEY: ${ELASTIC_API_KEY}
       MONGODB_URI: mongodb+srv://${MONGO_INITDB_ROOT_USERNAME}:${MONGO_INITDB_ROOT_PASSWORD}@cluster0.rcb50pi.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0
-      # MONGODB_URI: mongodb://${MONGO_INITDB_ROOT_USERNAME}:${MONGO_INITDB_ROOT_PASSWORD}@cluster0.rcb50pi.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0
     env_file:
       - .env
 
