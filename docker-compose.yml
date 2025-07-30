@@ -61,7 +61,7 @@ services:
       - "9004:9004"
     stdin_open: true   
     tty: true 
-    command: bash
+    command: python -m services.chatbot.app.main
     environment:
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       TAVILY_API_KEY: ${TAVILY_API_KEY}
@@ -84,6 +84,26 @@ services:
       - la-mongodb
     networks:
       - backend-net
+  
+  la-frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: la-frontend-service
+    volumes:
+      - ./frontend:/frontend
+    ports:
+      - "9005:9005" 
+    stdin_open: true   
+    tty: true 
+    command: python -m run         
+    environment:
+      - CHATBOT_SERVICE_URL=http://la-backend-service:9004
+    depends_on:
+      - la-backend
+    networks:
+      - frontend-net
+      - backend-net
 
 volumes:
   esdata:
@@ -94,4 +114,6 @@ volumes:
 
 networks:
   backend-net:
+    driver: bridge
+  frontend-net:
     driver: bridge
