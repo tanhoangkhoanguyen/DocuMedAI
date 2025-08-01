@@ -1,5 +1,5 @@
 from services.chatbot.core.constants.schemas import LawAgentState, TopicIDResponse
-from playground.khoanth.RAG.law_retriever import invoke_law_advisor
+from services.chatbot.core.RAG.law_retriever import invoke_law_advisor
 
 import asyncio
 from dotenv import load_dotenv
@@ -16,14 +16,6 @@ class LawAdvisor(Runnable):
 
     def invoke(self, state:LawAgentState, config = None):
         message = state.messages[-1].content
-        Nhi = asyncio.run(invoke_law_advisor(self.llm, self.structured_llm, message))
-        print (Nhi)
+        response = asyncio.run(invoke_law_advisor(self.llm, self.structured_llm, message))
+        state.messages.append(response)
         return state
-
-if __name__ == "__main__":
-    Nhi = LawAdvisor("gpt-4o-mini")
-    initial_state = LawAgentState(
-        messages = [HumanMessage(content = "Are there legal limits on how much wastewater a factory can release into a river?")]
-    )
-    resp = Nhi.invoke(initial_state)
-    print (resp)
