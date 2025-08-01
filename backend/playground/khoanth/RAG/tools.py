@@ -22,13 +22,13 @@ def law_classifier(structured_llm, message: str) -> str:
     response = structured_llm.invoke(prompt).id
     return ["civil_law", "criminal_law", "environmental_law", "international_law", "labor_and_employment_law"][response]
     
-def retrieve_doc(query, collection_name, top_k = 3):
-    client = QdrantClient(
-        url = os.getenv("QDRANT_URL"),
-        api_key = os.getenv("QDRANT_API_KEY")
-    )
-    embedding_model = HuggingFaceEmbeddings(model_name = "sentence-transformers/all-MiniLM-L6-v2")
+def blocking_retrieve(query, collection_name, top_k = 3):
     try:
+        client = QdrantClient(
+            url = os.getenv("QDRANT_URL"),
+            api_key = os.getenv("QDRANT_API_KEY")
+        )
+        embedding_model = HuggingFaceEmbeddings(model_name = "sentence-transformers/all-MiniLM-L6-v2")
         query_vector = embedding_model.embed_query(query)
         results = client.search(
             collection_name = collection_name,
@@ -43,6 +43,9 @@ def retrieve_doc(query, collection_name, top_k = 3):
         return []
     finally:
         client.close()
+
+async def retrieve_doc(query, collection_name, top_k = 3):
+    return await asyncio.to_thread(blocking_retrieve, query, collection_name, top_k)
 
 @traceable
 async def multi_query(llm, query, number = "3"):
