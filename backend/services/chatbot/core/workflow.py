@@ -1,7 +1,7 @@
 from services.chatbot.core.constants.schemas import LawAgentState
 
 from services.chatbot.core.agents.general import IntentDetector, Greetor, InstructionSupporter, ChitChater, ComplaintSupporter
-from services.chatbot.core.agents.main import LawAdvisor
+from services.chatbot.core.agents.law_advisory import LawAdvisor
 
 from dotenv import load_dotenv
 load_dotenv()
