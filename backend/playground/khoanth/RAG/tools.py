@@ -1,6 +1,6 @@
 from playground.khoanth.prompts import LAW_CLASSIFIER_PROMPT, MULTI_QUERY_PROMPT, STEP_BACK_PROMPT
 
-import os, asyncio, requests
+import os, asyncio, requests, warnings
 from dotenv import load_dotenv
 from langchain_core.messages import AIMessage
 from langchain_core.output_parsers import StrOutputParser
@@ -12,6 +12,8 @@ from langsmith import traceable
 from qdrant_client import QdrantClient
 
 load_dotenv()
+warnings.filterwarnings("ignore")
+embedding_model = HuggingFaceEmbeddings(model_name = "sentence-transformers/all-MiniLM-L6-v2")
 
 @traceable
 def law_classifier(structured_llm, message: str) -> str:
@@ -28,7 +30,6 @@ def blocking_retrieve(query, collection_name, top_k = 3):
             url = os.getenv("QDRANT_URL"),
             api_key = os.getenv("QDRANT_API_KEY")
         )
-        embedding_model = HuggingFaceEmbeddings(model_name = "sentence-transformers/all-MiniLM-L6-v2")
         query_vector = embedding_model.embed_query(query)
         results = client.search(
             collection_name = collection_name,

@@ -195,7 +195,7 @@ class LawAdvisor(Runnable):
 if __name__ == "__main__":
     Nhi = LawAdvisor("gpt-4o-mini")
     initial_state = LawAgentState(
-        messages = [HumanMessage(content = "I stole 500$. How long will I be sentenced?")]
+        messages = [HumanMessage(content = "Are there legal limits on how much wastewater a factory can release into a river?")]
     )
     resp = Nhi.invoke(initial_state)
     print (resp)
