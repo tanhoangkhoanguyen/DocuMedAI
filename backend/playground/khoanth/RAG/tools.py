@@ -1,6 +1,6 @@
 from playground.khoanth.prompts import LAW_CLASSIFIER_PROMPT, MULTI_QUERY_PROMPT, STEP_BACK_PROMPT
 
-import os, asyncio, requests, warnings
+import os, requests, asyncio, torch, warnings
 from dotenv import load_dotenv
 from langchain_core.messages import AIMessage
 from langchain_core.output_parsers import StrOutputParser
@@ -10,10 +10,19 @@ from langchain_community.embeddings import OpenAIEmbeddings, HuggingFaceEmbeddin
 from langchain.prompts import ChatPromptTemplate, FewShotChatMessagePromptTemplate
 from langsmith import traceable
 from qdrant_client import QdrantClient
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
 load_dotenv()
 warnings.filterwarnings("ignore")
+THRESHOLD = 0.49
+# qdrant retrieval
 embedding_model = HuggingFaceEmbeddings(model_name = "sentence-transformers/all-MiniLM-L6-v2")
+# reranker
+reranker_modelName = "BAAI/bge-reranker-v2-m3"
+tokenizer = AutoTokenizer.from_pretrained(reranker_modelName)
+model = AutoModelForSequenceClassification.from_pretrained(reranker_modelName).eval()
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model = model.to(device)
 
 @traceable
 def law_classifier(structured_llm, message: str) -> str:
@@ -110,3 +119,21 @@ async def tavily_search(query, max_results = 3):
         return response.json()
     except Exception as e:
         return {"error": str(e)}
+    
+def rerank(query, passages, top_k = 5):
+    pairs = [[query, passage] for passage in passages]
+    inputs = tokenizer(pairs, padding = True, truncation = True, return_tensors = "pt").to(device)
+    inputs = inputs.to(device)
+    # Get relevance scores (logits)
+    with torch.no_grad():
+        scores = model(**inputs).logits.squeeze(-1)
+    # Sort scores in descending order
+    sorted_indices = torch.argsort(scores, descending = True)
+    reliable_docs = []
+    unreliable_docs = []
+    for i in sorted_indices[:top_k]:
+        if scores[i].item() >= THRESHOLD:
+            reliable_docs.append(passages[i])
+        else:
+            unreliable_docs.append(passages[i])
+    return reliable_docs, unreliable_docs
