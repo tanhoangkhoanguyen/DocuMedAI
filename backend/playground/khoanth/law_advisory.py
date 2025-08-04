@@ -1,5 +1,5 @@
 from services.chatbot.core.constants.schemas import LawAgentState, TopicIDResponse
-from playground.khoanth.RAG.law_retriever import invoke_law_advisor
+from playground.khoanth.rag.law_retriever import invoke_law_advisor
 
 import asyncio
 from dotenv import load_dotenv
