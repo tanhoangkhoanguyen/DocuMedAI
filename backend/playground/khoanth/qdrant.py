@@ -9,6 +9,7 @@ from qdrant_client.http import models
 from qdrant_client.http.models import VectorParams, Distance, PointStruct
 
 load_dotenv()
+embedding_model = HuggingFaceEmbeddings(model_name = "sentence-transformers/all-MiniLM-L6-v2")
 
 def load_cleaned_documents(sub: str = "", path = "services/chatbot/documents"):
     cleaned_docs = []
@@ -37,7 +38,6 @@ def upload_to_qdrant(doc, client, collection_name):
         chunk_overlap = 100
     )
     chunks = splitter.split_documents(doc)
-    embedding_model = HuggingFaceEmbeddings(model_name = "sentence-transformers/all-MiniLM-L6-v2")
     batch_size = 50
     total_batches = (len(chunks) + batch_size - 1) // batch_size
     for i in range(0, len(chunks), batch_size):

@@ -1,10 +1,9 @@
-from playground.khoanth.RAG.tools import law_classifier, multi_query, step_back, tavily_search, retrieve_doc
+from playground.khoanth.rag.tools import law_classifier, multi_query, step_back, tavily_search, retrieve_doc, reranker
 from playground.khoanth.prompts import CONTEXT_QUESTION_PROMPT
 
 import asyncio, warnings, time
 
 warnings.filterwarnings("ignore")
-THRESHOLD = 0.49
 
 async def invoke_law_advisor(llm, structured_llm, message):
     """
@@ -19,17 +18,9 @@ async def invoke_law_advisor(llm, structured_llm, message):
         tavily_search(message)
     )
 
-    
     queries = multi_query_resp + [step_back_resp]
     docs = await asyncio.gather(*(retrieve_doc(q, law_type) for q in queries))
-    reliable_docs = []
-    unreliable_docs = []
-    for subdoc in docs:
-        for doc in subdoc:
-            if doc.score >= THRESHOLD:
-                reliable_docs.append(doc.payload['text'])
-            else:
-                unreliable_docs.append(doc.payload['text'])
+    reliable_docs, unreliable_docs = reranker(message, docs)
     
     prompt = CONTEXT_QUESTION_PROMPT.format(
         reliable_context = reliable_docs,
