@@ -1,4 +1,4 @@
-from services.chatbot.core.RAG.tools import law_classifier, multi_query, step_back, tavily_search, retrieve_doc
+from services.chatbot.core.rag.tools import law_classifier, multi_query, step_back, tavily_search, retrieve_doc
 from services.chatbot.core.constants.prompts import CONTEXT_QUESTION_PROMPT
 
 import asyncio, warnings, time
