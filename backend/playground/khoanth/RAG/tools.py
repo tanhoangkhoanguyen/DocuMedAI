@@ -14,7 +14,7 @@ from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
 load_dotenv()
 warnings.filterwarnings("ignore")
-THRESHOLD = 0.49
+THRESHOLD = -6
 # qdrant retrieval
 embedding_model = HuggingFaceEmbeddings(model_name = "sentence-transformers/all-MiniLM-L6-v2")
 # reranker
@@ -54,8 +54,30 @@ def blocking_retrieve(query, collection_name, top_k = 3):
     finally:
         client.close()
 
-async def retrieve_doc(query, collection_name, top_k = 3):
+async def qdrantSearch(query, collection_name, top_k = 3):
     return await asyncio.to_thread(blocking_retrieve, query, collection_name, top_k)
+
+def elasticSearch(query, size = 3):
+    try:
+        search_body = {
+            "query": {
+                "match": {
+                    "text": {
+                        "query": query,
+                        "fuzziness": "AUTO"
+                    }
+                }
+            },
+            "size": size
+        }
+        search_response = client.search(
+            index = index_name,
+            body = search_body
+        )
+        return search_response['hits']['hits']
+    except Exception as e:
+        print(f"Search error: {e}")
+        return []
 
 @traceable
 async def multi_query(llm, query, number = "3"):
@@ -71,7 +93,6 @@ async def multi_query(llm, query, number = "3"):
     })
     return [doc for doc in queries if doc != '']
 
-    
 @traceable
 async def step_back(llm, query):
     examples = [

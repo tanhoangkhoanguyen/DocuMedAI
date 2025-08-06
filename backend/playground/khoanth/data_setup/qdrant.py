@@ -1,7 +1,7 @@
 import json, os, pickle, re, uuid
 from dotenv import load_dotenv
-from langchain.document_loaders import PyPDFLoader
-from langchain.embeddings import OpenAIEmbeddings, HuggingFaceEmbeddings
+from langchain_community.document_loaders import PyPDFLoader
+from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain.schema import Document
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from qdrant_client import QdrantClient
@@ -10,12 +10,13 @@ from qdrant_client.http.models import VectorParams, Distance, PointStruct
 
 load_dotenv()
 embedding_model = HuggingFaceEmbeddings(model_name = "sentence-transformers/all-MiniLM-L6-v2")
+collections = ["civil_law", "criminal_law", "environmental_law", "international_law", "labor_and_employment_law"]
 
-def load_cleaned_documents(sub: str = "", path = "services/chatbot/documents"):
+def load_cleaned_documents(sub: str = "", path = "playground/khoanth/data_setup"):
     cleaned_docs = []
-    folder_path = os.path.join(path, sub)
-    storage_path = os.path.join(folder_path, "document.pkl")
-    if os.path.exists(storage_path) and os.stat(storage_path).st_size > 0:
+    folder_path = f"{path}/raw_documents/{sub}"
+    storage_path = f"{path}/cleaned_documents/{sub}/document.pkl"
+    if os.path.exists(storage_path):
         with open(storage_path, "rb") as f:
             return pickle.load(f)
     for file_name in os.listdir(folder_path):
@@ -34,8 +35,8 @@ def load_cleaned_documents(sub: str = "", path = "services/chatbot/documents"):
 
 def upload_to_qdrant(doc, client, collection_name):
     splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
-        chunk_size = 800,
-        chunk_overlap = 100
+        chunk_size = 450,
+        chunk_overlap = 50
     )
     chunks = splitter.split_documents(doc)
     batch_size = 50
@@ -60,11 +61,11 @@ def upload_to_qdrant(doc, client, collection_name):
         )
         print(f"Uploaded batch {i // batch_size + 1}/{total_batches} ({len(points)} chunks)")
     
-def qdrant_setup():
+def qdrant_setup(timeout = 120):
     client = QdrantClient(
         url = os.getenv("QDRANT_URL"),
         api_key = os.getenv("QDRANT_API_KEY"),
-        timeout = 120.0
+        timeout = timeout
     )
     
     # Test connection
@@ -75,7 +76,6 @@ def qdrant_setup():
         print(f"Failed to connect to Qdrant: {e}")
         return
 
-    collections = ["civil_law", "criminal_law", "environmental_law", "international_law", "labor_and_employment_law"]
     for collection_name in collections:
         try:
             if client.get_collection(collection_name):
@@ -95,11 +95,11 @@ def qdrant_setup():
         print(f"Created collection '{collection_name}'")
     
     print("Loading documents...")
-    for collection_name in collections:
-        doc = load_cleaned_documents(sub = collection_name)
-        upload_to_qdrant(doc, client, collection_name)
+    for qdrant_collection in collections:
+        doc = load_cleaned_documents(sub = qdrant_collection)
+        elastic_str = ' '.join(d.page_content for d in doc)
+        with open(f"playground/khoanth/data_setup/cleaned_documents/{qdrant_collection}/document.json", "w", encoding = 'utf-8') as f:
+            f.write(elastic_str)
+        upload_to_qdrant(doc, client, qdrant_collection)
 
     client.close()
-
-if __name__ == "__main__":
-    qdrant_setup()
