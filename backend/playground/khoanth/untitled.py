@@ -1,155 +1,268 @@
-# from transformers import AutoTokenizer, AutoModelForSequenceClassification
-# import torch
+from elasticsearch import Elasticsearch, helpers
+import json
+import os
+import pickle
+from datetime import datetime
+from typing import List, Dict, Any, Optional
 
-# # Load tokenizer and model
-# model_name = "BAAI/bge-reranker-v2-m3"
-# tokenizer = AutoTokenizer.from_pretrained(model_name)
-# model = AutoModelForSequenceClassification.from_pretrained(model_name).eval()  # evaluation mode
+class ElasticsearchManager:
+    def __init__(self):
+        self.host = os.getenv("ELASTIC_HOST", "http://la-elasticsearch-service:9200")
+        self.password = os.getenv("ELASTIC_PASSWORD")
+        self.api_key = os.getenv("ELASTIC_API_KEY")
+        
+        self.client = Elasticsearch(
+            [self.host],
+            basic_auth=("elastic", self.password),
+            verify_certs=False,
+            ssl_show_warn=False
+        )
+        
+        self.index_name = "lawadvisory-f_prj"
+        self.data_dir = "elasticsearch_data"
+        
+        # Create data directory if it doesn't exist
+        os.makedirs(self.data_dir, exist_ok=True)
+    
+    def backup_index_data(self, backup_name: Optional[str] = None) -> str:
+        """
+        Backup all data from the index to local files
+        Returns the backup filename
+        """
+        try:
+            if not backup_name:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                backup_name = f"backup_{self.index_name}_{timestamp}"
+            
+            print(f"💾 Creating backup: {backup_name}")
+            
+            # Get all documents
+            search_response = self.client.search(
+                index=self.index_name,
+                body={
+                    "query": {"match_all": {}},
+                    "size": 10000  # Adjust for large datasets
+                }
+            )
+            
+            documents = []
+            for hit in search_response['hits']['hits']:
+                doc_data = {
+                    "id": hit['_id'],
+                    "source": hit['_source']
+                }
+                documents.append(doc_data)
+            
+            # Save as JSON
+            json_filename = os.path.join(self.data_dir, f"{backup_name}.json")
+            with open(json_filename, 'w', encoding='utf-8') as f:
+                json.dump({
+                    "index_name": self.index_name,
+                    "backup_date": datetime.now().isoformat(),
+                    "document_count": len(documents),
+                    "documents": documents
+                }, f, indent=2, ensure_ascii=False)
+            
+            # Save as pickle for faster loading
+            pickle_filename = os.path.join(self.data_dir, f"{backup_name}.pkl")
+            with open(pickle_filename, 'wb') as f:
+                pickle.dump({
+                    "index_name": self.index_name,
+                    "backup_date": datetime.now().isoformat(),
+                    "document_count": len(documents),
+                    "documents": documents
+                }, f)
+            
+            print(f"✅ Backup created successfully:")
+            print(f"   JSON: {json_filename}")
+            print(f"   Pickle: {pickle_filename}")
+            print(f"   Documents backed up: {len(documents)}")
+            
+            return backup_name
+            
+        except Exception as e:
+            print(f"❌ Error creating backup: {e}")
+            return ""
+    
+    def restore_from_backup(self, backup_name: str, overwrite: bool = False) -> bool:
+        """
+        Restore data from a backup file
+        If overwrite=True, it will clear existing data first
+        """
+        try:
+            pickle_filename = os.path.join(self.data_dir, f"{backup_name}.pkl")
+            json_filename = os.path.join(self.data_dir, f"{backup_name}.json")
+            
+            # Try pickle first (faster), then JSON
+            backup_data = None
+            if os.path.exists(pickle_filename):
+                print(f"📥 Loading from pickle backup: {pickle_filename}")
+                with open(pickle_filename, 'rb') as f:
+                    backup_data = pickle.load(f)
+            elif os.path.exists(json_filename):
+                print(f"📥 Loading from JSON backup: {json_filename}")
+                with open(json_filename, 'r', encoding='utf-8') as f:
+                    backup_data = json.load(f)
+            else:
+                print(f"❌ Backup file not found: {backup_name}")
+                return False
+            
+            documents = backup_data['documents']
+            print(f"📊 Backup contains {len(documents)} documents from {backup_data['backup_date']}")
+            
+            # Check if we should overwrite existing data
+            current_count = self.client.count(index=self.index_name)['count']
+            if current_count > 0:
+                if overwrite:
+                    print("🗑️  Clearing existing data...")
+                    self.remove_all_documents()
+                else:
+                    print(f"⚠️  Index contains {current_count} documents. Use overwrite=True to replace them.")
+                    return False
+            
+            # Prepare documents for bulk insert
+            bulk_docs = []
+            for doc in documents:
+                bulk_doc = {
+                    "_index": self.index_name,
+                    "_id": doc["id"],
+                    "_source": doc["source"]
+                }
+                bulk_docs.append(bulk_doc)
+            
+            # Bulk insert
+            print(f"📤 Restoring {len(bulk_docs)} documents...")
+            bulk_response = helpers.bulk(
+                self.client.options(request_timeout=300),
+                bulk_docs
+            )
+            
+            print(f"✅ Restore completed: {bulk_response[0]} documents indexed")
+            
+            # Refresh index
+            self.client.indices.refresh(index=self.index_name)
+            
+            # Verify
+            final_count = self.client.count(index=self.index_name)['count']
+            print(f"📊 Final document count: {final_count}")
+            
+            return True
+            
+        except Exception as e:
+            print(f"❌ Error restoring from backup: {e}")
+            return False
+    
+    def list_backups(self) -> List[str]:
+        """List all available backups"""
+        try:
+            backups = []
+            for filename in os.listdir(self.data_dir):
+                if filename.endswith('.pkl') or filename.endswith('.json'):
+                    backup_name = filename.rsplit('.', 1)[0]
+                    if backup_name not in backups:
+                        backups.append(backup_name)
+            
+            print(f"📋 Available backups ({len(backups)}):")
+            for i, backup in enumerate(backups, 1):
+                # Try to get backup info
+                pickle_file = os.path.join(self.data_dir, f"{backup}.pkl")
+                json_file = os.path.join(self.data_dir, f"{backup}.json")
+                
+                size_info = ""
+                if os.path.exists(pickle_file):
+                    size_mb = os.path.getsize(pickle_file) / (1024 * 1024)
+                    size_info = f" ({size_mb:.2f} MB)"
+                elif os.path.exists(json_file):
+                    size_mb = os.path.getsize(json_file) / (1024 * 1024)
+                    size_info = f" ({size_mb:.2f} MB)"
+                
+                print(f"  {i}. {backup}{size_info}")
+            
+            return backups
+            
+        except Exception as e:
+            print(f"❌ Error listing backups: {e}")
+            return []
+    
+    def get_document_count(self) -> int:
+        """Get current document count in the index"""
+        try:
+            count = self.client.count(index=self.index_name)['count']
+            print(f"📊 Current document count: {count}")
+            return count
+        except Exception as e:
+            print(f"❌ Error getting document count: {e}")
+            return 0
 
-# # Move model to GPU if available
-# device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-# model = model.to(device)
+# Example usage and helper functions
+def interactive_document_removal():
+    """Interactive function to choose and remove documents"""
+    manager = ElasticsearchManager()
+    
+    while True:
+        print("\n" + "="*50)
+        print("🗑️  DOCUMENT REMOVAL MENU")
+        print("="*50)
+        print("1. Remove ALL documents")
+        print("2. Remove specific document")
+        print("3. List all document IDs")
+        print("4. Show document count")
+        print("5. Quit")
+        
+        choice = input("\nChoose an option (1-5): ").strip()
+        
+        if choice == '1':
+            confirm = input("⚠️  Are you sure you want to remove ALL documents? (yes/no): ")
+            if confirm.lower() == 'yes':
+                manager.remove_all_documents()
+            else:
+                print("Operation cancelled.")
+                
+        elif choice == '2':
+            doc_ids = manager.list_all_document_ids()
+            if doc_ids:
+                doc_id = input("\nEnter document ID to remove: ").strip()
+                if doc_id in doc_ids:
+                    manager.remove_specific_document(doc_id)
+                else:
+                    print("Invalid document ID")
+            else:
+                print("No documents found")
+                
+        elif choice == '3':
+            manager.list_all_document_ids()
+            
+        elif choice == '4':
+            manager.get_document_count()
+            
+        elif choice == '5':
+            break
+            
+        else:
+            print("Invalid choice")
 
-# def rerank(query, passages, top_k=5):
-#     """
-#     Rerank a list of passages given a query using BGE reranker.
-
-#     Args:
-#         query (str): The user query.
-#         passages (List[str]): List of retrieved passages.
-#         top_k (int): Number of top passages to return after reranking.
-
-#     Returns:
-#         List of (score, passage), sorted by score descending.
-#     """
-#     # Prepare paired inputs: (query, passage)
-#     pairs = [[query, passage] for passage in passages]
-
-#     # Tokenize
-#     inputs = tokenizer(pairs, padding=True, truncation=True, return_tensors="pt").to(device)
-#     inputs = inputs.to(device)
-
-#     # Get relevance scores (logits)
-#     with torch.no_grad():
-#         scores = model(**inputs).logits.squeeze(-1)
-
-#     # Sort scores in descending order
-#     sorted_indices = torch.argsort(scores, descending=True)
-#     reranked = [(scores[i].item(), passages[i]) for i in sorted_indices[:top_k]]
-
-#     return reranked
-
-# query = "What are the benefits of using solar energy?"
-# retrieved_docs = [
-#     "Solar energy is renewable and sustainable.",
-#     "Wind energy is another form of clean energy.",
-#     "The sun produces energy through nuclear fusion.",
-#     "Solar panels are used to capture sunlight.",
-#     "Coal is a fossil fuel that causes pollution."
-# ]
-
-# reranked_docs = rerank(query, retrieved_docs, top_k=5)
-
-# for score, doc in reranked_docs:
-#     print(f"[{score:.4f}] {doc}")
-
-# print (len(reranked_docs))
-# '___________________________________________________________________________________________'
-# import asyncio, time
-
-# async def say_hello():
-#     print("Hello")
-#     await asyncio.sleep(0.0001)
-#     print("World")
-
-# async def main():
-#     await asyncio.gather(say_hello(), say_hello())
-
-# start = time.time()
-# asyncio.run(main())
-# print (time.time() - start)
-# '___________________________________________________________________________________________'
-# import threading
-
-# def say_hello():
-#     print("Hello")
-#     time.sleep(0.0001)  # Simulates a delay
-#     print("World")
-
-# start = time.time()
-# # Create the first thread
-# thread1 = threading.Thread(target=say_hello) 
-# # Create the second thread
-# thread2 = threading.Thread(target=say_hello)  
-
-# thread1.start()  # Start the first thread
-# thread2.start()  # Start the second thread
-
-# # Wait for the first thread to finish
-# thread1.join()   
-# # Wait for the second thread to finish
-# thread2.join()
-# print (time.time() - start)
-# '___________________________________________________________________________________________'
-# from elasticsearch import Elasticsearch, helpers
-
-# client = Elasticsearch(
-#     "https://my-elasticsearch-project-f493ea.es.us-central1.gcp.elastic.cloud:443",
-#     api_key="RVJpTmM1Z0JzdEZnNGdrNzVNaHA6UDNwQktNeGR4TktfSk5xQzBvY3dzQQ=="
-# )
-
-# index_name = "f-prj"
-
-# mappings = {
-#     "properties": {
-#         "text": {
-#             "type": "semantic_text"
-#         }
-#     }
-# }
-
-# mapping_response = client.indices.put_mapping(index=index_name, body=mappings)
-# print(mapping_response)
-
-# docs = [
-#     {
-#         "text": "Yellowstone National Park is one of the largest national parks in the United States. It ranges from the Wyoming to Montana and Idaho, and contains an area of 2,219,791 acress across three different states. Its most famous for hosting the geyser Old Faithful and is centered on the Yellowstone Caldera, the largest super volcano on the American continent. Yellowstone is host to hundreds of species of animal, many of which are endangered or threatened. Most notably, it contains free-ranging herds of bison and elk, alongside bears, cougars and wolves. The national park receives over 4.5 million visitors annually and is a UNESCO World Heritage Site."
-#     },
-#     {
-#         "text": "Yosemite National Park is a United States National Park, covering over 750,000 acres of land in California. A UNESCO World Heritage Site, the park is best known for its granite cliffs, waterfalls and giant sequoia trees. Yosemite hosts over four million visitors in most years, with a peak of five million visitors in 2016. The park is home to a diverse range of wildlife, including mule deer, black bears, and the endangered Sierra Nevada bighorn sheep. The park has 1,200 square miles of wilderness, and is a popular destination for rock climbers, with over 3,000 feet of vertical granite to climb. Its most famous and cliff is the El Capitan, a 3,000 feet monolith along its tallest face."
-#     },
-#     {
-#         "text": "Rocky Mountain National Park  is one of the most popular national parks in the United States. It receives over 4.5 million visitors annually, and is known for its mountainous terrain, including Longs Peak, which is the highest peak in the park. The park is home to a variety of wildlife, including elk, mule deer, moose, and bighorn sheep. The park is also home to a variety of ecosystems, including montane, subalpine, and alpine tundra. The park is a popular destination for hiking, camping, and wildlife viewing, and is a UNESCO World Heritage Site."
-#     }
-# ]
-# # Timeout to allow machine learning model loading and semantic ingestion to complete
-# ingestion_timeout=300
-# bulk_response = helpers.bulk(
-#     client.options(request_timeout=ingestion_timeout),
-#     docs,
-#     index=index_name
-# )
-# print(bulk_response)
-from elasticsearch import Elasticsearch
-
-client = Elasticsearch(
-    "https://my-elasticsearch-project-f493ea.es.us-central1.gcp.elastic.cloud:443",
-    api_key="RVJpTmM1Z0JzdEZnNGdrNzVNaHA6UDNwQktNeGR4TktfSk5xQzBvY3dzQQ=="
-)
-
-retriever_object = {
-    "standard": {
-        "query": {
-            "semantic": {
-                "field": "text",
-                "query": "REPLACE WITH YOUR QUERY"
-            }
-        }
-    }
-}
-
-search_response = client.search(
-    index="f-prj",
-    retriever=retriever_object,
-)
-print(search_response['hits']['hits'])
+# Example usage
+if __name__ == "__main__":
+    manager = ElasticsearchManager()
+    
+    print("🔧 ELASTICSEARCH DOCUMENT MANAGER")
+    print("Connected to:", manager.host)
+    
+    # Show current status
+    manager.remove_all_documents()
+    
+    # Example operations (uncomment what you need):
+    
+    # Create a backup before making changes
+    # backup_name = manager.backup_index_data()
+    
+    # List all backups
+    # manager.list_backups()
+    
+    # Interactive removal
+    # interactive_document_removal()
+    
+    # Restore from backup
+    # manager.restore_from_backup("backup_name_here", overwrite=True)
+    
+    print("\n✅ Manager ready for use!")
