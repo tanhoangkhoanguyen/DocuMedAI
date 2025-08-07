@@ -7,14 +7,13 @@ warnings.filterwarnings("ignore")
 ELASTIC_HOST = os.getenv("ELASTIC_HOST")
 ELASTIC_PASSWORD = os.getenv("ELASTIC_PASSWORD")
 ELASTIC_API_KEY = os.getenv("ELASTIC_API_KEY")
-CHUNK_SIZE = 400
+CHUNK_SIZE = 2400
 client = Elasticsearch(
     [ELASTIC_HOST],
     basic_auth = ("elastic", ELASTIC_PASSWORD),
     verify_certs = False,
     ssl_show_warn = False
 )
-index_name = "law_test"
 collections = ["civil_law", "criminal_law", "environmental_law", "international_law", "labor_and_employment_law"]
 
 def connection_test():
@@ -27,7 +26,7 @@ def connection_test():
         print(f"Connection failed: {e}")
         sys.exit()
 
-def create_mapping():
+def create_mapping(index_name):
     mappings = {
         "properties": {
             "text": {
@@ -46,11 +45,11 @@ def create_mapping():
     except Exception as e:
         print(f"Index creation/mapping error: {e}")
 
-def upload_data(docs, timeout = 120):
+def upload_data(doc, timeout = 120):
     try:
         bulk_response = helpers.bulk(
             client,
-            docs,
+            doc,
             request_timeout = timeout
         )
         print("Bulk inserted:", bulk_response)
@@ -104,6 +103,8 @@ def delete_all_indices():
             return
 
         for index in indices:
+            if index == ".security-7":
+                continue
             print(f"Deleting index: {index}")
             client.indices.delete(index = index)
     except Exception as e:
@@ -111,26 +112,27 @@ def delete_all_indices():
 
 def elastic_setup():
     connection_test()
-    create_mapping()
+    for name in collections:
+        create_mapping(name)
 
-    docs = []
+    doc_dict = {
+        "civil_law": [],
+        "criminal_law": [],
+        "environmental_law": [],
+        "international_law": [],
+        "labor_and_employment_law": []
+    }
     folder_path = "playground/khoanth/data_setup/cleaned_documents"
     for name in collections:
         with open (f"{folder_path}/{name}/document.json", "r", encoding = "utf-8") as f:
             doc_str = ' '.join([line.strip() for line in f if line.strip()])
-        process = 0
-        total = len(doc_str) // CHUNK_SIZE + bool(len(doc_str) % CHUNK_SIZE)
         for i in range (0, len(doc_str), CHUNK_SIZE):
             bound = min(i + CHUNK_SIZE - 1, len(doc_str))
-            docs.append({
-                "_index": index_name,
+            doc_dict[name].append({
+                "_index": name,
                 "_source": {
                    "text": doc_str[i:bound]
                 }
             })
-            process += 1
-            print (f"Uploaded {process}/{total}")
-    upload_data(docs)
-
-if __name__ == "__main__":
-    elastic_setup()
+    for _, doc in doc_dict.items():
+        upload_data(doc)

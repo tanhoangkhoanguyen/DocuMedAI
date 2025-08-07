@@ -243,26 +243,28 @@ def interactive_document_removal():
 
 # Example usage
 if __name__ == "__main__":
-    manager = ElasticsearchManager()
+    # manager = ElasticsearchManager()
     
-    print("🔧 ELASTICSEARCH DOCUMENT MANAGER")
-    print("Connected to:", manager.host)
+    # print("🔧 ELASTICSEARCH DOCUMENT MANAGER")
+    # print("Connected to:", manager.host)
     
-    # Show current status
-    manager.remove_all_documents()
+    # # Show current status
+    # manager.remove_all_documents()
     
-    # Example operations (uncomment what you need):
+    # # Example operations (uncomment what you need):
     
-    # Create a backup before making changes
-    # backup_name = manager.backup_index_data()
+    # # Create a backup before making changes
+    # # backup_name = manager.backup_index_data()
     
-    # List all backups
-    # manager.list_backups()
+    # # List all backups
+    # # manager.list_backups()
     
-    # Interactive removal
-    # interactive_document_removal()
+    # # Interactive removal
+    # # interactive_document_removal()
     
-    # Restore from backup
-    # manager.restore_from_backup("backup_name_here", overwrite=True)
+    # # Restore from backup
+    # # manager.restore_from_backup("backup_name_here", overwrite=True)
     
-    print("\n✅ Manager ready for use!")
+    # print("\n✅ Manager ready for use!")
+    meh = "c ted for discharging industrial refuse into a river, in violation of 13 of the Rivers and Harbors Act of 1899 In its regulations promulgated under the Act, the Army Corps of Engineers had consistently construed 13 as limited to discharges that affected navigation PICCO's discharge was such that it would not affect navigation Relying on Raley and Cox, the Court reversed the conviction, finding [t"
+    print (len(meh))

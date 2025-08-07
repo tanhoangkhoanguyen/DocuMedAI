@@ -10,13 +10,22 @@ from langchain_community.embeddings import OpenAIEmbeddings, HuggingFaceEmbeddin
 from langchain.prompts import ChatPromptTemplate, FewShotChatMessagePromptTemplate
 from langsmith import traceable
 from qdrant_client import QdrantClient
+from elasticsearch import Elasticsearch
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
 load_dotenv()
 warnings.filterwarnings("ignore")
 THRESHOLD = -6
-# qdrant retrieval
+ELASTIC_HOST = os.getenv("ELASTIC_HOST")
+ELASTIC_PASSWORD = os.getenv("ELASTIC_PASSWORD")
+# retrieve
 embedding_model = HuggingFaceEmbeddings(model_name = "sentence-transformers/all-MiniLM-L6-v2")
+client = Elasticsearch(
+    [ELASTIC_HOST],
+    basic_auth = ("elastic", ELASTIC_PASSWORD),
+    verify_certs = False,
+    ssl_show_warn = False
+)
 # reranker
 reranker_modelName = "BAAI/bge-reranker-v2-m3"
 tokenizer = AutoTokenizer.from_pretrained(reranker_modelName)
@@ -33,7 +42,7 @@ def law_classifier(structured_llm, message: str) -> str:
     response = structured_llm.invoke(prompt).id
     return ["civil_law", "criminal_law", "environmental_law", "international_law", "labor_and_employment_law"][response]
     
-def blocking_retrieve(query, collection_name, top_k = 3):
+def blocking_qdrantSearch(query, collection_name, top_k = 3):
     try:
         client = QdrantClient(
             url = os.getenv("QDRANT_URL"),
@@ -55,9 +64,9 @@ def blocking_retrieve(query, collection_name, top_k = 3):
         client.close()
 
 async def qdrantSearch(query, collection_name, top_k = 3):
-    return await asyncio.to_thread(blocking_retrieve, query, collection_name, top_k)
+    return await asyncio.to_thread(blocking_qdrantSearch, query, collection_name, top_k)
 
-def elasticSearch(query, size = 3):
+async def elasticSearch(query, law_type, size = 3):
     try:
         search_body = {
             "query": {
@@ -71,7 +80,7 @@ def elasticSearch(query, size = 3):
             "size": size
         }
         search_response = client.search(
-            index = index_name,
+            index = law_type,
             body = search_body
         )
         return search_response['hits']['hits']
@@ -140,7 +149,20 @@ async def tavily_search(query, max_results = 3):
         return response.json()
     except Exception as e:
         return {"error": str(e)}
-    
+
+def remove_similar_documents(documents):
+    unique_docs = list(set(documents))
+    result = []
+    for doc in unique_docs:
+        is_substring = False
+        for other in unique_docs:
+            if doc != other and doc in other:
+                is_substring = True
+                break
+        if not is_substring:
+            result.append(doc)
+    return result
+
 def rerank(query, passages, top_k = 5):
     pairs = [[query, passage] for passage in passages]
     inputs = tokenizer(pairs, padding = True, truncation = True, return_tensors = "pt").to(device)
