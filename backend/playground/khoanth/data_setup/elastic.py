@@ -76,7 +76,7 @@ def list_all_document_ids(size = 10000) -> List[str]:
         print(f"Error listing document IDs: {e}")
         return []
     
-def remove_all_documents():
+def remove_all_documents(index_name):
     try:
         print(f"Removing all documents from index '{index_name}'")
         count_before = client.count(index = index_name)['count']
