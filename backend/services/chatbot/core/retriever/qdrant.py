@@ -1,21 +1,20 @@
-import os
-import warnings
+import os, asyncio, warnings
 warnings.filterwarnings("ignore")
 from dotenv import load_dotenv
-load_dotenv
+load_dotenv()
 
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from qdrant_client import QdrantClient
 
 
-class Ragger:
+class QdrantSearcher:
     def __init__(self,
                  embedding_model:str="sentence-transformers/all-MiniLM-L6-v2"):
         try:
             self.__qdrant_url = os.getenv("QDRANT_URL")
             self.__qdrant_api_key = os.getenv("QDRANT_API_KEY")
         except Exception as e:
-            print(f"[ERROR] From Ragger init: {str(e)}")
+            print(f"[ERROR] From QdrantSearcher init: {str(e)}")
             print(f"Terminated")
             exit(1)
 
@@ -31,7 +30,7 @@ class Ragger:
             print(f"Terminated")
             exit(1)
     
-    async def retrieve_single_query(self, query, collection_name, top_k:int=3):
+    def __retrieve_single_query(self, query, collection_name, top_k:int=3):
         embedded_query = self.embedder.embed_query(query)
         try:
             results = self.qdrant_client.search(
@@ -43,8 +42,11 @@ class Ragger:
             )
             return results
         except Exception as e:
-            print(f"[ERROR] Error in retrieve search results")
+            print(f"[ERROR] From QdrantSearcher: {str(e)}")
             return []
+        
+    async def retrieve_doc(self, query, collection_name, top_k = 3):
+        return await asyncio.to_thread(self.__retrieve_single_query, query, collection_name, top_k)
     
     def close(self):
         self.qdrant_client.close()
