@@ -61,6 +61,7 @@ services:
       - "9004:9004"
     stdin_open: true   
     tty: true 
+    restart: always
     command: python -m services.chatbot.app.main
     environment:
       OPENAI_API_KEY: ${OPENAI_API_KEY}

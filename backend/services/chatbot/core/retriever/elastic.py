@@ -1,61 +1,69 @@
-import os, warnings
+import os, warnings, asyncio, logging
 warnings.filterwarnings("ignore")
 from dotenv import load_dotenv
-load_dotenv()
-
 from elasticsearch import Elasticsearch
+
+load_dotenv()
+logger = logging.getLogger(__name__)
 
 class ElasticSearcher:
     def __init__(self):
         try:
-            self.__elastic_host = os.getenv("ELASTIC_HOST")
-            self.__elastic_password = os.getenv("ELASTIC_PASSWORD")
+            elastic_host = os.getenv("ELASTIC_HOST")
+            elastic_password = os.getenv("ELASTIC_PASSWORD")
+            if not elastic_host or not elastic_password:
+                raise ValueError("ELASTIC_HOST or ELASTIC_PASSWORD is not set")
         except Exception as e:
-            print(f"[ERROR] From ElasticSearcher init: {str(e)}")
-            print(f"Terminated")
-            exit(1)
+            print(f"[ERROR] From ElasticSearcher init: {e}")
+            print("Terminated")
+            raise
 
         self.__client = Elasticsearch(
-            [self.__elastic_host],
-            basic_auth = ("elastic", self.__elastic_password),
-            verify_certs = False,
-            ssl_show_warn = False
+            [elastic_host],
+            basic_auth=("elastic", elastic_password),
+            verify_certs=False,
+            ssl_show_warn=False,
+            request_timeout=30,
         )
-        
+
         self.__search_body = {
             "query": {
                 "match": {
                     "text": {
                         "query": None,
-                        "fuzziness": "AUTO"
+                        "fuzziness": "AUTO",
                     }
                 }
-            },
-            "size": None
+            }
         }
+        self.__size = None
 
-    def __set_search_body(self, query, size = 3):
+    def __set_search_body(self, query: str, size: int = 3):
         if self.__search_body["query"]["match"]["text"]["query"] is not None:
-            print(f"[WARNING] From ElasticSearcher: Override existent query {self.__search_body["query"]["match"]["text"]["query"]} to {query}")
+            old = self.__search_body["query"]["match"]["text"]["query"]
+            print(f"[WARNING] From ElasticSearcher: Override existing query {old} to {query}")
         self.__search_body["query"]["match"]["text"]["query"] = query
-        
-        if self.__search_body["size"] is not None:
-            print(f"[WARNING] From TavilySearcher: Override existent max_results {self.__search_body["size"]} to {size}")
-        self.__search_body["size"] = size
 
-    def retrieve_doc(self, query, law_type):
-        self.__set_search_body(query = query)
+        if self.__size is not None:
+            print(f"[WARNING] From ElasticSearcher: Override existing size {self.__size} to {size}")
+        self.__size = size
+
+    def __helper_retrieve_doc(self, query: str, law_type: str):
+        self.__set_search_body(query=query)
         try:
-            search_response = self.client.search(
-                index = law_type,
-                body = self.__search_body
+            es_query = self.__search_body["query"]
+            search_response = self.__client.search(
+                index=law_type,
+                query=es_query,
+                size=self.__size,
             )
-            return search_response['hits']['hits']
+            return search_response.get("hits", {}).get("hits", [])
         except Exception as e:
-            print(f"[ERROR] From ElasticSearcher: {str(e)}")
+            print(f"[ERROR] From ElasticSearcher: {e}")
             return []
         finally:
             self.__search_body["query"]["match"]["text"]["query"] = None
-            self.__search_body["size"] = None
+            self.__size = None
 
-    
+    async def retrieve_doc(self, query: str, law_type: str):
+        return await asyncio.to_thread(self.__helper_retrieve_doc, query, law_type)
