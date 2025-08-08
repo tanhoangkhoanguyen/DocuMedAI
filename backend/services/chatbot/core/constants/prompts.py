@@ -80,3 +80,7 @@ Your task is to answer the question thoroughly and accurately based on the provi
 - website_information: {website_information}
 - question: {question}
 """
+
+REFINE_USER_MESSAGE_PROMPT = """
+
+"""
