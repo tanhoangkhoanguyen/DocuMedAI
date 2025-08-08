@@ -8,6 +8,7 @@ import streamlit as st
 from constants.chatbot_schemas import ChatRequest, ChatResponse
 
 def main():
+    chatbot_reply=""
     st.set_page_config(
         page_title="Law Advisory Chatbot",
         page_icon="🤖",
@@ -53,7 +54,7 @@ def main():
             chat_response = ChatResponse.model_validate(resp.json())
             chatbot_reply = chat_response.response
         except Exception as e:
-            chatbot_reply: f"Error: {e}"
+            chatbot_reply = f"Error: {e}"
         
         with st.chat_message("assistant"):
             st.markdown(chatbot_reply)
@@ -65,3 +66,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
