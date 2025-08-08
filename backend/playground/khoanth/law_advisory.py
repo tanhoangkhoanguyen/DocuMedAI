@@ -17,8 +17,7 @@ class LawAdvisor(Runnable):
     def invoke(self, state:LawAgentState, config = None):
         message = state.messages[-1].content
         Nhi = asyncio.run(invoke_law_advisor(self.llm, self.structured_llm, message))
-        print (Nhi)
-        return state
+        return Nhi
 
 if __name__ == "__main__":
     Nhi = LawAdvisor("gpt-4o-mini")
