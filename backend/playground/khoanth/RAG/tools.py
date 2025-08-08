@@ -15,7 +15,7 @@ from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
 load_dotenv()
 warnings.filterwarnings("ignore")
-THRESHOLD = -6
+THRESHOLD = -5
 ELASTIC_HOST = os.getenv("ELASTIC_HOST")
 ELASTIC_PASSWORD = os.getenv("ELASTIC_PASSWORD")
 # retrieve
@@ -30,7 +30,7 @@ client = Elasticsearch(
 reranker_modelName = "BAAI/bge-reranker-v2-m3"
 tokenizer = AutoTokenizer.from_pretrained(reranker_modelName)
 model = AutoModelForSequenceClassification.from_pretrained(reranker_modelName).eval()
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cpu")
 model = model.to(device)
 
 @traceable
@@ -174,7 +174,8 @@ def rerank(query, passages, top_k = 5):
     sorted_indices = torch.argsort(scores, descending = True)
     reliable_docs = []
     unreliable_docs = []
-    for i in sorted_indices[:top_k]:
+    bound = min(top_k, len(sorted_indices))
+    for i in sorted_indices[:bound]:
         if scores[i].item() >= THRESHOLD:
             reliable_docs.append(passages[i])
         else:

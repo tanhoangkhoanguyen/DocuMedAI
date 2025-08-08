@@ -1,7 +1,7 @@
 import os
 import requests
 from dotenv import load_dotenv
-load_dotenv
+load_dotenv()
 from langsmith import traceable
 
 
@@ -40,4 +40,7 @@ class TavilySearcher:
         except Exception as e:
             print(f"[ERROR] From TavilySearcher: {str(e)}")
             return {"error": str(e)}
+        finally:
+            self.__payload["query"] = None
+            self.__payload["max_results"] = None
         
