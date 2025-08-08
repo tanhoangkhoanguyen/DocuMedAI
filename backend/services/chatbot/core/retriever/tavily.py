@@ -1,5 +1,6 @@
 import os
 import requests
+import asyncio
 from dotenv import load_dotenv
 load_dotenv()
 from langsmith import traceable
@@ -20,22 +21,24 @@ class TavilySearcher:
             "max_results": None
         }
     
-    def __set_paylooad(self, query:str, max_results:int):
+    def __set_paylooad(self, query: str, max_results: int):
         if self.__payload["query"] is not None:
-            print(f"[WARNING] From TavilySearcher: Override existent query {self.__payload["query"]} to {query}")
+            print(f'[WARNING] From TavilySearcher: Override existent query {self.__payload["query"]} to {query}')
         self.__payload["query"] = query
         
         if self.__payload["max_results"] is not None:
-            print(f"[WARNING] From TavilySearcher: Override existent max_results {self.__payload["max_results"]} to {max_results}")
+            print(f'[WARNING] From TavilySearcher: Override existent max_results {self.__payload["max_results"]} to {max_results}')
         self.__payload["max_results"] = max_results
     
     @traceable
-    async def search(self, query:str, max_results:int):
+    def __search_helper(self, query: str, max_results: int):
         self.__set_paylooad(query=query, max_results=max_results)
         try:
-            response = requests.post(url=self.__search_url,
-                                 json=self.__payload,
-                                 headers=self.__headers)
+            response = requests.post(
+                url=self.__search_url,
+                json=self.__payload,
+                headers=self.__headers
+            )
             return response.json()
         except Exception as e:
             print(f"[ERROR] From TavilySearcher: {str(e)}")
@@ -43,4 +46,6 @@ class TavilySearcher:
         finally:
             self.__payload["query"] = None
             self.__payload["max_results"] = None
-        
+    
+    async def search(self, query: str, max_results: int):
+        return await asyncio.to_thread(self.__search_helper, query, max_results)

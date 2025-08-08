@@ -30,7 +30,7 @@ class QdrantSearcher:
             print(f"Terminated")
             exit(1)
     
-    def __retrieve_single_query(self, query, collection_name, top_k:int=3):
+    def __retrieve_single_query_helper(self, query, collection_name, top_k:int=3):
         embedded_query = self.embedder.embed_query(query)
         try:
             results = self.qdrant_client.search(
@@ -45,8 +45,8 @@ class QdrantSearcher:
             print(f"[ERROR] From QdrantSearcher: {str(e)}")
             return []
         
-    async def retrieve_doc(self, query, collection_name, top_k = 3):
-        return await asyncio.to_thread(self.__retrieve_single_query, query, collection_name, top_k)
+    async def retrieve_single_query(self, query, collection_name, top_k:int=3):
+        return await asyncio.to_thread(self.__retrieve_single_query_helper, query, collection_name, top_k)
     
     def close(self):
         self.qdrant_client.close()
