@@ -1,6 +1,5 @@
 import os
 import requests
-import asyncio
 from dotenv import load_dotenv
 load_dotenv()
 from langsmith import traceable
@@ -31,7 +30,8 @@ class TavilySearcher:
         self.__payload["max_results"] = max_results
     
     @traceable
-    def __search_helper(self, query: str, max_results: int):
+    def search(self, query: str, max_results:int=3):
+        result = {}
         self.__set_paylooad(query=query, max_results=max_results)
         try:
             response = requests.post(
@@ -39,13 +39,12 @@ class TavilySearcher:
                 json=self.__payload,
                 headers=self.__headers
             )
-            return response.json()
+            result = response.json()
         except Exception as e:
             print(f"[ERROR] From TavilySearcher: {str(e)}")
-            return {"error": str(e)}
         finally:
             self.__payload["query"] = None
             self.__payload["max_results"] = None
-    
-    async def search(self, query: str, max_results: int):
-        return await asyncio.to_thread(self.__search_helper, query, max_results)
+            print(f'[INFO] From TavilySearcher: Done search')
+
+        return result

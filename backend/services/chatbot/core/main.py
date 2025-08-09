@@ -1,5 +1,4 @@
 from services.chatbot.core.workflow import build_graph
-from services.chatbot.core.constants.schemas import LawAgentState
 
 from langchain_core.messages import HumanMessage, AIMessage
 

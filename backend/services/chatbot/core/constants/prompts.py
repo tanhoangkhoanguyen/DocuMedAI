@@ -55,14 +55,14 @@ Example: "Can I be fired for taking sick leave?"
 User Message: "{message}"
 """
 
-MULTI_QUERY_PROMPT = """
+PARAPHRASE_USER_MESSAGE_PROMPT = """
 You are an expert semantic search engineer.
 Your task is to rephrased {number} versions of the user question to improve vector search results by covering different perspectives. 
 Separate each with a newline.
 Original question: {query}
 """
 
-STEP_BACK_PROMPT = "Step back and paraphrase the question into a more general, easier-to-answer version. Examples:"
+GENERALIZE_USER_MESSAGE_PROMPT = "Step back and paraphrase the question into a more general, easier-to-answer version. Examples:"
 
 
 CONTEXT_QUESTION_PROMPT = """

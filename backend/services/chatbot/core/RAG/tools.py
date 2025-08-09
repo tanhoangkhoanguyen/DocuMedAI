@@ -1,4 +1,4 @@
-from services.chatbot.core.constants.prompts import LAW_CLASSIFIER_PROMPT, MULTI_QUERY_PROMPT, STEP_BACK_PROMPT
+from services.chatbot.core.constants.prompts import LAW_CLASSIFIER_PROMPT, PARAPHRASE_USER_MESSAGE_PROMPT, GENERALIZE_USER_MESSAGE_PROMPT
 
 import os, asyncio, requests, warnings
 from dotenv import load_dotenv
@@ -50,7 +50,7 @@ async def retrieve_doc(query, collection_name, top_k = 3):
 
 @traceable
 async def multi_query(llm, query, number = "3"):
-    multiQuery_template = ChatPromptTemplate.from_template(MULTI_QUERY_PROMPT)
+    multiQuery_template = ChatPromptTemplate.from_template(PARAPHRASE_USER_MESSAGE_PROMPT)
     queries = await (
         multiQuery_template 
         | llm
