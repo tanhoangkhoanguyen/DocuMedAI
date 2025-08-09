@@ -54,7 +54,6 @@ def main():
             chat_response = ChatResponse.model_validate(resp.json())
             chatbot_reply = chat_response.response
         except Exception as e:
-            print("Check 2")
             chatbot_reply = f"Error: {e}"
         
         with st.chat_message("assistant"):

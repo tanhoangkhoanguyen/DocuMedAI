@@ -1,9 +1,10 @@
 from services.chatbot.core.constants.schemas import TopicIDResponse
-from services.chatbot.core.constants.prompts import MULTI_QUERY_PROMPT, STEP_BACK_PROMPT, LAW_CLASSIFIER_PROMPT
+from services.chatbot.core.constants.prompts import PARAPHRASE_USER_MESSAGE_PROMPT, GENERALIZE_USER_MESSAGE_PROMPT, LAW_CLASSIFIER_PROMPT
 
-import asyncio
 from dotenv import load_dotenv
 load_dotenv()
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
+
 from langchain_openai import ChatOpenAI
 from langsmith import traceable
 from langchain.prompts import ChatPromptTemplate, FewShotChatMessagePromptTemplate
@@ -12,23 +13,8 @@ from langchain_core.output_parsers import StrOutputParser
 class UserMessagePreprocesser:
     def __init__(self, llm_model="gpt-4o-mini"):
         self.__llm = ChatOpenAI(model=llm_model, temperature=0)
-    
-    @traceable
-    async def __paraphrase_user_message(self, message, number=3):
-        multiQuery_template = ChatPromptTemplate.from_template(MULTI_QUERY_PROMPT)
-        queries = await (
-            multiQuery_template 
-            | self.__llm
-            | StrOutputParser() 
-            | (lambda x: x.split("\n"))
-        ).ainvoke({
-            "number": number,
-            "query": message
-        })
-        return [doc for doc in queries if doc != '']
+        self.__paraphrase_user_message_prompt = ChatPromptTemplate.from_template(PARAPHRASE_USER_MESSAGE_PROMPT)
 
-    @traceable
-    async def __generalize_user_message(self, message):
         examples = [
             {
                 "input": "Could the members of The Police perform lawful arrests?",
@@ -47,21 +33,58 @@ class UserMessagePreprocesser:
             example_prompt = example_prompt,
             examples = examples,
         )
-        stepBack_prompt = ChatPromptTemplate.from_messages([
-            ("system", STEP_BACK_PROMPT),
+        self.__generalize_user_message_prompt = ChatPromptTemplate.from_messages([
+            ("system", GENERALIZE_USER_MESSAGE_PROMPT),
             few_shot_prompt,
             ("user", "{query}"),
         ])
-        query = await (stepBack_prompt | self.__llm).ainvoke({"query": message})
+    
+    @traceable
+    def __paraphrase_user_message(self, message, number=3):
+        queries = (
+            self.__paraphrase_user_message_prompt 
+            | self.__llm
+            | StrOutputParser() 
+            | (lambda x: x.split("\n"))
+        ).invoke({
+            "number": number,
+            "query": message
+        })
+        return [doc for doc in queries if doc != '']
+
+    @traceable
+    def __generalize_user_message(self, message):
+        query = (
+            self.__generalize_user_message_prompt 
+            | self.__llm
+        ).invoke({"query": message})
         return query.content
     
-    async def rephrase_user_message(self, message):
-        multi_query_resp, step_back_resp = await asyncio.gather(
-            self.__paraphrase_user_message(message),
-            self.__generalize_user_message(message)
-        )
-        queries = multi_query_resp + [step_back_resp]
-        return queries
+    def rephrase_user_message(self, message: str, number:int = 3, timeout:float | None = None):
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            print(f"[INFO] Multithreading for processing user message")
+            fut_para = pool.submit(self.__paraphrase_user_message, message, number)
+            fut_gener  = pool.submit(self.__generalize_user_message, message)
+
+            try:
+                para_query_resp = fut_para.result(timeout=timeout)
+            except TimeoutError:
+                print(f"[TIMEOUT ERROR] From threading for paraphrasing user message: {str(e)}")
+                print(f"[ERROR] Canceled paraphrasing user message.")
+                fut_para.cancel()
+            except Exception as e:
+                print(f"[ERROR] From threading for paraphrasing user message: {str(e)}")
+
+            try:
+                gener_query_resp = fut_gener.result(timeout=timeout)
+            except TimeoutError:
+                print(f"[TIMEOUT ERROR] From threading for generalizing user message: {str(e)}")
+                print(f"[ERROR] Canceled generalizing user message.")
+                fut_gener.cancel()
+            except Exception:
+                print(f"[ERROR] From threading for generalizing user message: {str(e)}")
+
+        return para_query_resp + [gener_query_resp]
 
 
 class LawTypeIdentifier:

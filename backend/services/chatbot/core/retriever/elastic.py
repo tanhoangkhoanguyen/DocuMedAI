@@ -1,10 +1,9 @@
-import os, warnings, asyncio, logging
+import os, warnings, asyncio
 warnings.filterwarnings("ignore")
 from dotenv import load_dotenv
 from elasticsearch import Elasticsearch
 
 load_dotenv()
-logger = logging.getLogger(__name__)
 
 class ElasticSearcher:
     def __init__(self):
@@ -39,16 +38,11 @@ class ElasticSearcher:
         self.__size = None
 
     def __set_search_body(self, query: str, size: int = 3):
-        if self.__search_body["query"]["match"]["text"]["query"] is not None:
-            old = self.__search_body["query"]["match"]["text"]["query"]
-            print(f"[WARNING] From ElasticSearcher: Override existing query {old} to {query}")
         self.__search_body["query"]["match"]["text"]["query"] = query
-
-        if self.__size is not None:
-            print(f"[WARNING] From ElasticSearcher: Override existing size {self.__size} to {size}")
         self.__size = size
 
-    def __helper_retrieve_doc(self, query: str, law_type: str):
+    def retrieve_doc(self, query: str, law_type: str):
+        result = []
         self.__set_search_body(query=query)
         try:
             es_query = self.__search_body["query"]
@@ -57,13 +51,13 @@ class ElasticSearcher:
                 query=es_query,
                 size=self.__size,
             )
-            return search_response.get("hits", {}).get("hits", [])
+            result = search_response.get("hits", {}).get("hits", [])
         except Exception as e:
             print(f"[ERROR] From ElasticSearcher: {e}")
-            return []
         finally:
             self.__search_body["query"]["match"]["text"]["query"] = None
             self.__size = None
+            print(f'[INFO] From ElasticSearcher: Done search')
+        
+        return result
 
-    async def retrieve_doc(self, query: str, law_type: str):
-        return await asyncio.to_thread(self.__helper_retrieve_doc, query, law_type)

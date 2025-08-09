@@ -31,10 +31,8 @@ class ReRanker:
         pairs = [[user_message, passage] for passage in passages]
         inputs = self.__tokenizer(pairs, padding = True, truncation = True, return_tensors = "pt").to(self.__device)
         inputs = inputs.to(self.__device)
-        # Get relevance scores (logits)
         with torch.no_grad():
             scores = self.__model(**inputs).logits.squeeze(-1)
-        # Sort scores in descending order
         sorted_indices = torch.argsort(scores, descending = True)
         reliable_docs = []
         unreliable_docs = []

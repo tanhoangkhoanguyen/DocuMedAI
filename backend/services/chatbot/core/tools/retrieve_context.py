@@ -1,7 +1,8 @@
 import asyncio
-import torch
+import os
 import warnings
 warnings.filterwarnings("ignore")
+from concurrent.futures import ThreadPoolExecutor, wait, ALL_COMPLETED
 
 from services.chatbot.core.tools.helper import UserMessagePreprocesser, LawTypeIdentifier
 from services.chatbot.core.tools.rerank import ReRanker
@@ -13,47 +14,81 @@ from services.chatbot.core.retriever.tavily import TavilySearcher
 class ContextRetriever:
     def __init__(self):
         self.__user_message_preprocessor = UserMessagePreprocesser()
-        self._law_type_identifier = LawTypeIdentifier()
+        self.__law_type_identifier = LawTypeIdentifier()
         self.__elastic_searcher = ElasticSearcher()
         self.__qdrant_searcher = QdrantSearcher()
         self.__tavily_searcher = TavilySearcher()
         self.__reranker = ReRanker()
-
-    def __remove_similar_documents(self, documents):
-        unique_docs = list(set(documents))
-        result = []
-        for doc in unique_docs:
-            is_substring = False
-            for other in unique_docs:
-                if doc != other and doc in other:
-                    is_substring = True
-                    break
-            if not is_substring:
-                result.append(doc)
-        return result
     
-    async def get_context_for_user_message(self, user_message):
+    def get_context_for_user_message(self, user_message, max_workers:int=8, timeout:float | None = 30):
         preprocessed_user_messages = self.__user_message_preprocessor.rephrase_user_message(user_message)
-        law_type_related = self._law_type_identifier.identify_law_type_from_user_message(user_message)
-        qdrant_results, elastic_results, tavily_result = await asyncio.gather(
-            *(self.__qdrant_searcher.retrieve_single_query(query=query, collection_name=law_type_related) 
-              for query in preprocessed_user_messages),
-            *(self.__elastic_searcher.retrieve_doc(query=query, law_type=law_type_related) 
-              for query in preprocessed_user_messages),
-            *(self.__tavily_searcher.search(user_message))
-        )
+        law_type_related = self.__law_type_identifier.identify_law_type_from_user_message(user_message)
+
+        all_cpus = os.cpu_count()
+        if max_workers > all_cpus - 3:
+            print(f"[WARNING] From ContextRetriever: Using {all_cpus - 3} workers instead of {max_workers} by default.")
+            max_workers = all_cpus - 3
+        else:
+            print(f"[INFO] From ContextRetriever: Using {max_workers} workers by default.")
+        
+        qdrant_results: list = []
+        elastic_results: list = []
+        tavily_result = []
+
+        futures = {} 
+
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            for message in preprocessed_user_messages:
+                f1 = pool.submit(self.__qdrant_searcher.retrieve_single_query, message, law_type_related)
+                futures[f1] = ("qdrant", message)
+                f2 = pool.submit(self.__elastic_searcher.retrieve_doc, message, law_type_related)
+                futures[f2] = ("elastic", message)
+
+            f3 = pool.submit(self.__tavily_searcher.search, user_message)
+            futures[f3] = ("tavily", user_message)
+
+            done, not_done = wait(futures.keys(), timeout=timeout, return_when=ALL_COMPLETED)
+
+            for f in not_done:
+                kind, query = futures[f]
+                print(f'[ERROR] From ContextRetriever: Multi-threading for {kind} search is not done. Detailed: Due to timeout {timeout}')
+                f.cancel()
+
+            for f in done:
+                kind, query = futures[f]
+                try:
+                    res = f.result() 
+                except Exception as e:
+                    print(f"[ERROR] ContextRetriever: task failed for {kind} ({query}): {e}")
+                    res = [] if kind in ("qdrant", "elastic") else []
+                if kind == "qdrant":
+                    qdrant_results.append(res)
+                elif kind == "elastic":
+                    elastic_results.append(res)
+                elif kind == "tavily":
+                    tavily_result = res
+
+        if not_done:
+            print(f"[WARN] {len(not_done)} task(s) did not complete before timeout")
 
         retrieved_docs = []
-        for result in qdrant_results:
-            for doc in result:
-                retrieved_docs.append(doc.payload['text'])
-        for result in elastic_results:
-            for doc in result:
-                retrieved_docs.append(doc['_source']['text'])
-        
+        for batch in qdrant_results:
+            for point in batch:
+                try:
+                    retrieved_docs.append(point.payload["text"])
+                except Exception:
+                    continue
+        for batch in elastic_results:
+            for hit in batch:
+                try:
+                    retrieved_docs.append(hit["_source"]["text"])
+                except Exception:
+                    continue
+
         unique_docs = self.__reranker.remove_similar_documents(retrieved_docs)
         reliable_docs, unreliable_docs = self.__reranker.rerank(user_message, unique_docs)
         return reliable_docs, unreliable_docs, tavily_result
+
 
 
         
