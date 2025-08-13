@@ -1,3 +1,4 @@
-import os
+import uuid
 
-Nhi = os.getenv("ELASTIC_API_KEY")
+Nhi = uuid.uuid4()
+print (type(Nhi), Nhi)
