@@ -50,7 +50,7 @@ cd lawAdvisory
 docker compose up -d --build
 ```
 
-### 3. Upload Data to Qdrant
+### 3. Upload Data
 ```bash
 python -m services.data_setup.data_upload
 ```
