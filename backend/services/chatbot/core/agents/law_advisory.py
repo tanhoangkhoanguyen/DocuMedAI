@@ -19,21 +19,6 @@ class LawAdvisor(Runnable):
 
     def invoke(self, state:LawAgentState, config = None):
         user_message = state.messages[-1].content
-
-        # coro = self.__context_retriever.get_context_for_user_message(user_message=user_message)
-        # result = _executor.submit(asyncio.run, coro).result()
-        # reliable_docs = result.get("reliable_docs", [])
-        # unreliable_docs = result.get("unreliable_docs", [])
-        # tavily_response = result.get("tavily_response")
-
-        # response = self.__llm.invoke(self.__context_question_prompt.format(
-        #     reliable_context = reliable_docs,
-        #     unreliable_context = unreliable_docs,
-        #     website_information = tavily_response,
-        #     question = user_message
-        # ))
-        # state.messages.append(response)
-
         start = time.time()
         try:
             reliable_docs, unreliable_docs, tavily_result = self.__context_retriever.get_context_for_user_message(

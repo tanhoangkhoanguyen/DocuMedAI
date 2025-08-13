@@ -20,7 +20,7 @@ class ContextRetriever:
         self.__tavily_searcher = TavilySearcher()
         self.__reranker = ReRanker()
     
-    def get_context_for_user_message(self, user_message, max_workers:int=8, timeout:float | None = 30):
+    def get_context_for_user_message(self, user_message, max_workers:int=8, timeout:float | None = None):
         preprocessed_user_messages = self.__user_message_preprocessor.rephrase_user_message(user_message)
         law_type_related = self.__law_type_identifier.identify_law_type_from_user_message(user_message)
 

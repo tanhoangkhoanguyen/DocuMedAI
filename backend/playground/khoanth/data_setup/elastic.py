@@ -45,7 +45,7 @@ def create_mapping(index_name):
     except Exception as e:
         print(f"Index creation/mapping error: {e}")
 
-def upload_data(doc, timeout = 120):
+def upload_data(doc, timeout = None):
     try:
         bulk_response = helpers.bulk(
             client,
@@ -56,7 +56,7 @@ def upload_data(doc, timeout = 120):
     except Exception as e:
         print(f"Bulk insert error: {e}")
 
-def list_all_document_ids(size = 10000) -> List[str]:
+def list_all_document_ids(index_name, size = 10000) -> List[str]:
     try:
         search_response = client.search(
             index = index_name,
