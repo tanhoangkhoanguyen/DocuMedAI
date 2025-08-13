@@ -50,7 +50,7 @@ cd lawAdvisory
 docker compose up -d --build
 ```
 
-### 3. Upload Data to Qdrant
+### 3. Upload Data
 ```bash
 python -m services.data_setup.data_upload
 ```
@@ -69,49 +69,22 @@ backend/
  ├─ data_setup/
  │   ├─ cleaned_documents/
  │   │   ├─ civil_law/
- │   │   │   ├─ document.json                         # Cleaned civil law data (json)
- │   │   │   └─ document.pkl                          # Cleaned civil law data (pkl)
  │   │   ├─ criminal_law/
- │   │   │   ├─ document.json                         # Cleaned criminal law data (json)
- │   │   │   └─ document.pkl                          # Cleaned criminal law data (pkl)
  │   │   ├─ environmental_law/
- │   │   │   ├─ document.json                         # Cleaned environmental law data (json)
- │   │   │   └─ document.pkl                          # Cleaned environmental law data (pkl)
  │   │   ├─ international_law/
- │   │   │   ├─ document.json                         # Cleaned international law data (json)
- │   │   │   └─ document.pkl                          # Cleaned international law data (pkl)
  │   │   └─ labor_and_employment_law/
- │   │       ├─ document.json                         # Cleaned labor & employment law data (json)
- │   │       └─ document.pkl                          # Cleaned labor & employment law data (pkl)
  │   │
  │   ├─ raw_documents/
  │   │   ├─ civil_law/
- │   │   │   └─ federal-rules-of-civil-procedure.pdf  # Raw source document
  │   │   ├─ criminal_law/
- │   │   │   ├─ Barkow.Crim_.Full_.Sp14.pdf
- │   │   │   ├─ Criminal law by Wilson, William (z-lib.org).pdf
- │   │   │   ├─ Criminal Law.pdf
- │   │   │   ├─ Criminal-Law-1614009771._print.pdf
- │   │   │   ├─ criminal-law-cases-statutes-and-lawyering-strategies-4nbsped-1531018858-9781531018856.pdf
- │   │   │   ├─ Full.pdf
- │   │   │   └─ Textbook_Criminal-Law.pdf
  │   │   ├─ environmental_law/
- │   │   │   ├─ 5173476.pdf
- │   │   │   ├─ international-environmental-law.pdf
- │   │   │   └─ RL30798.pdf
  │   │   ├─ international_law/
- │   │   │   ├─ book_1.pdf
- │   │   │   └─ IInd Term_Public InternationalLaw_LB205_2022 .pdf
  │   │   └─ labor_and_employment_law/
- │   │       ├─ Gold_An_Introduction_to_Labor_Law003.pdf
- │   │       ├─ laboremployment2012-1.pdf
- │   │       ├─ Labour_Law_Interactive_PDF_03_07_2021.pdf
- │   │       └─ us-labor-and-employment-laws-english.pdf
  │   │
- │   ├─ data_upload.py                                # Upload cleaned data to vector DBs
- │   ├─ elastic_setup.py                              # Elasticsearch index setup
- │   ├─ mongodb_setup.py                              # MongoDB initialization script
- │   └─ qdrant_setup.py                               # Qdrant collection setup
+ │   ├─ data_upload.py                                # Upload cleaned data
+ │   ├─ elastic_setup.py                              # Elasticsearch indexes setup
+ │   ├─ mongodb_setup.py                              # MongoDB initialization
+ │   └─ qdrant_setup.py                               # Qdrant collections setup
  │
  ├─ services/chatbot/                                
  │   ├─ app/
