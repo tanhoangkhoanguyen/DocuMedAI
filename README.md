@@ -44,9 +44,46 @@ Accessing clear, reliable, and current U.S. legal information can be overwhelmin
 - Ports `9002`, `9004`, and `9005` available  
 
 ### 2. Setup & Run
+**2.1 Clone reposity**
 ```bash
 git clone https://github.com/tanhoangkhoanguyen/lawAdvisory.git
 cd lawAdvisory
+```
+
+**2.2 Create a `.env`**
+```env
+# === API Keys ===
+OPENAI_API_KEY=your_openai_api_key
+TAVILY_API_KEY=your_tavily_api_key
+TAVILY_SEARCH_URL=https://api.tavily.com/search
+
+# === LangChain Tracing === (optional)
+LANGCHAIN_TRACING_V2=true
+LANGCHAIN_ENDPOINT=https://api.smith.langchain.com
+LANGCHAIN_API_KEY=your_langchain_api_key
+LANGCHAIN_PROJECT=lawAdvisory
+
+# === Qdrant Config ===
+QDRANT_API_KEY=your_qdrant_api_key
+QDRANT_URL=https://your-qdrant-instance-url
+
+# === Elasticsearch Config ===
+ELASTIC_PASSWORD=your_elastic_password
+ELASTIC_HOST=http://la-elasticsearch:9200
+ELASTIC_API_KEY=your_elastic_api_key
+# Default username: elastic
+
+# === MongoDB Config ===
+MONGO_INITDB_ROOT_USERNAME=your_mongo_username
+MONGO_INITDB_ROOT_PASSWORD=your_mongo_password
+MONGODB_URI=mongodb+srv://<username>:<password>@<cluster-url>/?retryWrites=true&w=majority
+
+# === Service Ports ===
+CHATBOT_SERVICE_PORT=9004
+```
+
+**2.3 docker orchestration**
+```bash
 docker compose up -d --build
 ```
 
@@ -59,7 +96,7 @@ python -m services.data_setup.data_upload
 ### 4. Access Services
 | Service                  | Purpose                    | URL                                            |
 | ------------------------ | -------------------------- | ---------------------------------------------- |
-| **Elasticsearch Status** | Check ES health            | [http://localhost:9002](http://localhost:9002) |
+| **ElasticSearch Status** | Check ES health            | [http://localhost:9002](http://localhost:9002) |
 | **Swagger UI**           | Test backend API endpoints | [http://localhost:9004](http://localhost:9004) |
 | **Chatbot UI**           | Interact with the chatbot  | [http://localhost:9005](http://localhost:9005) |
 
@@ -69,10 +106,15 @@ backend/
  ├─ data_setup/
  │   ├─ cleaned_documents/
  │   │   ├─ civil_law/
+ │   │      └─ example.pdf
  │   │   ├─ criminal_law/
+ │   │      └─ example.pdf
  │   │   ├─ environmental_law/
+ │   │      └─ example.pdf
  │   │   ├─ international_law/
+ │   │      └─ example.pdf
  │   │   └─ labor_and_employment_law/
+ │   │      └─ example.pdf
  │   │
  │   ├─ raw_documents/
  │   │   ├─ civil_law/
@@ -131,39 +173,6 @@ qdrant_data/                                         # Local Qdrant DB storage
 docker-compose.yml                                   # Service orchestration
 .env                                                 # Environment variables
 README.md                                            # Project documentation
-```
-
-## 🗝 Environment Variables
-Create a `.env` in the project root:
-```env
-# === API Keys ===
-OPENAI_API_KEY=your_openai_api_key
-TAVILY_API_KEY=your_tavily_api_key
-TAVILY_SEARCH_URL=https://api.tavily.com/search
-
-# === LangChain Tracing === (optional)
-LANGCHAIN_TRACING_V2=true
-LANGCHAIN_ENDPOINT=https://api.smith.langchain.com
-LANGCHAIN_API_KEY=your_langchain_api_key
-LANGCHAIN_PROJECT=lawAdvisory
-
-# === Qdrant Config ===
-QDRANT_API_KEY=your_qdrant_api_key
-QDRANT_URL=https://your-qdrant-instance-url
-
-# === Elasticsearch Config ===
-ELASTIC_PASSWORD=your_elastic_password
-ELASTIC_HOST=http://la-elasticsearch:9200
-ELASTIC_API_KEY=your_elastic_api_key
-# Default username: elastic
-
-# === MongoDB Config ===
-MONGO_INITDB_ROOT_USERNAME=your_mongo_username
-MONGO_INITDB_ROOT_PASSWORD=your_mongo_password
-MONGODB_URI=mongodb+srv://<username>:<password>@<cluster-url>/?retryWrites=true&w=majority
-
-# === Service Ports ===
-CHATBOT_SERVICE_PORT=9004
 ```
 
 ## 🤝 Contributing
