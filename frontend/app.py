@@ -48,16 +48,17 @@ def main():
             resp = requests.post(
                 f"{chatbot_service_base}/chat",
                 json=payload,
-                timeout=30
+                timeout=None
             )
             resp.raise_for_status()
+            resp.encoding = 'utf-8'
             chat_response = ChatResponse.model_validate(resp.json())
             chatbot_reply = chat_response.response
         except Exception as e:
             chatbot_reply = f"Error: {e}"
         
         with st.chat_message("assistant"):
-            st.markdown(str(chatbot_reply))
+            st.markdown(chatbot_reply, unsafe_allow_html = False)
         
         st.session_state.messages.append({
             "role": "assistant",

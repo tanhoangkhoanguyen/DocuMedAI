@@ -61,7 +61,7 @@ def upload_to_qdrant(doc, client, collection_name):
         )
         print(f"Uploaded batch {i // batch_size + 1}/{total_batches} ({len(points)} chunks)")
     
-def qdrant_setup(timeout = 120):
+def qdrant_setup(timeout = None):
     client = QdrantClient(
         url = os.getenv("QDRANT_URL"),
         api_key = os.getenv("QDRANT_API_KEY"),

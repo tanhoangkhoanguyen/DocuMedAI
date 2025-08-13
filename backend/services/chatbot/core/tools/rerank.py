@@ -11,7 +11,7 @@ class ReRanker:
         except Exception as e:
             print(f"[ERROR] From ReRanker initializaiton: {str(e)}")
         finally:
-            print(f"[INFO] Finish initialize ReRanekr.")
+            print(f"[INFO] Finish initialize ReRanker.")
 
         
     def remove_similar_documents(self, documents):

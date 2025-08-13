@@ -22,7 +22,7 @@ class ElasticSearcher:
             basic_auth=("elastic", elastic_password),
             verify_certs=False,
             ssl_show_warn=False,
-            request_timeout=30,
+            request_timeout=None,
         )
 
         self.__search_body = {
