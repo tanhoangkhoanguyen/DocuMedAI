@@ -1,6 +1,6 @@
 from playground.khoanth.chatbot.core.constants.schemas import GraphState
 from services.chatbot.core.tools.retrieve_context import ContextRetriever
-from playground.khoanth.chatbot.core.constants.prompts import LAW_CONTEXT_QUESTION_PROMPT
+from playground.khoanth.chatbot.core.constants.prompts import LAW_GENERATION_PROMPT
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -9,15 +9,13 @@ import time
 from langchain_core.runnables import Runnable
 from langchain_openai import ChatOpenAI
 
-
-class lawSupporter(Runnable):
+class lawSupporter:
     def __init__(self, model_name:str, temperature:int=0):
         self.__llm = ChatOpenAI(model = model_name, temperature = temperature)
         self.__context_retriever = ContextRetriever()
-        self.__law_context_question_prompt = LAW_CONTEXT_QUESTION_PROMPT
+        self.__law_context_question_prompt = LAW_GENERATION_PROMPT
 
-    def invoke(self, state:GraphState, config = None):
-        user_message = state.global_context + state.local_context + state.messages[state.messages_idx]
+    def executor(self, user_message, config = None):
         start = time.time()
         try:
             reliable_docs, unreliable_docs, tavily_result = self.__context_retriever.get_context_for_user_message(
@@ -43,8 +41,5 @@ class lawSupporter(Runnable):
         end = time.time()
         responding_time = end - start
         print(f'[INFO] From LawAdvisor: Responding time: {responding_time} seconds')
-
-        state.answers.append(response.content)
-        state.messages_idx += 1
         print (f"From law_support: I am done with this question - {user_message}")
-        return state
+        return response.content
