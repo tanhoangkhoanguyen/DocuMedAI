@@ -95,8 +95,11 @@ class NodeController(Runnable):
             context_list = answers,
             instruction = state.global_instruction
         )
-        ai_response = self.__llm.invoke(synthesis_prompt)
-        return ai_response.content
+        ai_response = ""
+        for chunk in self.__llm.stream(synthesis_prompt):
+            print (chunk.content, end = "", flush = True)
+            ai_response += chunk.content
+        return ai_response[1:]
 
     def invoke(self, state:GraphState, config=None):
         try:
