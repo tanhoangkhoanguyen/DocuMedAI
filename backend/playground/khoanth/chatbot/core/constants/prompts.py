@@ -92,7 +92,7 @@ Original question: {query}
 
 GENERALIZE_USER_MESSAGE_PROMPT = "Step back and paraphrase the question into a more general, easier-to-answer version. Examples:"
 
-CONTEXT_QUESTION_PROMPT = """
+LAW_GENERATION_PROMPT = """
 You are a professional legal assistant.
 Your task is to answer the question thoroughly and accurately based on the provided context.
 
@@ -107,3 +107,48 @@ Your task is to answer the question thoroughly and accurately based on the provi
 - website_information: {website_information}
 - question: {question}
 """
+
+CHIT_CHAT_PROMPT = """
+You are a snart assistant
+Your task is to answer user_message given the message_context and chat_history
+
+### Input:
+- User message: {user_message}
+- Message context: {local_context}
+- Chat history: {global_context}
+"""
+
+SYNTHESIS_PROMPT = """
+You are a smart writer.
+Your task is to write a final response based on the list of contexts I provide.
+Each element in the list is an answer to a separate user question, so make sure to separate these answers clearly.
+Strictly follow the given instruction when creating the final response.
+
+### Input:
+- Context list: {context_list}
+- Instruction: {instruction}
+"""
+
+LOCAL_SUMMARIZER_PROMPT = """
+You are a smart summarizer.  
+Your task is to merge local and global inputs into two paragraphs.
+
+The input will have 2 group of input information:
+1. Context (local context + global context)
+    Local context: {local_context} 
+    Global context: {global_context} 
+2. Instruction (local instruction + global instruction) 
+    Local instruction: {local_instruction} 
+    Global instruction: {global_instruction}     
+
+Rules:  
+- Always prioritize local over global.
+- For global: keep all info, but summarize earlier details briefly and give more weight to later details.  
+
+Output:  
+Paragraph 1 = merged context (single string)  
+Paragraph 2 = merged instruction (single string)
+"""
+
+
+
