@@ -1,0 +1,17 @@
+fastapi==0.114.2
+uvicorn[standard]==0.30.6
+pydantic==2.9.2
+pydantic-settings>=2
+redis==5.0.8          # includes redis.asyncio
+orjson==3.10.7
+python-dotenv==1.0.1
+
+# your stack
+langchain==0.2.16
+langgraph==0.2.17
+# choose your model client(s) as needed (openai, etc.)
+
+SQLAlchemy==2.0.35
+psycopg[binary]==3.2.1
+
+openai>=1.40.0
