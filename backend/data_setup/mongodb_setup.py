@@ -1,69 +1,83 @@
-import os
+import os, uuid, bcrypt, pytz
 from pymongo import MongoClient
 from pymongo.server_api import ServerApi
+from datetime import datetime
 
-from pprint import pprint
+class MongoDBSetup:
+    def __init__(self):
+        self.__uri = os.getenv("MONGODB_URI")
+        self.__client = MongoClient(self.__uri, server_api = ServerApi('1'))
+        try:
+            self.__client.admin.command('ping')
+            print("Successfully connected to MongoDB!")
+        except Exception as e:
+            print(f"MongoDB setup error: {e}")
+        
+        self.__namespace = uuid.UUID(os.getenv("UUID_NAMESPACE"))
 
-from dotenv import load_dotenv
-load_dotenv()  
-
-
-def mongodb_demo():
-    print("===== DEMO MONGODB =====")
-    # 2.1 Build the MongoDB URI and connect
-    uri = os.getenv("MONGODB_URI")
-    client = MongoClient(uri, server_api=ServerApi('1'))
-
-    # 2.2 Select a database & collection
-    db         = client["client_data"]
-    collection = db["people"]
-
-    # 2.3 CREATE: insert a document
-    alice = {"name": "Alice", "age": 30, "city": "Hanoi"}
-    result = collection.insert_one(alice)
-    print(f"Inserted document ID: {result.inserted_id}\n")
+    def __hash_func(self, input):
+        salt = bcrypt.gensalt()
+        hashed_input = bcrypt.hashpw(password = input.encode('utf-8'), salt = salt)
+        return hashed_input.decode('utf-8')
     
-    Bob = {"name": "Bob", "age": 90, "city": "Maxay"}
-    result = collection.insert_one(Bob)
-    print(f"Inserted document ID: {result.inserted_id}\n")
+    def __compare_hash(self, input_1, input_2):
+        return bcrypt.checkpw(input_1.encode('utf-8'), input_2.encode('utf-8'))
     
-    Chitoge = {"name": "Chitoge", "age": 17, "city": "Bonyari"}
-    result = collection.insert_one(Chitoge)
-    print(f"Inserted document ID: {result.inserted_id}\n")
+    def __hash_compare(self, input, hashed):
+        return bcrypt.checkpw(input.encode('utf-8'), hashed)
 
-    # 2.4 READ: find all documents
-    print("All documents in ‘people’ collection:")
-    for doc in collection.find({}):
-        pprint(doc)
-    print()
+    def __update_account(self, collection, user_id, key, modified_value):
+        collection.update_one(
+            {"user_id": user_id},
+            {"$set": {key: modified_value}}
+        )
 
-    # 2.5 UPDATE: increment Alice’s age
-    update_result = collection.update_one(
-        {"name": "Alice"},
-        {"$inc": {"age": 1}}
-    )
-    print(f"Modified count: {update_result.modified_count}\n")
+    def __delete_account(collection, user_id):
+        collection.delete_one({"user_id": user_id})
 
-    # 2.6 DELETE: remove Alice’s document
-    delete_result = collection.delete_one({"name": "Bob"})
-    print(f"Deleted count: {delete_result.deleted_count}\n")
+    def mongo_setup(self):
+        database = self.__client["lawAdvisory"]
 
-    # 2.7 CLEANUP: close the connection
-    client.close()
-    print("Connection closed.")
-    print("===== DEMO MONGODB DONE =====")
+        user_name = "Admin"
+        hashed_user_name = uuid.uuid5(self.__namespace, user_name)
+        password = "Admin123()"
+        hashed_password = self.__hash_func(password)
+        user_id = user_name + str(datetime.now(pytz.utc))
+        hashed_user_id = uuid.uuid5(self.__namespace, user_id)
+        plan = "admin"
+        hashed_plan = uuid.uuid5(self.__namespace, plan)
 
-def check_authentication():
-    uri = "mongodb+srv://lawAdvisory:LawAdvisoryMongoDBPassword@cluster0.rcb50pi.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
-    # Create a new client and connect to the server
-    client = MongoClient(uri, server_api=ServerApi('1'))
-    try:
-        client.admin.command('ping')
-        print("Pinged your deployment. You successfully connected to MongoDB!")
-    except Exception as e:
-        print(e) 
+        # Add user_info
+        collection = database["user_info"]
+        admin_info = {
+            "user_id": str(hashed_user_id),
+            "user_name": str(hashed_user_name),
+            "password": str(hashed_password),
+            "plan": str(hashed_plan)
+        }
+        collection.insert_one(admin_info)
 
+        chat_id = user_name + str(datetime.now(pytz.utc))
+        hash_chat_id = uuid.uuid5(self.__namespace, chat_id)
 
-if __name__ == "__main__":
-    # check_authentication()
-    mongodb_demo()
+        # Add user_data
+        collection = database["user_data"]
+        admin_data = {
+            "user_id": str(hashed_user_id),
+            "chat_id": [str(hash_chat_id)]
+        }
+        collection.insert_one(admin_data)
+
+        # Add chat_pool
+        collection = database["chat_pool"]
+        admin_chat = {
+            "chat_id": str(hash_chat_id),
+            "chat_name": "1st_conversation",
+            "chat_history": [
+                {"role": "user", "content": "Hello, I am admin!"},
+                {"role": "chatbot", "content": "Hi admin."}
+            ]
+        }
+        collection.insert_one(admin_chat)
+        
+        self.__client.close()

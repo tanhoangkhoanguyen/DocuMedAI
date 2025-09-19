@@ -60,7 +60,7 @@ class ContextRetriever:
                     res = f.result() 
                 except Exception as e:
                     print(f"[ERROR] ContextRetriever: task failed for {kind} ({query}): {e}")
-                    res = [] if kind in ("qdrant", "elastic") else []
+                    continue
                 if kind == "qdrant":
                     qdrant_results.append(res)
                 elif kind == "elastic":
