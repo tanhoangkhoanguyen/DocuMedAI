@@ -81,7 +81,7 @@ class UserMessagePreprocesser:
                 print(f"[TIMEOUT ERROR] From threading for generalizing user message: {str(e)}")
                 print(f"[ERROR] Canceled generalizing user message.")
                 fut_gener.cancel()
-            except Exception:
+            except Exception as e:
                 print(f"[ERROR] From threading for generalizing user message: {str(e)}")
 
         return para_query_resp + [gener_query_resp]

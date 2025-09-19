@@ -25,5 +25,8 @@ python-dotenv==1.1.0
 
 # ----- Others -----
 pypdf==4.2.0
+bcrypt
+pytz
+ipython
 sentence-transformers
 
