@@ -9,19 +9,16 @@ from qdrant_client.http import models
 from qdrant_client.http.models import VectorParams, Distance, PointStruct
 
 class QdrantSetup:
-    def __init__(self, timeout = None):
-        self.__qdrant_url = os.getenv("QDRANT_URL")
-        self.__qdrant_api_key = os.getenv("QDRANT_API_KEY")
-        self.__embedding_model = HuggingFaceEmbeddings(model_name = "sentence-transformers/all-MiniLM-L6-v2")
+    def __init__(self, embedding_model:str, timeout = None):
+        self.__embedding_model = HuggingFaceEmbeddings(model_name = embedding_model)
         self.__collections = ["civil_law", "criminal_law", "environmental_law", "international_law", "labor_and_employment_law"]
-
         self.__client = QdrantClient(
-            url = self.__qdrant_url,
-            api_key = self.__qdrant_api_key,
+            url = os.getenv("QDRANT_URL"),
+            api_key = os.getenv("QDRANT_API_KEY"),
             timeout = timeout
         )
 
-    def __load_cleaned_documents(self, sub = "", path = "data_setup"):
+    def __load_cleaned_documents(self, sub:str, path = "data_setup"):
         cleaned_docs = []
         folder_path = f"{path}/raw_documents/{sub}"
         storage_path = f"{path}/cleaned_documents/{sub}/document.pkl"
@@ -35,7 +32,7 @@ class QdrantSetup:
             loader = PyPDFLoader(file_path)
             raw_docs = loader.load()
             for doc in raw_docs:
-                clean = doc.page_content.encode('ascii', errors='ignore').decode()
+                clean = doc.page_content.encode('ascii', errors = 'ignore').decode()
                 clean = re.sub(r'\s+', ' ', clean).replace('.', '').strip()
                 cleaned_docs.append(Document(page_content = clean, metadata = doc.metadata))
         with open(storage_path, "wb") as f:
@@ -71,31 +68,31 @@ class QdrantSetup:
             print(f"Uploaded batch {i // batch_size + 1}/{total_batches} ({len(points)} chunks)")
         
     def qdrant_setup(self): 
-        # Test connection
+        collection_config = models.VectorParams(
+                size = 384, # vector dimension
+                distance = models.Distance.COSINE
+            )
         try:
-            _ = self.__client.get_collections()
-            print("Successfully connected to Qdrant")
+            if self.__client.get_collections("chat_pool"):
+                print ("Collection 'chat_pool' already exists")
         except Exception as e:
-            print(f"Failed to connect to Qdrant: {e}")
-            return
+            self.__client.create_collection(
+                collection_name = "chat_pool",
+                vectors_config = collection_config
+            )
+            print(f"Created collection 'chat_pool'")
 
         for collection_name in self.__collections:
             try:
                 if self.__client.get_collection(collection_name):
-                    print(f"Collection '{collection_name}' exists")
+                    print(f"Collection '{collection_name}' already exists")
                     raise PermissionError("status_code: 403")
             except:
-                pass
-            
-            collection_config = models.VectorParams(
-                size = 384, # vector dimension
-                distance = models.Distance.COSINE
-            )
-            self.__client.create_collection(
-                collection_name = collection_name,
-                vectors_config = collection_config
-            )
-            print(f"Created collection '{collection_name}'")
+                self.__client.create_collection(
+                    collection_name = collection_name,
+                    vectors_config = collection_config
+                )
+                print(f"Created collection '{collection_name}'")
         
         print("Loading documents...")
         for qdrant_collection in self.__collections:

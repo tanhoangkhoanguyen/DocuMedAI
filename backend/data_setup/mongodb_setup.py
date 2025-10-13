@@ -5,8 +5,7 @@ from datetime import datetime
 
 class MongoDBSetup:
     def __init__(self):
-        self.__uri = os.getenv("MONGODB_URI")
-        self.__client = MongoClient(self.__uri, server_api = ServerApi('1'))
+        self.__client = MongoClient(os.getenv("MONGODB_URI"), server_api = ServerApi('1'))
         try:
             self.__client.admin.command('ping')
             print("Successfully connected to MongoDB!")

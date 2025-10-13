@@ -69,7 +69,7 @@ class Graph:
         memory = MemorySaver()
         return builder.build_graph().compile(checkpointer=memory)
 
-def build_graph(model_name:str, save_graph:bool=True):
+def build_graph(model_name:str, save_graph:bool=False):
     graph = Graph.compile(model_name=model_name)
     if save_graph:
         with open("services/chatbot/assets/graph.png", "wb") as f:
