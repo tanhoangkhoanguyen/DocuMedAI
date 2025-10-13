@@ -3,7 +3,7 @@ from playground.khoanth.chatbot.core.workflow import build_graph
 import os
 from langchain_core.messages import HumanMessage, AIMessage
 
-def call_agent(user_input:str, chat_id:str):
+def call_agent(user_input:str, chat_id:str = "session-123"):
     human_msg = HumanMessage(content = user_input)
     init_state = {
         "chat_history": [human_msg]   
@@ -14,38 +14,34 @@ def call_agent(user_input:str, chat_id:str):
     )
     ai_response = result["chat_history"][-1]
     chatbot_response = ai_response.content if isinstance(ai_response, AIMessage) else "Sorry, I didn't understand that."
-    print (chatbot_response)
+    with open ("playground/khoanth/untitled.txt", "a") as f:
+        print (chatbot_response, end = '\n' * 5, file = f)
 
 def test_chatbot():
     call_agent("""
             I am a tenant in New York and my landlord hasn’t fixed the broken heating for two weeks.
             What laws protect tenants in this situation?
             Response in markdown format please. Also, think carefully before answering me.
-        """, # What is x, given x + 9 = 210? 
-             # I am so sad, what should I do in this situation?
-        "123456"
+        """# What is x, given x + 9 = 210? 
+           # I am so sad, what should I do in this situation?
     )
-    # call_agent("""
-    #         Respond your previous reply in 1 super short setence.
-    #     """, 
-    #     "123456"
-    # )
-    # call_agent("""
-    #         Chatbot response is too dump. From now on, reponse in 1 paragraph ok?
-    #     """, 
-    #     "123456"
-    # )
-    # call_agent("""
-    #         Teach me everything I need to know to learn Python.
-    #     """, 
-    #     "123456"
-    # )
-    # call_agent("""
-    #         What is my case with the landlord?
-    #         How can I use Python to build tools that help with cases like me?
-    #     """, 
-    #     "123456"
-    # )
+    call_agent("""
+            Rewrited your previous response in 1 super short setence.
+        """
+    )
+    call_agent("""
+            Chatbot response is too dump. From now on, reponse in 1 paragraph ok?
+        """
+    )
+    call_agent("""
+            In strictly 50 words, teach me everything I need to know to learn Python.
+        """
+    )
+    call_agent("""
+            What is my case with the landlord?
+            How can I use Python to build tools that help with cases like me?
+        """
+    )
 
 if __name__ == "__main__":
     chat_model = "gpt-4o-mini"

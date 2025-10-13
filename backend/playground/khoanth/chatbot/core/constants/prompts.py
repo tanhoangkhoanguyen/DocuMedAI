@@ -13,7 +13,7 @@ RULES
 - Extract strictly from the user's message. Never add facts, summarize, or merge unrelated topics.
 - Each object should represent one coherent topic (based on context). If multiple contexts appear, split them into separate objects.
 - For missing data, use "" for string, and [] for list.
-- A request can belong to both "messages" and "instruction" (e.g. "Rewrite your previous reply in markdown").
+- A request can belong to both "messages" and "instruction".
 - Minimal normalization only: trim whitespace; do not rephrase.
 
 FIELD EXTRACTION
@@ -24,14 +24,6 @@ FIELD EXTRACTION
 
 MESSAGE_ANALYSIS_PROMPT_2 = """
 EXAMPLES
-
-User message: "I am a tenant in New York and my landlord has not fixed the broken heating for two weeks. What should I do? Also, please respond in markdown format."
-Output:
-[{
-    "context": "I am a tenant in New York and my landlord has not fixed the broken heating for two weeks.",
-    "messages": ["What should I do?"],
-    "instruction": "Respond in markdown format."
-}]
 
 User message: "My professor has not replied to my email. Should I send another one?  Also, I am applying for graduate school soon, can you help me review my personal essay? Please list the suggestions in bullet points."
 Output:
@@ -44,6 +36,14 @@ Output:
     "context": "I am applying for graduate school soon.",
     "messages": ["Can you help me review my SOP?"],
     "instruction": "List suggestions in bullet points."
+}]
+
+User message: "Rewrited your previous response in 1 super short setence."
+Output:
+[{
+    "context": "",
+    "messages": ["Rewrited your previous response in 1 super short setence."],
+    "instruction": "Rewrited your previous response in 1 super short setence."
 }]
 
 User message: "From now on, only respond in Markdown."
@@ -83,8 +83,8 @@ EXAMPLE
 
 Global Context: "human: What is reinforcement learning? AI: Reinforcement learning is a method where a model learns by maximizing rewards through trial and error."
 Local Context: "I’m currently reviewing my AI homework and just read about supervised and unsupervised learning."
-User Message: ["Can you remind me what the reward function was again?", "Do you remember when we talked about my robot project?"]
-Output: [0, 1]
+User Message: ["Rewrite your previous response in 1 super short sentence.", "Can you remind me what the reward function was again?", "Do you remember when we talked about my robot project?"]
+Output: [0, 0, 1]
 
 
 Global Context: "human: Help me review my essay about AI ethics. AI: Sure. You should clarify your argument in paragraph 2."

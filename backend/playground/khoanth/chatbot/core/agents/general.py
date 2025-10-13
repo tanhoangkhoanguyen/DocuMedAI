@@ -1,4 +1,4 @@
-from playground.khoanth.chatbot.core.constants.schemas import GraphState, MessageAnalysisState, NodeControllerState
+from playground.khoanth.chatbot.core.constants.schemas import GraphState, MessageAnalysisState, NodeControllerState, UnitState
 from playground.khoanth.chatbot.core.constants.prompts import MESSAGE_ANALYSIS_PROMPT_1, MESSAGE_ANALYSIS_PROMPT_2, MEMORY_CONTROLLER_PROMPT_1, MEMORY_CONTROLLER_PROMPT_2, INTENT_ANALYSIS_PROMPT_1, INTENT_ANALYSIS_PROMPT_2, SYNTHESIS_PROMPT
 from playground.khoanth.chatbot.core.agents.law_support import lawSupporter
 from playground.khoanth.chatbot.core.agents.chit_chat import ChitChater
@@ -13,6 +13,7 @@ from langchain_core.runnables import Runnable
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from threading import Lock
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import VectorParams, Distance, PointStruct
@@ -97,11 +98,10 @@ class NodeController(Runnable):
                     if ancestor not in visited and ancestor != "0":
                         q.put(ancestor)
                         visited.add(ancestor)
-            bound = max(5, len(results))
             temp_a, temp_b = self.__reranker.rerank(query, results)
             return ' '.join(temp_a) + ' ' + ' '.join(temp_b)
 
-    def invoke(self, state:GraphState, max_workers:int = 8, threshold:float = 0.25, config = None):
+    def invoke(self, state:GraphState, threshold:float = 0.25, config = None):
         def normalize_length(array, desired_length):
             if len(array) > desired_length:
                 return array[:desired_length]
@@ -110,21 +110,24 @@ class NodeController(Runnable):
                     array.append(0)
             return array
         
-        def preprocess(user_input):
+        lock = Lock()
+        def preprocess(state, user_input, global_context):
             nodes = []
             prompt = [
                 SystemMessage(content = MEMORY_CONTROLLER_PROMPT_1.format(number = len(user_input.messages))),
                 SystemMessage(content = MEMORY_CONTROLLER_PROMPT_2),
-                HumanMessage(content = f"Global Context: {global_context}"),
                 HumanMessage(content = f"""
+                    Global Context: {global_context}
                     Local Context: {user_input.context}
-                    User Messages: {user_input.messages}
-                """)]
+                """),
+                HumanMessage(content = [{"type": "text", "text": message} for message in user_input.messages])
+            ]
             response = self.__llm.with_structured_output(NodeControllerState).invoke(prompt)
             memory_list = normalize_length(response.unit, len(user_input.messages))
-            for idx in memory_list:
+            for idx in range(len(memory_list)):
                 if memory_list[idx] != 1:
-                    state.ancestors.add(state.current_node)
+                    with lock:
+                        state.ancestors.add(state.current_node)
             
                 user_query = user_input.context + '\n' + user_input.messages[idx]
                 prev_conversation = global_context + '\n' + user_query
@@ -137,7 +140,8 @@ class NodeController(Runnable):
                             raise Exception("[ERROR] From NodeController.invoke: This is a custom error.")
 
                         conversation_id = result[0].payload["conversation_id"]
-                        state.ancestors.add(conversation_id)
+                        with lock:
+                            state.ancestors.add(conversation_id)
                         tree_context = self.__hierarchy_retrieval(user_query, conversation_id)
                         
                         if memory_list[idx] == 1:
@@ -151,7 +155,7 @@ class NodeController(Runnable):
                             nodes.append(prev_conversation)
             return nodes
 
-        def agents_call():
+        def agents_call(node):
             if node[1] == 0:
                 return self.__chit_chat.executor(node[0])
             if node[1] == 1:
@@ -159,23 +163,28 @@ class NodeController(Runnable):
             return self.__instruction_support.executor()
 
         user_message = state.chat_history[-1].content
-        nodes = []
         global_context = "\n".join(state.global_context)
-        with ThreadPoolExecutor(max_workers = max_workers) as pool:
-            nodes = list(pool.map(preprocess, state.user_inputs))
+        nodes = []
+        with ThreadPoolExecutor(max_workers = self.__max_workers) as pool:
+            futures = [pool.submit(preprocess, state, user_input, global_context) for user_input in state.user_inputs]
+            for f in as_completed(futures):
+                nodes += f.result()
         prompt = [
             SystemMessage(content = INTENT_ANALYSIS_PROMPT_1.format(number = len(nodes))),
             SystemMessage(content = INTENT_ANALYSIS_PROMPT_2),
-            HumanMessage(content = nodes)
+            HumanMessage(content = [{"type": "text", "text": node} for node in nodes])
         ]
         response = self.__llm.with_structured_output(NodeControllerState).invoke(prompt)
         intent_list = normalize_length(response.unit, len(nodes))
         agents_list = list(zip(nodes, intent_list))
-        with ThreadPoolExecutor(max_workers = max_workers) as pool:
-            results = list(pool.map(agents_call, agents_list))
+        results = []
+        with ThreadPoolExecutor(max_workers = self.__max_workers) as pool:
+            futures = [pool.submit(agents_call, node) for node in agents_list]
+            for f in as_completed(futures):
+                results.append(f.result())
         prompt = [
             SystemMessage(content = SYNTHESIS_PROMPT),
-            HumanMessage(content = f"CONTEXT LIST:\n{results}"),
+            HumanMessage(content = "CONTEXT LIST:\n" + '\n'.join(results)),
             HumanMessage(content = user_message)
         ]
         response = self.__llm.invoke(prompt)
@@ -229,7 +238,7 @@ class SchemaResetNode(Runnable):
             "ancestors": ancestors
         })
 
-    def invoke(self, state:GraphState, top_k:int = 1, config=None):
+    def invoke(self, state:GraphState, top_k:int = 5, config = None):
         conversation_id = str(uuid.uuid5(self.__namespace, str(datetime.now(pytz.utc))))
         original_message = state.chat_history[-2].content + '\n' + state.chat_history[-1].content
         self.__upload_to_qdrant(conversation_id, original_message)
