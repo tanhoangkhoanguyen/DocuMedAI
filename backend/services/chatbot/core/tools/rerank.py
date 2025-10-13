@@ -10,10 +10,7 @@ class ReRanker:
             self.__model = AutoModelForSequenceClassification.from_pretrained(rerank_model).eval().to(self.__device)
         except Exception as e:
             print(f"[ERROR] From ReRanker initializaiton: {str(e)}")
-        finally:
-            print(f"[INFO] Finish initialize ReRanker.")
 
-        
     def remove_similar_documents(self, documents):
         unique_docs = list(set(documents))
         result = []

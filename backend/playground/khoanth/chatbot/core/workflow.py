@@ -8,14 +8,30 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.checkpoint.memory import MemorySaver
 
 class GraphBuilder:
-    def __init__(self, model_name:str):
+    def __init__(
+            self, 
+            chat_model:str, 
+            embedding_model:str,
+            max_workers:int
+        ):
         self.builder = StateGraph(GraphState)
-        self.model_name = model_name
+        self.chat_model = chat_model
+        self.embedding_model = embedding_model
+        self.max_workers = max_workers
 
     def build_graph(self):
-        self.message_analysis = MessageAnalysis(model_name=self.model_name)
-        self.node_controller = NodeController(model_name=self.model_name)
-        self.schema_reset_node = SchemaResetNode(model_name=self.model_name)
+        self.message_analysis = MessageAnalysis(
+            chat_model = self.chat_model
+        )
+        self.node_controller = NodeController(
+            chat_model = self.chat_model,
+            embedding_model = self.embedding_model,
+            max_workers = self.max_workers
+        )
+        self.schema_reset_node = SchemaResetNode(
+            chat_model = self.chat_model,
+            embedding_model = self.embedding_model
+        )
 
         self.builder.add_node("message_analysis", self.message_analysis)
         self.builder.add_node("node_controller", self.node_controller)
@@ -30,17 +46,33 @@ class GraphBuilder:
     
 class Graph:
     @staticmethod
-    def compile(model_name:str):
-        builder = GraphBuilder(model_name=model_name)
+    def compile(
+            chat_model:str, 
+            embedding_model:str,
+            max_workers:int
+        ):
+        builder = GraphBuilder(
+            chat_model = chat_model,
+            embedding_model = embedding_model,
+            max_workers = max_workers
+        )
         memory = MemorySaver()
         return builder.build_graph().compile(checkpointer = memory)
 
-def build_graph(model_name:str, save_graph:bool=True):
-    graph = Graph.compile(model_name=model_name)
+def build_graph(
+        chat_model:str, 
+        embedding_model:str,
+        max_workers:str,
+        save_graph:bool = False
+    ):
+    graph = Graph.compile(
+        chat_model = chat_model,
+        embedding_model = embedding_model,
+        max_workers = max_workers
+    )
     if save_graph:
         with open("playground/khoanth/chatbot/assets/chatbot-phase_2.png", "wb") as f:
             f.write(graph.get_graph().draw_mermaid_png())
-            print("Graph image is saved to playground/khoanth/chatbot/assets/graph.png")
     return graph
 
 

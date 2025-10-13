@@ -4,21 +4,12 @@ from datetime import datetime
 from typing import List, Dict, Any, Optional
 
 class ElasticSetup:
-    def __init__(self, chunk_size = 2400):
-        self.__elastic_host = os.getenv("ELASTIC_HOST")
-        self.__elastic_password = os.getenv("ELASTIC_PASSWORD")
+    def __init__(self, chunk_size:int):
         self.__chunk_size = chunk_size
-        self.__collections = [
-                "civil_law", 
-                "criminal_law", 
-                "environmental_law", 
-                "international_law", 
-                "labor_and_employment_law"
-        ]
-
+        self.__collections = ["civil_law", "criminal_law", "environmental_law", "international_law", "labor_and_employment_law"]
         self.__client = Elasticsearch(
-            [self.__elastic_host],
-            basic_auth = ("elastic", self.__elastic_password),
+            [os.getenv("ELASTIC_HOST")],
+            basic_auth = ("elastic", os.getenv("ELASTIC_PASSWORD")),
             verify_certs = False,
             ssl_show_warn = False
         )

@@ -1,26 +1,24 @@
-from typing import Annotated, List, Optional
+from typing import Annotated, List, Set, Optional
 from pydantic import BaseModel, Field
 
 from langchain_core.messages import AnyMessage
 from langgraph.graph.message import add_messages
 
+class UnitState(BaseModel):
+    context: str
+    messages: List[str]
+    instruction: str
+
 class GraphState(BaseModel):
     chat_history: Annotated[List[AnyMessage], add_messages]
-    messages: Optional[List[str]] = Field(default_factory=list)
-    global_context: Optional[str] = ""
-    local_context: Optional[str] = ""
+    global_context: Optional[List[str]] = Field(default_factory = list)
     global_instruction: Optional[str] = ""
-    local_instruction: Optional[str] = ""
-    topic_id: Optional[List[int]] = Field(default_factory=list)
+    user_inputs: Optional[List[UnitState]] = Field(default_factory = list)
+    current_node: Optional[str] = "0"
+    ancestors: Optional[Set[str]] = Field(default_factory = set)
 
 class MessageAnalysisState(BaseModel):
-    messages: List[str]
-    context: str
-    instruction: str
+    user_inputs: List[UnitState]
 
-class IntentAnalysisState(BaseModel):
-    intent: List[int]
-
-class LocalSummarizerNode(BaseModel):
-    context: str
-    instruction: str
+class NodeControllerState(BaseModel):
+    unit: List[int]

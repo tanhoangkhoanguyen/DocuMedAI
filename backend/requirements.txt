@@ -29,4 +29,4 @@ bcrypt
 pytz
 ipython
 sentence-transformers
-
+cryptography
