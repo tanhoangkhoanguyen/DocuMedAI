@@ -1,32 +1,20 @@
-import os, warnings, asyncio
+import os, warnings
 warnings.filterwarnings("ignore")
 from dotenv import load_dotenv
-from elasticsearch import Elasticsearch
-
 load_dotenv()
+
+from elasticsearch import Elasticsearch
 
 class ElasticSearcher:
     def __init__(self):
-        try:
-            elastic_host = os.getenv("ELASTIC_HOST")
-            elastic_password = os.getenv("ELASTIC_PASSWORD")
-            if not elastic_host or not elastic_password:
-                raise ValueError("ELASTIC_HOST or ELASTIC_PASSWORD is not set")
-        except Exception as e:
-            print(f"[ERROR] From ElasticSearcher init: {e}")
-            print("Terminated")
-            raise
-
         self.__client = Elasticsearch(
-            [elastic_host],
-            basic_auth=("elastic", elastic_password),
-            verify_certs=False,
-            ssl_show_warn=False,
-            request_timeout=None,
+            [os.getenv("ELASTIC_HOST")],
+            basic_auth = ("elastic", os.getenv("ELASTIC_PASSWORD")),
+            verify_certs = False,
+            ssl_show_warn = False,
+            request_timeout = None,
         )
-
         self.__search_body = {
-            "query": {
                 "match": {
                     "text": {
                         "query": None,
@@ -34,30 +22,21 @@ class ElasticSearcher:
                     }
                 }
             }
-        }
         self.__size = None
 
-    def __set_search_body(self, query: str, size: int = 3):
-        self.__search_body["query"]["match"]["text"]["query"] = query
-        self.__size = size
-
-    def retrieve_doc(self, query: str, law_type: str):
-        result = []
-        self.__set_search_body(query=query)
-        try:
-            es_query = self.__search_body["query"]
-            search_response = self.__client.search(
-                index=law_type,
-                query=es_query,
-                size=self.__size,
-            )
-            result = search_response.get("hits", {}).get("hits", [])
-        except Exception as e:
-            print(f"[ERROR] From ElasticSearcher: {e}")
-        finally:
-            self.__search_body["query"]["match"]["text"]["query"] = None
-            self.__size = None
-            print(f'[INFO] From ElasticSearcher: Done search')
-        
+    def retrieve_query(self, query: str, law_type: str, size:int = 3):
+        search_body = {
+            "match": {
+                "text": {
+                    "query": query,
+                    "fuzziness": "AUTO",
+                }
+            }
+        }
+        search_response = self.__client.search(
+            index = law_type,
+            query = search_body,
+            size = size,
+        )
+        result = search_response.get("hits", {}).get("hits", [])
         return result
-

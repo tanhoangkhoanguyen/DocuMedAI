@@ -1,33 +1,53 @@
 from services.chatbot.core.workflow import build_graph
 
+import os
 from langchain_core.messages import HumanMessage, AIMessage
 
-def call_agent(user_input:str):
-    human_msg = HumanMessage(content=user_input)
-    print("----------")
+def call_agent(user_input:str, chat_id:str = "session-123"):
+    human_msg = HumanMessage(content = user_input)
     init_state = {
-        "messages": [human_msg]
+        "chat_history": [human_msg]   
     }
     result = graph.invoke(
-        input=init_state,
-        config={"configurable": {"thread_id": "session-123"}}
+        input = init_state,
+        config = {"configurable": {"thread_id": chat_id}}
     )
-    
-    ai_response = result["messages"][-1]
-    chatbot_response = ai_response if isinstance(ai_response, AIMessage) else "Sorry, I didn't understand that."
-    print(f"AI Response: {chatbot_response}")
-    print(f"Topic id: {result['topic_id']}")
+    ai_response = result["chat_history"][-1]
+    chatbot_response = ai_response.content if isinstance(ai_response, AIMessage) else "Sorry, I didn't understand that."
+    # print ("AI response:", chatbot_response)
+    with open ("playground/khoanth/untitled.txt", "a") as f:
+        print (chatbot_response, end = '\n' * 5)
 
-def test_route():
-    call_agent("Hello, my name is Phuc.") # Greeting
-    # call_agent("Your response is not as what I have expected.") # Complaint request
-    # call_agent("I want the responss to be short and in the markdown format.") # Instruction 
-    # call_agent("If I stole 500$, how long will I be sentenced?") # Law
-    # call_agent("I want to ask about the US law") # Law
-    call_agent("Hi, what's the weather today?") # Chit chat
+def test_chatbot():
+    call_agent("""
+            I am a tenant in New York and my landlord hasn’t fixed the broken heating for two weeks.
+            What laws protect tenants in this situation?
+            Response in markdown format please. Also, think carefully before answering me.
+        """)
+    call_agent("""
+            Rewrited your previous response in 1 super short setence.
+        """)
+    call_agent("""
+            Chatbot response is too dump. From now on, reponse in 1 paragraph ok?
+        """)
+    call_agent("""
+            In strictly 50 words, teach me everything I need to know to learn Python.
+        """)
+    call_agent("""
+            What is my case with the landlord?
+            How can I use Python to build tools that help with cases like me?
+        """)
 
 if __name__ == "__main__":
-    model_name = 'gpt-4o-mini'
-    global graph 
-    graph = build_graph(model_name = model_name)
-    test_route()
+    chat_model = "gpt-4o-mini"
+    embedding_model = "sentence-transformers/all-MiniLM-L6-v2"
+    reranking_model = "BAAI/bge-reranker-v2-m3"
+    max_workers = max(1, os.cpu_count() - 3)
+    global graph
+    graph = build_graph(
+        chat_model = chat_model,
+        embedding_model = embedding_model,
+        reranking_model = reranking_model,
+        max_workers = max_workers
+    )
+    test_chatbot()

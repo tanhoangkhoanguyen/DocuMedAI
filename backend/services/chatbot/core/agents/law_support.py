@@ -1,5 +1,5 @@
 from services.chatbot.core.tools.retrieve_context import ContextRetriever
-from playground.khoanth.chatbot.core.constants.prompts import LAW_GENERATION_PROMPT
+from services.chatbot.core.constants.prompts import LAW_GENERATION_PROMPT
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -9,9 +9,22 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 
 class lawSupporter:
-    def __init__(self, chat_model:str, temperature:int=0):
+    def __init__(
+            self, 
+            chat_model:str, 
+            embedding_model:str, 
+            reranking_model:str,
+            max_workers:int, 
+            temperature:int = 0
+        ):
         self.__llm = ChatOpenAI(model_name = chat_model, temperature = temperature)
-        self.__context_retriever = ContextRetriever()
+        self.__max_workers = max_workers
+        self.__context_retriever = ContextRetriever(
+            chat_model = chat_model,
+            embedding_model = embedding_model,
+            reranking_model = reranking_model,
+            max_workers= max_workers
+        )
 
     def executor(self, user_message, config = None):
         reliable_docs, unreliable_docs, tavily_result = self.__context_retriever.get_context_for_user_message(user_message = user_message)

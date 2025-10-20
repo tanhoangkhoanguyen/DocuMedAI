@@ -4,15 +4,24 @@ from contextlib import asynccontextmanager
 from services.chatbot.app.route import router
 from services.chatbot.core.workflow import build_graph
 
-import os
-import uvicorn
+import os, uvicorn
 from dotenv import load_dotenv
 load_dotenv()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    graph = build_graph(model_name='gpt-4o-mini')
+    chat_model = "gpt-4o-mini"
+    embedding_model = "sentence-transformers/all-MiniLM-L6-v2"
+    reranking_model = "BAAI/bge-reranker-v2-m3"
+    max_workers = max(1, os.cpu_count() - 3)
+    
+    graph = build_graph(
+        chat_model = chat_model,
+        embedding_model = embedding_model,
+        reranking_model = reranking_model,
+        max_workers = max_workers
+    )
     router.graph = graph
     yield
 
