@@ -12,42 +12,42 @@ from services.chatbot.core.retriever.tavily import TavilySearcher
 
 
 class ContextRetriever:
-    def __init__(self):
-        self.__user_message_preprocessor = UserMessagePreprocesser()
-        self.__law_type_identifier = LawTypeIdentifier()
+    def __init__(
+            self, 
+            chat_model:str, 
+            embedding_model:str,
+            reranking_model:str,
+            max_workers:int, 
+            timeout = None
+        ):
+        self.__max_workers = max_workers
+        self.__user_message_preprocessor = UserMessagePreprocesser(chat_model = chat_model, max_workers = max_workers)
+        self.__law_type_identifier = LawTypeIdentifier(chat_model = chat_model)
+        self.__qdrant_searcher = QdrantSearcher(embedding_model = embedding_model)
         self.__elastic_searcher = ElasticSearcher()
-        self.__qdrant_searcher = QdrantSearcher()
         self.__tavily_searcher = TavilySearcher()
-        self.__reranker = ReRanker()
+        self.__reranker = ReRanker(reranking_model = reranking_model)
     
-    def get_context_for_user_message(self, user_message, max_workers:int=8, timeout:float | None = None):
-        preprocessed_user_messages = self.__user_message_preprocessor.rephrase_user_message(user_message)
-        law_type_related = self.__law_type_identifier.identify_law_type_from_user_message(user_message)
-
-        all_cpus = os.cpu_count()
-        if max_workers > all_cpus - 3:
-            print(f"[WARNING] From ContextRetriever: Using {all_cpus - 3} workers instead of {max_workers} by default.")
-            max_workers = all_cpus - 3
-        else:
-            print(f"[INFO] From ContextRetriever: Using {max_workers} workers by default.")
+    def get_context_for_user_message(self, user_message, timeout = None):
+        preprocessed_user_messages = self.__user_message_preprocessor.rephrase_user_message(user_message = user_message)
+        law_type = self.__law_type_identifier.identify_law_type(user_message = user_message)
         
-        qdrant_results: list = []
-        elastic_results: list = []
+        qdrant_results = []
+        elastic_results = []
         tavily_result = []
-
         futures = {} 
 
-        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        with ThreadPoolExecutor(max_workers = self.__max_workers) as pool:
             for message in preprocessed_user_messages:
-                f1 = pool.submit(self.__qdrant_searcher.retrieve_single_query, message, law_type_related)
+                f1 = pool.submit(self.__qdrant_searcher.retrieve_query, message, law_type)
                 futures[f1] = ("qdrant", message)
-                f2 = pool.submit(self.__elastic_searcher.retrieve_doc, message, law_type_related)
+                f2 = pool.submit(self.__elastic_searcher.retrieve_query, message, law_type)
                 futures[f2] = ("elastic", message)
 
-            f3 = pool.submit(self.__tavily_searcher.search, user_message)
+            f3 = pool.submit(self.__tavily_searcher.search_query, user_message)
             futures[f3] = ("tavily", user_message)
 
-            done, not_done = wait(futures.keys(), timeout=timeout, return_when=ALL_COMPLETED)
+            done, not_done = wait(futures.keys(), timeout = timeout, return_when = ALL_COMPLETED)
 
             for f in not_done:
                 kind, query = futures[f]
@@ -88,10 +88,3 @@ class ContextRetriever:
         unique_docs = self.__reranker.remove_similar_documents(retrieved_docs)
         reliable_docs, unreliable_docs = self.__reranker.rerank(user_message, unique_docs)
         return reliable_docs, unreliable_docs, tavily_result
-
-
-
-        
-        
-        
-    

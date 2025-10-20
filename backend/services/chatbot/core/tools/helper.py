@@ -1,100 +1,56 @@
-from services.chatbot.core.constants.schemas import TopicIDResponse
+from services.chatbot.core.constants.schemas import LLMInvokeState
 from services.chatbot.core.constants.prompts import PARAPHRASE_USER_MESSAGE_PROMPT, GENERALIZE_USER_MESSAGE_PROMPT, LAW_CLASSIFIER_PROMPT
 
 from dotenv import load_dotenv
 load_dotenv()
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 
-from langchain_openai import ChatOpenAI
 from langsmith import traceable
-from langchain.prompts import ChatPromptTemplate, FewShotChatMessagePromptTemplate
-from langchain_core.output_parsers import StrOutputParser
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
 class UserMessagePreprocesser:
-    def __init__(self, llm_model="gpt-4o-mini"):
-        self.__llm = ChatOpenAI(model=llm_model, temperature=0)
-        self.__paraphrase_user_message_prompt = ChatPromptTemplate.from_template(PARAPHRASE_USER_MESSAGE_PROMPT)
+    def __init__(self, chat_model:str, max_workers:int, temperature:int = 0):
+        self.__llm = ChatOpenAI(model = chat_model, temperature = temperature)
+        self.__max_workers = max_workers
 
-        examples = [
-            {
-                "input": "Could the members of The Police perform lawful arrests?",
-                "output": "what can the members of The Police do?",
-            },
-            {
-                "input": "Lionel Messi's was born in what country?",
-                "output": "what is Lionel Messi's personal history?",
-            }
+    @traceable
+    def __paraphrase_user_message(self, user_message:str, number:int):
+        prompt = [
+            SystemMessage(content = PARAPHRASE_USER_MESSAGE_PROMPT.format(number = number)),
+            HumanMessage(content = f"User's message: {user_message}")
         ]
-        example_prompt = ChatPromptTemplate.from_messages([
-            ("human", "{input}"),
-            ("ai", "{output}"),
-        ])
-        few_shot_prompt = FewShotChatMessagePromptTemplate(
-            example_prompt = example_prompt,
-            examples = examples,
-        )
-        self.__generalize_user_message_prompt = ChatPromptTemplate.from_messages([
-            ("system", GENERALIZE_USER_MESSAGE_PROMPT),
-            few_shot_prompt,
-            ("user", "{query}"),
-        ])
-    
-    @traceable
-    def __paraphrase_user_message(self, message, number=3):
-        queries = (
-            self.__paraphrase_user_message_prompt 
-            | self.__llm
-            | StrOutputParser() 
-            | (lambda x: x.split("\n"))
-        ).invoke({
-            "number": number,
-            "query": message
-        })
-        return [doc for doc in queries if doc != '']
+        queries = self.__llm.with_structured_output(LLMInvokeState).invoke(prompt)
+        return queries.unit
 
     @traceable
-    def __generalize_user_message(self, message):
-        query = (
-            self.__generalize_user_message_prompt 
-            | self.__llm
-        ).invoke({"query": message})
+    def __generalize_user_message(self, user_message:str):
+        prompt = [
+            SystemMessage(content = GENERALIZE_USER_MESSAGE_PROMPT),
+            HumanMessage(content = user_message)
+        ]
+        query = self.__llm.invoke(prompt)
         return query.content
     
-    def rephrase_user_message(self, message: str, number:int = 3, timeout:float | None = None):
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            print(f"[INFO] Multithreading for processing user message")
-            fut_para = pool.submit(self.__paraphrase_user_message, message, number)
-            fut_gener  = pool.submit(self.__generalize_user_message, message)
+    def rephrase_user_message(self, user_message: str, number:int = 3, timeout = None):
+        with ThreadPoolExecutor(self.__max_workers) as pool:
+            fut_para = pool.submit(self.__paraphrase_user_message, user_message, number)
+            fut_gener = pool.submit(self.__generalize_user_message, user_message)
 
-            try:
-                para_query_resp = fut_para.result(timeout=timeout)
-            except TimeoutError:
-                print(f"[TIMEOUT ERROR] From threading for paraphrasing user message: {str(e)}")
-                print(f"[ERROR] Canceled paraphrasing user message.")
-                fut_para.cancel()
-            except Exception as e:
-                print(f"[ERROR] From threading for paraphrasing user message: {str(e)}")
-
-            try:
-                gener_query_resp = fut_gener.result(timeout=timeout)
-            except TimeoutError:
-                print(f"[TIMEOUT ERROR] From threading for generalizing user message: {str(e)}")
-                print(f"[ERROR] Canceled generalizing user message.")
-                fut_gener.cancel()
-            except Exception as e:
-                print(f"[ERROR] From threading for generalizing user message: {str(e)}")
+            para_query_resp = fut_para.result(timeout = timeout) # fut_para.cancel()
+            gener_query_resp = fut_gener.result()
 
         return para_query_resp + [gener_query_resp]
 
 
 class LawTypeIdentifier:
-    def __init__(self, llm_model="gpt-4o-mini"):
-        self.__structured_llm = ChatOpenAI(model=llm_model, temperature=0).with_structured_output(TopicIDResponse)
-        self.__support_law_type = ["civil_law", "criminal_law", "environmental_law", "international_law", "labor_and_employment_law"]
+    def __init__(self, chat_model:str, temperature:int = 0):
+        self.__llm = ChatOpenAI(model = chat_model, temperature = temperature)
     
-    def identify_law_type_from_user_message(self, user_message):
-        prompt = LAW_CLASSIFIER_PROMPT.format(message=user_message)
-        response = self.__structured_llm.invoke(prompt)
-        id = response.id
-        return self.__support_law_type[id]
-    
+    def identify_law_type(self, user_message):
+        prompt = [
+            SystemMessage(content = LAW_CLASSIFIER_PROMPT),
+            HumanMessage(content = f"User Message: {user_message}")
+        ]
+        response = self.__llm.invoke(prompt)
+        return response.content   

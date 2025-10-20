@@ -1,7 +1,5 @@
-from services.chatbot.core.constants.schemas import LawAgentState
-
-from services.chatbot.core.agents.general import IntentDetector, Greetor, InstructionSupporter, ChitChater, ComplaintSupporter
-from services.chatbot.core.agents.law_advisory import LawAdvisor
+from services.chatbot.core.constants.schemas import GraphState
+from services.chatbot.core.agents.general import MessageAnalysis, NodeController, SchemaResetNode
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -10,69 +8,76 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.checkpoint.memory import MemorySaver
 
 class GraphBuilder:
-    def __init__(self, model_name:str):
-        self.builder = StateGraph(LawAgentState)
-        self.model_name = model_name
-    
-    def route_by_topic(self, state:LawAgentState):
-        topic_id = state.topic_id
-        print(f"Route by topic: {topic_id}")
-        if topic_id==0:
-            return "greeting"
-        elif topic_id==1:
-            return "complaint_request"
-        elif topic_id==2:
-            return "instruction_support"
-        elif topic_id==3:
-            return "law_support"
-        else:
-            return "chit_chat"
-    
+    def __init__(
+            self, 
+            chat_model:str, 
+            embedding_model:str,
+            reranking_model:str,
+            max_workers:int
+        ):
+        self.builder = StateGraph(GraphState)
+        self.chat_model = chat_model
+        self.embedding_model = embedding_model
+        self.reranking_model = reranking_model
+        self.max_workers = max_workers
+
     def build_graph(self):
-        self.intent_detector = IntentDetector(model_name=self.model_name)
-        self.greetor = Greetor(model_name=self.model_name)
-        self.instruction_supporter = InstructionSupporter(model_name=self.model_name)
-        self.chit_chater = ChitChater(model_name=self.model_name)
-        self.law_advisor = LawAdvisor(model_name=self.model_name)
-        self.complaint_supporter = ComplaintSupporter(model_name=self.model_name)
+        self.message_analysis = MessageAnalysis(
+            chat_model = self.chat_model
+        )
+        self.node_controller = NodeController(
+            chat_model = self.chat_model,
+            embedding_model = self.embedding_model,
+            reranking_model = self.reranking_model,
+            max_workers = self.max_workers
+        )
+        self.schema_reset_node = SchemaResetNode(
+            chat_model = self.chat_model,
+            embedding_model = self.embedding_model
+        )
 
-        self.builder.add_node("intent_detector", self.intent_detector)
-        self.builder.add_node("greeting", self.greetor)
-        self.builder.add_node("complaint_request", self.complaint_supporter)
-        self.builder.add_node("instruction_support", self.instruction_supporter)
-        self.builder.add_node("chit_chat", self.chit_chater)
-        self.builder.add_node("law_support", self.law_advisor)
+        self.builder.add_node("message_analysis", self.message_analysis)
+        self.builder.add_node("node_controller", self.node_controller)
+        self.builder.add_node("schema_reset_node", self.schema_reset_node)
 
-        self.builder.add_edge(START, "intent_detector")
-        self.builder.add_conditional_edges("intent_detector",
-                                           self.route_by_topic,
-                                           {
-                                               "greeting": "greeting",
-                                               "complaint_request": "complaint_request",
-                                               "instruction_support": "instruction_support",
-                                               "chit_chat": "chit_chat",
-                                               "law_support": "law_support"
-                                           })
-
-        self.builder.add_edge("greeting", END)
-        self.builder.add_edge("complaint_request", END)
-        self.builder.add_edge("instruction_support", END)
-        self.builder.add_edge("chit_chat", END)
-        self.builder.add_edge("law_support", END)
+        self.builder.add_edge(START, "message_analysis")
+        self.builder.add_edge("message_analysis", "node_controller")
+        self.builder.add_edge("node_controller", "schema_reset_node")
+        self.builder.add_edge("schema_reset_node", END)
 
         return self.builder
     
 class Graph:
     @staticmethod
-    def compile(model_name:str):
-        builder = GraphBuilder(model_name=model_name)
+    def compile(
+            chat_model:str, 
+            embedding_model:str,
+            reranking_model:str,
+            max_workers:int
+        ):
+        builder = GraphBuilder(
+            chat_model = chat_model,
+            embedding_model = embedding_model,
+            reranking_model = reranking_model,
+            max_workers = max_workers
+        )
         memory = MemorySaver()
-        return builder.build_graph().compile(checkpointer=memory)
+        return builder.build_graph().compile(checkpointer = memory)
 
-def build_graph(model_name:str, save_graph:bool=False):
-    graph = Graph.compile(model_name=model_name)
+def build_graph(
+        chat_model:str, 
+        embedding_model:str,
+        reranking_model:str,
+        max_workers:int,
+        save_graph:bool = False
+    ):
+    graph = Graph.compile(
+        chat_model = chat_model,
+        embedding_model = embedding_model,
+        reranking_model = reranking_model,
+        max_workers = max_workers
+    )
     if save_graph:
-        with open("services/chatbot/assets/graph.png", "wb") as f:
+        with open("playground/khoanth/chatbot/assets/chatbot-phase_2.png", "wb") as f:
             f.write(graph.get_graph().draw_mermaid_png())
-            print("Graph image is saved to ervices/chatbot/assets/graph.png")
     return graph

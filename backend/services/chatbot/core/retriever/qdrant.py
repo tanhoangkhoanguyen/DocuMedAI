@@ -1,4 +1,4 @@
-import os, asyncio, warnings
+import os, warnings
 warnings.filterwarnings("ignore")
 from dotenv import load_dotenv
 load_dotenv()
@@ -8,45 +8,23 @@ from qdrant_client import QdrantClient
 
 
 class QdrantSearcher:
-    def __init__(self,
-                 embedding_model:str="sentence-transformers/all-MiniLM-L6-v2"):
-        try:
-            self.__qdrant_url = os.getenv("QDRANT_URL")
-            self.__qdrant_api_key = os.getenv("QDRANT_API_KEY")
-        except Exception as e:
-            print(f"[ERROR] From QdrantSearcher init: {str(e)}")
-            print(f"Terminated")
-            exit(1)
-
-        self.embedder = HuggingFaceEmbeddings(model_name=embedding_model)
-
-        try:
-            self.qdrant_client = QdrantClient(
-                url=self.__qdrant_url,
-                api_key=self.__qdrant_api_key
-            )
-        except:
-            print(f"[ERROR] From Ragger's vector database connection")
-            print(f"Terminated")
-            exit(1)
+    def __init__(self, embedding_model: str):
+        self.embedder = HuggingFaceEmbeddings(model_name = embedding_model)
+        self.__client = QdrantClient(
+            url = os.getenv("QDRANT_URL"),
+            api_key = os.getenv("QDRANT_API_KEY")
+        )
     
-    def retrieve_single_query(self, query, collection_name, top_k:int=3):
+    def retrieve_query(self, query:str, collection_name:str, top_k:int = 3):
         embedded_query = self.embedder.embed_query(query)
-        try:
-            results = self.qdrant_client.search(
-                collection_name=collection_name,
-                query_vector=embedded_query,
-                limit=top_k,
-                with_payload=True,
-                with_vectors=False
-            )
-            print(f'[INFO] From QdrantSearcher: Done search')
-            return results
-        except Exception as e:
-            print(f"[ERROR] From QdrantSearcher: {str(e)}")
-            return []
+        results = self.__client.search(
+            collection_name = collection_name,
+            query_vector = embedded_query,
+            limit = top_k,
+            with_payload = True,
+            with_vectors = False
+        )
+        return results
     
     def close(self):
-        self.qdrant_client.close()
-
-        
+        self.__client.close()

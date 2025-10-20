@@ -3,11 +3,11 @@ from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
 
 class ReRanker:
-    def __init__(self, rerank_model:str="BAAI/bge-reranker-v2-m3"):
+    def __init__(self, reranking_model:str):
         try:
-            self.__tokenizer = AutoTokenizer.from_pretrained(rerank_model)
+            self.__tokenizer = AutoTokenizer.from_pretrained(reranking_model)
             self.__device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            self.__model = AutoModelForSequenceClassification.from_pretrained(rerank_model).eval().to(self.__device)
+            self.__model = AutoModelForSequenceClassification.from_pretrained(reranking_model).eval().to(self.__device)
         except Exception as e:
             print(f"[ERROR] From ReRanker initializaiton: {str(e)}")
 
@@ -24,7 +24,7 @@ class ReRanker:
                 result.append(doc)
         return result
     
-    def rerank(self, user_message, passages, top_k:int=5, threshold:int=-5):
+    def rerank(self, user_message, passages, top_k:int = 5, threshold:int = -5):
         pairs = [[user_message, passage] for passage in passages]
         inputs = self.__tokenizer(pairs, padding = True, truncation = True, return_tensors = "pt").to(self.__device)
         inputs = inputs.to(self.__device)
