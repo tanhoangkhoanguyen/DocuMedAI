@@ -16,7 +16,7 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_huggingface import HuggingFaceEmbeddings
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import VectorParams, Distance, PointStruct
 from pymongo import MongoClient
@@ -48,7 +48,9 @@ class NodeController(Runnable):
             self,
             chat_model:str, 
             embedding_model:str,
+            qdrant_threshold:int,
             reranking_model:str,
+            reranking_threshold:int,
             max_workers:int,
             temperature:int = 0,
             timeout = None
@@ -61,17 +63,23 @@ class NodeController(Runnable):
             api_key = os.getenv("QDRANT_API_KEY"),
             timeout = timeout
         )
+        self.__qdrant_threshold = qdrant_threshold
         self.__mongodb_client = MongoClient(
             os.getenv("MONGODB_URI"), 
             server_api = ServerApi('1')
         )["lawAdvisory"]["chat_pool"]
         self.__cryptography_f = Fernet(os.getenv("CRYPTOGRAPHY_KEY"))
-        self.__reranker = ReRanker
+        self.__reranker = ReRanker(
+            reranking_model,
+            reranking_threshold
+        )
+        self.__reranking_threshold = reranking_threshold
         self.__chit_chat = ChitChater(chat_model = chat_model)
         self.__law_support = lawSupporter(
                 chat_model = chat_model,
                 embedding_model = embedding_model,
                 reranking_model = reranking_model,
+                reranking_threshold = reranking_threshold,
                 max_workers = max_workers
             )
         self.__instruction_support = InstructionSupporter()
@@ -109,7 +117,7 @@ class NodeController(Runnable):
             temp_a, temp_b = self.__reranker.rerank(query, results)
             return ' '.join(temp_a) + ' ' + ' '.join(temp_b)
 
-    def invoke(self, state:GraphState, threshold:float = 0.25, config = None):
+    def invoke(self, state:GraphState, config = None):
         def normalize_length(array, desired_length):
             if len(array) > desired_length:
                 return array[:desired_length]
@@ -144,7 +152,7 @@ class NodeController(Runnable):
                 else:
                     result = self.__chat_pool_retrieval(user_query)
                     try:
-                        if result[0].score < threshold:
+                        if result[0].score < self.__qdrant_threshold:
                             raise Exception("[ERROR] From NodeController.invoke: This is a custom error.")
 
                         conversation_id = result[0].payload["conversation_id"]

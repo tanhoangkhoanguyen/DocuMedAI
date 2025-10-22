@@ -14,11 +14,13 @@ def call_agent(user_input:str, chat_id:str = "session-123"):
     )
     ai_response = result["chat_history"][-1]
     chatbot_response = ai_response.content if isinstance(ai_response, AIMessage) else "Sorry, I didn't understand that."
-    # print ("AI response:", chatbot_response)
-    with open ("playground/khoanth/untitled.txt", "a") as f:
-        print (chatbot_response, end = '\n' * 5)
+    print ("AI response:", chatbot_response)
 
 def test_chatbot():
+    call_agent("""
+        Hi chatbot.
+    """)
+    return
     call_agent("""
             I am a tenant in New York and my landlord hasn’t fixed the broken heating for two weeks.
             What laws protect tenants in this situation?
@@ -41,13 +43,17 @@ def test_chatbot():
 if __name__ == "__main__":
     chat_model = "gpt-4o-mini"
     embedding_model = "sentence-transformers/all-MiniLM-L6-v2"
+    qdrant_threshold = 0.25
     reranking_model = "BAAI/bge-reranker-v2-m3"
+    reranking_threshold = -5
     max_workers = max(1, os.cpu_count() - 3)
     global graph
     graph = build_graph(
         chat_model = chat_model,
         embedding_model = embedding_model,
+        qdrant_threshold = 0.25,
         reranking_model = reranking_model,
+        reranking_threshold = -5,
         max_workers = max_workers
     )
     test_chatbot()
