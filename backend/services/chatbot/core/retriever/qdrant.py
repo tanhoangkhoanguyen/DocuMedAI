@@ -3,7 +3,7 @@ warnings.filterwarnings("ignore")
 from dotenv import load_dotenv
 load_dotenv()
 
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_huggingface import HuggingFaceEmbeddings
 from qdrant_client import QdrantClient
 
 

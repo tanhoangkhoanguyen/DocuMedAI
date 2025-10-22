@@ -12,9 +12,10 @@ class lawSupporter:
     def __init__(
             self, 
             chat_model:str, 
-            embedding_model:str, 
+            embedding_model:str,
             reranking_model:str,
-            max_workers:int, 
+            reranking_threshold:str,
+            max_workers:int,
             temperature:int = 0
         ):
         self.__llm = ChatOpenAI(model_name = chat_model, temperature = temperature)
@@ -23,6 +24,7 @@ class lawSupporter:
             chat_model = chat_model,
             embedding_model = embedding_model,
             reranking_model = reranking_model,
+            reranking_threshold = reranking_threshold,
             max_workers= max_workers
         )
 

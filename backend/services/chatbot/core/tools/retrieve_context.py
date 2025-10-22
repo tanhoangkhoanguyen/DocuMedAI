@@ -17,16 +17,23 @@ class ContextRetriever:
             chat_model:str, 
             embedding_model:str,
             reranking_model:str,
+            reranking_threshold:str,
             max_workers:int, 
             timeout = None
         ):
         self.__max_workers = max_workers
-        self.__user_message_preprocessor = UserMessagePreprocesser(chat_model = chat_model, max_workers = max_workers)
+        self.__user_message_preprocessor = UserMessagePreprocesser(
+            chat_model = chat_model, 
+            max_workers = max_workers
+        )
         self.__law_type_identifier = LawTypeIdentifier(chat_model = chat_model)
         self.__qdrant_searcher = QdrantSearcher(embedding_model = embedding_model)
         self.__elastic_searcher = ElasticSearcher()
         self.__tavily_searcher = TavilySearcher()
-        self.__reranker = ReRanker(reranking_model = reranking_model)
+        self.__reranker = ReRanker(
+            reranking_model = reranking_model,
+            reranking_threshold = reranking_threshold
+        )
     
     def get_context_for_user_message(self, user_message, timeout = None):
         preprocessed_user_messages = self.__user_message_preprocessor.rephrase_user_message(user_message = user_message)
