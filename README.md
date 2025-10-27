@@ -15,6 +15,9 @@
   <br><br><br>
   <img src="backend/services/chatbot/assets/chatbot-phase_2 (detailed).png" width="" alt="">
   <b>Figure 2:</b> Multi Agents core (detail)
+  <br><br><br>
+  <img src="backend/services/chatbot/assets/chatbot-UI.png" width="" alt="">
+  <b>Figure 3:</b> Chatbot UI
 </p>
 
 

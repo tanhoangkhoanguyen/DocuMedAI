@@ -13,13 +13,17 @@ load_dotenv()
 async def lifespan(app: FastAPI):
     chat_model = "gpt-4o-mini"
     embedding_model = "sentence-transformers/all-MiniLM-L6-v2"
+    qdrant_threshold = 0.25
     reranking_model = "BAAI/bge-reranker-v2-m3"
+    reranking_threshold = -5
     max_workers = max(1, os.cpu_count() - 3)
     
     graph = build_graph(
         chat_model = chat_model,
         embedding_model = embedding_model,
+        qdrant_threshold = qdrant_threshold,
         reranking_model = reranking_model,
+        reranking_threshold = reranking_threshold,
         max_workers = max_workers
     )
     router.graph = graph

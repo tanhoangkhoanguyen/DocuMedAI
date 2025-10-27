@@ -1,3 +1,7 @@
+# ----- Redis -----
+redis==5.0.8
+orjson==3.10.7
+
 # ----- Qdrant Service Dependencies -----
 qdrant-client>=1.8.0
 
@@ -31,3 +35,8 @@ pytz
 ipython
 sentence-transformers
 cryptography
+pydantic==2.9.2
+pydantic-settings>=2
+SQLAlchemy==2.0.35
+psycopg[binary]==3.2.1
+openai>=1.40.0

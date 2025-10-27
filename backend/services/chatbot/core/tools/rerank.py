@@ -13,7 +13,10 @@ class ReRanker:
             self.__device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
             self.__model = AutoModelForSequenceClassification.from_pretrained(reranking_model).eval().to(self.__device)
         except Exception as e:
-            print(f"[ERROR] From ReRanker initializaiton: {e}")
+            print(f"""
+                [ERROR] [backend.services.chatbot.core.tools.rerank] Failed to initialize reranker
+                \t{str(e)}
+            """)
         self.__reranking_threshold = reranking_threshold
 
     def remove_similar_documents(self, documents):

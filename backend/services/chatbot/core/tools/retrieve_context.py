@@ -58,7 +58,11 @@ class ContextRetriever:
 
             for f in not_done:
                 kind, query = futures[f]
-                print(f'[ERROR] From ContextRetriever: Multi-threading for {kind} search is not done. Detailed: Due to timeout {timeout}')
+                print(f"""
+                    [ERROR] [backend.services.chatbot.core.tools.retrieve_context] :
+                    \tMulti-threading for kind '{kind}' search is not done.
+                    \tDetailed: Due to timeout {timeout}
+                """)
                 f.cancel()
 
             for f in done:
@@ -66,7 +70,10 @@ class ContextRetriever:
                 try:
                     res = f.result() 
                 except Exception as e:
-                    print(f"[ERROR] ContextRetriever: task failed for {kind} ({query}): {e}")
+                    print(f"""
+                        [ERROR] [backend.services.chatbot.core.tools.retrieve_context] task failed for kind '{kind}' | query '{query}':
+                        \t{str(e)}
+                    """)
                     continue
                 if kind == "qdrant":
                     qdrant_results.append(res)
@@ -76,7 +83,10 @@ class ContextRetriever:
                     tavily_result = res
 
         if not_done:
-            print(f"[WARN] {len(not_done)} task(s) did not complete before timeout")
+            print(f"""
+                [WARN] [backend.services.chatbot.core.tools.retrieve_context] Failed to complete {len(not_done)} task(s)
+                \tDetailed: Due to timeout {timeout}
+            """)
 
         retrieved_docs = []
         for batch in qdrant_results:

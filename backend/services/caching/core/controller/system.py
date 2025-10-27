@@ -1,26 +1,14 @@
-import asyncio
-import json
-import uuid
-from typing import AsyncGenerator, Callable, Optional, Dict, Any, Tuple, List
+from services.caching.core.constants.schemas import ChatRequest, ChatSession, Message
+from services.caching.core.controller.database import Database
 
-import orjson
+import asyncio, json, orjson, uuid
+from typing import AsyncGenerator, Callable, Optional, Dict, Any, Tuple, List
 from anyio import to_thread
 from redis.asyncio import Redis
 
-from constants.settings import settings
-from constants.schemas import ChatRequest, ChatSession, Message
-from controller.database import Database
-
-
-def log(msg: str) -> None:
-    print(f"[SYSTEM] {msg}", flush=True)
-
-
 # -------------------- SYSTEM CACHE -------------------- #
-
 class SystemCache:
     def __init__(self, r: Redis, db: Database, ttl_seconds: int = settings.session_ttl_seconds):
-        log("SystemCache.__init__()")
         self.__r = r
         self.__db = db
         self.__ttl_seconds = ttl_seconds
@@ -34,38 +22,34 @@ class SystemCache:
         return f"chat:{chat_id}:messages"
 
     async def get_or_load(self, chat_id: str) -> ChatSession:
-        log(f"SystemCache.get_or_load(chat_id={chat_id})")
         key = self._k(chat_id)
 
         raw = await self.__r.get(key)
         if raw:
-            # Try normal path first
             try:
                 return ChatSession.model_validate(orjson.loads(raw))
             except Exception as e:
-                log(f"SystemCache.get_or_load: cache validation failed, attempting migrate: {e}")
+                print (f"""
+                    [ERROR] [backend.services.caching.core.controller.system] Failed to run SystemCache.get_or_load(). Attempting to migrate
+                    \t{str(e)}
+                """, flushing = True)
                 data = orjson.loads(raw)
-                # migrate: chat_name -> chat_names
                 if isinstance(data, dict) and "chat_name" in data and "chat_names" not in data:
                     v = data.get("chat_name")
                     data["chat_names"] = [v] if isinstance(v, str) else (v if isinstance(v, list) else None)
                     data.pop("chat_name", None)
                 sess = ChatSession.model_validate(data)
-                # write back the corrected document
-                await self.__r.set(key, orjson.dumps(sess.model_dump()), ex=self.__ttl_seconds)
+                await self.__r.set(key, orjson.dumps(sess.model_dump()), ex = self.__ttl_seconds)
                 return sess
 
-        # Cache miss → load from DB (offload sync I/O)
         sess = await to_thread.run_sync(self.__db.load_chat_session, chat_id)
         if sess is None:
-            sess = ChatSession(chat_id=chat_id, messages=[])
+            sess = ChatSession(chat_id = chat_id, messages = [])
 
-        # Save to cache
-        await self.__r.set(key, orjson.dumps(sess.model_dump()), ex=self.__ttl_seconds)
+        await self.__r.set(key, orjson.dumps(sess.model_dump()), ex = self.__ttl_seconds)
 
-        # Hydrate messages list (pipeline)
         if sess.messages:
-            pipe = self.__r.pipeline(transaction=True)
+            pipe = self.__r.pipeline(transaction = True)
             pipe.delete(self._km(chat_id))
             pipe.rpush(self._km(chat_id), *[orjson.dumps(m.model_dump()) for m in sess.messages])
             pipe.expire(self._km(chat_id), self.__ttl_seconds)
@@ -74,25 +58,21 @@ class SystemCache:
         return sess
 
     async def touch(self, chat_id: str) -> None:
-        log(f"SystemCache.touch(chat_id={chat_id})")
         await self.__r.expire(self._k(chat_id), self.__ttl_seconds)
         await self.__r.expire(self._km(chat_id), self.__ttl_seconds)
 
     async def append_message(self, chat_id: str, message: Message) -> None:
-        log(f"SystemCache.append_message(chat_id={chat_id}, role={message.role})")
-        pipe = self.__r.pipeline(transaction=True)
+        pipe = self.__r.pipeline(transaction = True)
         pipe.rpush(self._km(chat_id), orjson.dumps(message.model_dump()))
         pipe.expire(self._km(chat_id), self.__ttl_seconds)
         pipe.expire(self._k(chat_id), self.__ttl_seconds)
         await pipe.execute()
 
     async def set_session_metadata(self, session: ChatSession) -> None:
-        log(f"SystemCache.set_session_metadata(chat_id={session.chat_id})")
         await self.__r.set(self._k(session.chat_id), orjson.dumps(session.model_dump()), ex=self.__ttl_seconds)
         await self.__r.expire(self._km(session.chat_id), self.__ttl_seconds)
 
     async def snapshot(self, chat_id: str) -> Optional[ChatSession]:
-        log(f"SystemCache.snapshot(chat_id={chat_id})")
         root = await self.__r.get(self._k(chat_id))
         if not root:
             return None
@@ -103,17 +83,14 @@ class SystemCache:
         return sess
 
     async def flush_to_db(self, chat_id: str) -> bool:
-        log(f"SystemCache.flush_to_db(chat_id={chat_id})")
         sess = await self.snapshot(chat_id)
         if sess is None:
-            log("SystemCache.flush_to_db: nothing to flush")
             return False
         await to_thread.run_sync(self.__db.save_chat_session, sess)
         await self.__r.delete(self._k(chat_id), self._km(chat_id))
         return True
 
     async def sweep_all(self, near_expiry_threshold: int = 30) -> int:
-        log(f"SystemCache.sweep_all(threshold={near_expiry_threshold})")
         flushed = 0
         cursor = 0
         while True:
@@ -135,12 +112,10 @@ class SystemCache:
                         flushed += 1
             if cursor == 0:
                 break
-        log(f"SystemCache.sweep_all: flushed={flushed}")
         return flushed
 
     async def cleanup_all_cache(self) -> int:
         """Delete ALL cache keys: chat:* and chat:*:messages."""
-        log("SystemCache.cleanup_all_cache()")
         deleted = 0
         cursor = 0
         batch: List[str] = []
@@ -156,15 +131,12 @@ class SystemCache:
                 break
         if batch:
             deleted += await self.__r.delete(*batch)
-        log(f"SystemCache.cleanup_all_cache: deleted={deleted}")
         return deleted
 
 
 # -------------------- REQUEST QUEUE -------------------- #
-
 class RequestQueue:
     def __init__(self, r: Redis, stream_name: str = "chat:requests", group_name: str = "chat-consumers") -> None:
-        log("RequestQueue.__init__()")
         self.r = r
         self.stream = stream_name
         self.group = group_name
@@ -174,14 +146,17 @@ class RequestQueue:
         return f"chat:resp:{request_id}"
 
     async def ensure_group(self) -> None:
-        log(f"RequestQueue.ensure_group(stream={self.stream}, group={self.group})")
         try:
-            await self.r.xgroup_create(name=self.stream, groupname=self.group, id="0-0", mkstream=True)
+            await self.r.xgroup_create(
+                name = self.stream, 
+                groupname = self.group, 
+                id = "0-0", 
+                mkstream = True
+            )
         except Exception:
             pass  # already exists
 
-    async def enqueue(self, req: ChatRequest) -> str:
-        log("RequestQueue.enqueue()")
+    async def enqueue(self, req:ChatRequest) -> str:
         request_id = getattr(req, "request_id", None)
         if not request_id:
             request_id = str(uuid.uuid4())
@@ -194,14 +169,13 @@ class RequestQueue:
         await self.r.xadd(self.stream, {"data": orjson.dumps(payload)})
         return request_id
 
-    async def read_batch(self, consumer_name: str, count: int = 1, block_ms: int = 1000):
-        log(f"RequestQueue.read_batch(consumer={consumer_name}, block_ms={block_ms})")
+    async def read_batch(self, consumer_name:str, count:int = 1, block_ms:int = 1000):
         resp = await self.r.xreadgroup(
-            groupname=self.group,
-            consumername=consumer_name,
-            streams={self.stream: ">"},
-            count=count,
-            block=block_ms,
+            groupname = self.group,
+            consumername = consumer_name,
+            streams = {self.stream: ">"},
+            count = count,
+            block = block_ms,
         )
         out = []
         for _, entries in resp or []:
@@ -211,18 +185,15 @@ class RequestQueue:
         return out
 
     async def ack(self, entry_id: str) -> None:
-        log(f"RequestQueue.ack(entry_id={entry_id})")
         await self.r.xack(self.stream, self.group, entry_id)
 
     async def publish(self, request_id: str, data: str | bytes) -> None:
         # Avoid printing the token content (very chatty). Log channel only.
-        log(f"RequestQueue.publish(channel={self.channel_for(request_id)})")
         if isinstance(data, str):
             data = data.encode()
         await self.r.publish(self.channel_for(request_id), data)
 
     async def sse_stream(self, request_id: str, heartbeat: int = 15):
-        log(f"RequestQueue.sse_stream(request_id={request_id}, heartbeat={heartbeat})")
         chan = self.channel_for(request_id)
         ps = self.r.pubsub()
         await ps.subscribe(chan)
@@ -242,27 +213,22 @@ class RequestQueue:
         finally:
             await ps.unsubscribe(chan)
             await ps.close()
-            log(f"RequestQueue.sse_stream: unsubscribed channel={chan}")
 
     async def cleanup_stream(self) -> None:
         """Destroy consumer group (if exists) and delete the stream key entirely."""
-        log(f"RequestQueue.cleanup_stream(stream={self.stream}, group={self.group})")
         # Try to destroy group first (in case DEL fails to remove PEL state)
         try:
             await self.r.xgroup_destroy(self.stream, self.group)
-            log("RequestQueue.cleanup_stream: group destroyed")
         except Exception:
             pass
         # Delete the stream
         try:
             await self.r.delete(self.stream)
-            log("RequestQueue.cleanup_stream: stream deleted")
         except Exception:
             pass
 
 
 # -------------------- SYSTEM -------------------- #
-
 class System:
     def __init__(self,
                  redis_url: Optional[str] = None,
@@ -271,7 +237,6 @@ class System:
                  consumer_name: str = "worker-1",
                  db: Optional[Database] = None,
                  ttl_seconds: Optional[int] = None) -> None:
-        log("System.__init__()")
         redis_url = redis_url or f"redis://:{settings.redis_password}@la-redis:{settings.redis_port}/{settings.redis_db}"
         self.__r = Redis.from_url(redis_url, decode_responses=False)
         self.db = db or Database()
@@ -282,16 +247,13 @@ class System:
 
     async def stop(self):
         """Signal background tasks to stop and clean up Redis resources."""
-        log("System.stop()")
         self._stop.set()
         # cleanup queue & cache before closing redis
         await self.queue.cleanup_stream()
         await self.cache.cleanup_all_cache()
         await self.__r.aclose()
-        log("System.stop(): redis closed")
 
     async def enqueue_and_stream(self, req: ChatRequest) -> Tuple[str, AsyncGenerator[bytes, None]]:
-        log("System.enqueue_and_stream()")
         await self.queue.ensure_group()
 
         request_id = getattr(req, "request_id", None) or str(uuid.uuid4())
@@ -304,14 +266,15 @@ class System:
         await self.queue.enqueue(req)            # then enqueue
         return request_id, gen
 
-    async def _handle(self, payload: Dict[str, Any],
-                      generate_tokens: Callable[[Dict[str, Any]], AsyncGenerator[str, None]]) -> None:
-        log(f"System._handle(chat_id={payload.get('chat_id')}, req={payload.get('request_id')})")
+    async def _handle(
+            self, 
+            payload:Dict[str, Any],
+            generate_tokens:Callable[[Dict[str, Any]], AsyncGenerator[str, None]]
+        ) -> None:
         chat_id = payload["chat_id"]
         request_id = payload["request_id"]
         user_msg = Message.model_validate(payload["message"])
 
-        # hydrate/touch & append
         _ = await self.cache.get_or_load(chat_id)
         await self.cache.append_message(chat_id, user_msg)
 
@@ -322,7 +285,7 @@ class System:
                     full.append(tok)
                     await self.queue.publish(request_id, tok)
         except Exception as e:
-            err = {"type": "error", "message": str(e)}
+            err = {"type": "error", "message": str(str(e))}
             await self.queue.publish(request_id, json.dumps(err))
         finally:
             if full:
@@ -331,20 +294,30 @@ class System:
             await self.queue.publish(request_id, "[DONE]")
             await self.cache.touch(chat_id)
 
-    async def worker_loop(self,
-                          token_gen: Callable[[Dict[str, Any]], AsyncGenerator[str, None]],
-                          block_ms: int = 1000) -> None:
-        log("System.worker_loop() start")
+    async def worker_loop(
+            self,
+            token_gen:Callable[[Dict[str, Any]], AsyncGenerator[str, None]],
+            block_ms:int = 1000
+        ) -> None:
         await self.queue.ensure_group()
         try:
             while not self._stop.is_set():
                 try:
-                    batch = await self.queue.read_batch(self.consumer_name, count=1, block_ms=block_ms)
+                    batch = await self.queue.read_batch(
+                        self.consumer_name, 
+                        count = 1,
+                        block_ms = block_ms
+                    )
                 except asyncio.CancelledError:
-                    log("System.worker_loop(): cancelled")
+                    print (f"""
+                        [SYSTEM] [backend.services.caching.core.controller.system] Cancelled System.worker_loop().queue.read_batch
+                    """, flush = True)
                     break
                 except Exception as e:
-                    log(f"System.worker_loop(): read error: {e}")
+                    print (f"""
+                        [ERROR] [backend.services.caching.core.controller.system] Failed to run System.worker_loop().queue.read_batch
+                        \t{str(e)}
+                    """, flush = True)
                     await asyncio.sleep(0.1)
                     continue
 
@@ -355,18 +328,22 @@ class System:
                     try:
                         await self._handle(payload, token_gen)
                     except asyncio.CancelledError:
-                        log("System.worker_loop(): handler cancelled")
+                        print (f"""
+                            [SYSTEM] [backend.services.caching.core.controller.system] Cancelled System.worker_loop()._handle
+                        """, flush = True)
                         raise
                     except Exception as e:
-                        log(f"System.worker_loop(): handler error: {e}")
+                        print (f"""
+                            [ERROR] [backend.services.caching.core.controller.system] Failed to run System.worker_loop()._handle
+                            \t{str(e)}
+                        """, flush = True)
                     finally:
                         try:
                             await self.queue.ack(entry_id)
                         except Exception as e:
-                            log(f"System.worker_loop(): ack error: {e}")
+                            pass
         finally:
-            log("System.worker_loop() exit")
+            pass
 
     async def close(self) -> None:
-        log("System.close()")
         await self.__r.aclose()

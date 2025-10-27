@@ -65,7 +65,9 @@ class QdrantSetup:
                 collection_name = collection_name,
                 points = points
             )
-            print(f"Uploaded batch {i // batch_size + 1}/{total_batches} ({len(points)} chunks)")
+            print(f"""
+                [INFO] [backend.data_setup.qdrant_setup] Uploaded {i // batch_size + 1}/{total_batches} over {len(points)} chunks
+            """)
         
     def qdrant_setup(self): 
         collection_config = models.VectorParams(
@@ -74,27 +76,34 @@ class QdrantSetup:
             )
         try:
             if self.__client.get_collections("chat_pool"):
-                print ("Collection 'chat_pool' already exists")
-        except Exception as e:
+                print(f"""
+                    [INFO] [backend.data_setup.qdrant_setup] Collection 'chat_pool' already exists
+                """)
+        except Exception:
             self.__client.create_collection(
                 collection_name = "chat_pool",
                 vectors_config = collection_config
             )
-            print(f"Created collection 'chat_pool'")
+            print(f"""
+                [INFO] [backend.data_setup.qdrant_setup] Created collection 'chat_pool'
+            """)
 
         for collection_name in self.__collections:
             try:
                 if self.__client.get_collection(collection_name):
-                    print(f"Collection '{collection_name}' already exists")
+                    print(f"""
+                        [INFO] [backend.data_setup.qdrant_setup] Collection '{collection_name}' already exists
+                    """)
                     raise PermissionError("status_code: 403")
             except:
                 self.__client.create_collection(
                     collection_name = collection_name,
                     vectors_config = collection_config
                 )
-                print(f"Created collection '{collection_name}'")
+                print(f"""
+                    [INFO] [backend.data_setup.qdrant_setup] Created collection '{collection_name}'
+                """)
         
-        print("Loading documents...")
         for qdrant_collection in self.__collections:
             doc = self.__load_cleaned_documents(sub = qdrant_collection)
             elastic_str = ' '.join(d.page_content for d in doc)

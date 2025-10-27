@@ -14,7 +14,10 @@ def call_agent(user_input:str, chat_id:str = "session-123"):
     )
     ai_response = result["chat_history"][-1]
     chatbot_response = ai_response.content if isinstance(ai_response, AIMessage) else "Sorry, I didn't understand that."
-    print ("AI response:", chatbot_response)
+    print(f"""
+        [INFO] [backend.services.chatbot.core.main] AI response:
+        \t{chatbot_response}
+    """)
 
 def test_chatbot():
     call_agent("""
@@ -51,9 +54,9 @@ if __name__ == "__main__":
     graph = build_graph(
         chat_model = chat_model,
         embedding_model = embedding_model,
-        qdrant_threshold = 0.25,
+        qdrant_threshold = qdrant_threshold,
         reranking_model = reranking_model,
-        reranking_threshold = -5,
+        reranking_threshold = reranking_threshold,
         max_workers = max_workers
     )
     test_chatbot()

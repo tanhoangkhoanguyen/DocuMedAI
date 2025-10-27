@@ -8,9 +8,14 @@ class MongoDBSetup:
         self.__client = MongoClient(os.getenv("MONGODB_URI"), server_api = ServerApi('1'))
         try:
             self.__client.admin.command('ping')
-            print("Successfully connected to MongoDB!")
+            print(f"""
+                [INFO] [backend.data_setup.mongodb_setup] Connected to MongoDB
+            """)
         except Exception as e:
-            print(f"MongoDB setup error: {e}")
+            print(f"""
+                [ERROR] [backend.data_setup.mongodb_setup] Failed to connected to MongoDB:
+                \t{str(e)}
+            """)
         
         self.__namespace = uuid.UUID(os.getenv("UUID_NAMESPACE"))
 

@@ -1,11 +1,37 @@
 services:
+  la-redis:
+    image: redis:7.2-alpine
+    container_name: la-redis-service
+    command: [
+      "redis-server",
+      "--appendonly", "yes",
+      "--port", "${REDIS_PORT:-6379}",
+      "--requirepass", "${REDIS_PASSWORD}"
+    ]
+    ports:
+      - "${REDIS_PORT:-6379}:${REDIS_PORT:-6379}"
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      REDIS_PORT: ${REDIS_PORT:-6379}
+      REDIS_DB: ${REDIS_DB:-0}
+    volumes:
+      - redis_data:/data
+    networks:
+      - backend-net
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a ${REDIS_PASSWORD} -p ${REDIS_PORT:-6379} ping | grep PONG"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
   la-qdrant:
     image: qdrant/qdrant:latest
     restart: unless-stopped
     container_name: la-qdrant-service
     ports:
-      - "9001:6333"  
-      - "6335:6334"   
+      - "9001:6333"
+      - "6335:6334"
     volumes:
       - ./qdrant_data:/qdrant/storage
       - ./qdrant_config/production.yaml:/qdrant/config/production.yaml
@@ -13,7 +39,7 @@ services:
       - QDRANT__SERVICE__API_KEY=${QDRANT_API_KEY}
     networks:
       - backend-net
-  
+
   la-elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.8.1
     container_name: la-elasticsearch-service
@@ -32,7 +58,7 @@ services:
     volumes:
       - esdata:/usr/share/elasticsearch/data
     ports:
-      - "9002:9200" 
+      - "9002:9200"
     networks:
       - backend-net
   
@@ -56,13 +82,18 @@ services:
     container_name: la-backend-service
     volumes:
       - ./backend:/backend
+      - ./db:/backend/db
     ports:
       - "9004:9004"
-    stdin_open: true   
-    tty: true 
+    stdin_open: true
+    tty: true
     restart: always
-    command: python -m services.chatbot.app.main
+    command: python -m services.caching.app.caching_api
     environment:
+      REDIS_URL: "redis://:${REDIS_PASSWORD}@la-redis:${REDIS_PORT:-6379}/${REDIS_DB:-0}"
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      REDIS_PORT: ${REDIS_PORT:-6379}
+      REDIS_DB: ${REDIS_DB:-0}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       TAVILY_API_KEY: ${TAVILY_API_KEY}
       TAVILY_SEARCH_URL: ${TAVILY_SEARCH_URL}
@@ -77,14 +108,15 @@ services:
       MONGODB_URI: mongodb+srv://${MONGO_INITDB_ROOT_USERNAME}:${MONGO_INITDB_ROOT_PASSWORD}@cluster0.rcb50pi.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0
     env_file:
       - .env
-
+      
     depends_on:
       - la-qdrant
+      - la-redis
       - la-elasticsearch
       - la-mongodb
     networks:
       - backend-net
-  
+
   la-frontend:
     build:
       context: ./frontend
@@ -93,10 +125,10 @@ services:
     volumes:
       - ./frontend:/frontend
     ports:
-      - "9005:9005" 
-    stdin_open: true   
-    tty: true 
-    command: python -m run         
+      - "9005:9005"
+    stdin_open: true
+    tty: true
+    command: python -m run
     environment:
       - CHATBOT_SERVICE_URL=http://la-backend-service:9004
     depends_on:
@@ -106,11 +138,11 @@ services:
       - backend-net
 
 volumes:
+  redis_data:
   esdata:
     driver: local
   mongodb_data:
     driver: local
-
 
 networks:
   backend-net:

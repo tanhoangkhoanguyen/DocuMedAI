@@ -24,7 +24,6 @@ class ChatPool:
     def __load_metadata(self):
         with open(self.__metadata_path, "r") as f:
             self.__metadata = json.load(f)
-        print(f"[INFO CHATPOOL] Loaded metadata from {self.__metadata_path}")
 
     def reload_metadata(self):
         if not os.path.exists(self.__metadata_path):
@@ -36,12 +35,10 @@ class ChatPool:
         self.__metadata["last_updated_at"] = datetime.now(timezone.utc).isoformat()
         if chat_session is not None:
             self.__metadata["chat_dict"][str(chat_session.chat_id)] = chat_session.chat_name
-        print(f"[INFO CHATPOOL] Updated metadata")
     
     def __save_metadata(self):
         with open(self.__metadata_path, "w") as f:
             json.dump(self.__metadata, f, indent=4)
-            print(f"[INFO CHATPOOL] Saved metadata to {self.__metadata_path}")
 
     def create_new_chat_session(self) -> ChatSession:
         new_chat_id = str(uuid.uuid4())
@@ -57,7 +54,9 @@ class ChatPool:
     def load_chat_session(self, chat_id: str) -> ChatSession:
         load_path = os.path.join(self.__chat_pool_path, f"{chat_id}.json")
         if not os.path.exists(load_path):
-            print(f'[ERROR CHATPOOL] Chat session {chat_id} does not exist')
+            print (f"""
+                [ERROR] [backend.services.caching.core.controller.database] Chat session '{chat_id}' does not exist
+            """)
             return None
         with open(load_path, "r") as f:
             chat_session = json.load(f)
@@ -101,8 +100,9 @@ class Database:
     def load_chat_session(self, chat_id: str) -> ChatSession:
         chat_session = self.__chat_pool.load_chat_session(chat_id)
         if chat_session is None:
-            print(f'[DATABASE] Chat session {chat_id} is empty')
-            return None
+            print (f"""
+                [INFO] [backend.services.caching.core.controller.database] Chat session '{chat_id}' is empty
+            """)
         return chat_session
     
     def create_new_chat_session(self) -> ChatSession:

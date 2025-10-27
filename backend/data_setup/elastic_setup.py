@@ -17,11 +17,16 @@ class ElasticSetup:
     def __connection_test(self):
         try:
             info = self.__client.info()
-            print("Connected to Elasticsearch:")
-            print(f"Cluster: {info['cluster_name']}")
-            print(f"Version: {info['version']['number']}")
+            print(f"""
+                [INFO] [backend.data_setup.elastic_setup] Connected to ElasticSearch:
+                \tCluster: {info['cluster_name']}
+                \tVersion: {info['version']['number']}
+            """)
         except Exception as e:
-            print(f"Connection failed: {e}")
+            print(f"""
+                [ERROR] [backend.data_setup.elastic_setup] Failed to connect to ElasticSearch:
+                \t{str(e)}
+            """)
             sys.exit()
 
     def __create_mapping(self, index_name):
@@ -36,12 +41,20 @@ class ElasticSetup:
         try:
             if not self.__client.indices.exists(index = index_name):
                 self.__client.indices.create(index = index_name, body = {"mappings": mappings})
-                print(f"Index '{index_name}' created successfully")
+                print(f"""
+                    [INFO] [backend.data_setup.elastic_setup] Created index '{index_name}'
+                """)
             else:
                 mapping_response = self.__client.indices.put_mapping(index = index_name, body = mappings)
-                print("Mapping updated:", mapping_response)
+                print(f"""
+                    [INFO] [backend.data_setup.elastic_setup] Updated mapping index '{index_name}'
+                    \t{mapping_response}
+                """)
         except Exception as e:
-            print(f"Index creation/mapping error: {e}")
+            print(f"""
+                [ERROR] [backend.data_setup.elastic_setup] Failed to update index '{index_name}':
+                \t{str(e)}
+            """)
 
     def __upload_data(self, doc, timeout = None):
         try:
@@ -50,9 +63,15 @@ class ElasticSetup:
                 doc,
                 request_timeout = timeout
             )
-            print("Bulk inserted:", bulk_response)
+            print(f"""
+                [INFO] [backend.data_setup.elastic_setup] Inserted bulk:
+                \t{bulk_response}
+            """)
         except Exception as e:
-            print(f"Bulk insert error: {e}")
+            print(f"""
+                [ERROR] [backend.data_setup.elastic_setup] Failed to insert bulk:
+                \t{str(e)}
+            """)
 
     def __list_all_document_ids(self, index_name, size = 10000) -> List[str]:
         try:
@@ -65,48 +84,56 @@ class ElasticSetup:
                 }
             )
             doc_ids = [hit['_id'] for hit in search_response['hits']['hits']]
-            print(f"Found {len(doc_ids)} documents:")
-            for doc_id in doc_ids:
-                print(str(doc_id))
-            return doc_ids
-                
+            print(f"""
+                [INFO] [backend.data_setup.elastic_setup] Found {len(doc_ids)} documents
+                \t{doc_ids}
+            """)
+            return doc_ids 
         except Exception as e:
-            print(f"Error listing document IDs: {e}")
+            print(f"""
+                [ERROR] [backend.data_setup.elastic_setup] Failed to list documents:
+                \t{str(e)}
+            """)
             return []
         
     def __remove_all_documents(self, index_name):
         try:
-            print(f"Removing all documents from index '{index_name}'")
             count_before = self.__client.count(index = index_name)['count']
-            if count_before == 0:
-                print("No documents to delete.")
-                return
-            self.__client.delete_by_query(
-                index = index_name,
-                body = {
-                    "query": {
-                        "match_all": {}
-                    }
-                },
-                wait_for_completion = True
-            )
+            if count_before > 0:
+                self.__client.delete_by_query(
+                    index = index_name,
+                    body = {
+                        "query": {
+                            "match_all": {}
+                        }
+                    },
+                    wait_for_completion = True
+                )
+            print(f"""
+                [INFO] [backend.data_setup.elastic_setup] Removed all documents from index '{index_name}'
+            """)
         except Exception as e:
-            print(f"Error removing all documents: {e}")
+            print(f"""
+                [ERROR] [backend.data_setup.elastic_setup] Failed to removed all documents from index '{index_name}'
+                \t{str(e)}
+            """)
 
     def __delete_all_indices(self):
         try:
             indices = self.__client.indices.get_alias(index = "*")
-            if not self.__client:
-                print("No indices found.")
-                return
-
-            for index in indices:
-                if index == ".security-7":
-                    continue
-                print(f"Deleting index: {index}")
-                self.__client.indices.delete(index = index)
+            if self.__client:
+                for index in indices:
+                    if index == ".security-7":
+                        continue
+                    self.__client.indices.delete(index = index)
+            print(f"""
+                [INFO] [backend.data_setup.elastic_setup] Removed all indices
+            """)
         except Exception as e:
-            print(f"Error deleting indices: {e}")
+            print(f"""
+                [ERROR] [backend.data_setup.elastic_setup] Failed to removed all indices
+                \t{str(e)}
+            """)
 
     def elastic_setup(self):
         self.__connection_test()

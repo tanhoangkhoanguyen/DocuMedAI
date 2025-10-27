@@ -10,18 +10,20 @@ router = APIRouter()
 async def chat_endpoint(req: ChatRequest):
     try:
         human_msg = HumanMessage(content=req.message)
-        init_state = {"messages": [human_msg]}
+        init_state = {"chat_history": [human_msg]}
 
-        print('Check 1')
         try:
             result = router.graph.invoke(
                 input=init_state,
                 config={"configurable": {"thread_id": req.session_id}}
             )
         except Exception as e:
-            print(str(e))
+            print(f"""
+                [ERROR] [backend.services.chatbot.app.route] :
+                \t{str(e)}
+            """)
 
-        ai_msg = result["messages"][-1]
+        ai_msg = result["chat_history"][-1]
         if isinstance(ai_msg, AIMessage):
             reply_text = ai_msg.content
         else:
