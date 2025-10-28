@@ -4,6 +4,7 @@ from services.chatbot.core.agents.law_support import lawSupporter
 from services.chatbot.core.agents.chit_chat import ChitChater
 from services.chatbot.core.agents.instruction_support import InstructionSupporter
 from services.chatbot.core.tools.rerank import ReRanker
+from services.chatbot.core.tools.helper import EmbeddingModelLoad
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -16,7 +17,6 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
-from langchain_huggingface import HuggingFaceEmbeddings
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import VectorParams, Distance, PointStruct
 from pymongo import MongoClient
@@ -56,7 +56,7 @@ class NodeController(Runnable):
             timeout = None
         ):
         self.__llm = ChatOpenAI(model_name = chat_model, temperature = temperature)
-        self.__embedding_model = HuggingFaceEmbeddings(model_name = embedding_model)
+        self.__embedding_model = EmbeddingModelLoad.get_instance(embedding_model = embedding_model)
         self.__max_workers = max_workers
         self.__qdrant_client = QdrantClient(
             url = os.getenv("QDRANT_URL"),
@@ -216,10 +216,9 @@ class SchemaResetNode(Runnable):
             timeout = None
         ):
         self.__llm = ChatOpenAI(model_name = chat_model, temperature = temperature)
-        self.__embedding_model = HuggingFaceEmbeddings(model_name = embedding_model)
+        self.__embedding_model = EmbeddingModelLoad.get_instance(embedding_model = embedding_model)
         self.__namespace = uuid.UUID(os.getenv("UUID_NAMESPACE"))
         self.__cryptography_f = Fernet(os.getenv("CRYPTOGRAPHY_KEY"))
-        self.__embedding_model = HuggingFaceEmbeddings(model_name = embedding_model)
         self.__qdrant_client = QdrantClient(
             url = os.getenv("QDRANT_URL"),
             api_key = os.getenv("QDRANT_API_KEY"),

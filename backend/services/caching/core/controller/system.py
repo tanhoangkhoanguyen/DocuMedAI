@@ -188,7 +188,6 @@ class RequestQueue:
         await self.r.xack(self.stream, self.group, entry_id)
 
     async def publish(self, request_id: str, data: str | bytes) -> None:
-        # Avoid printing the token content (very chatty). Log channel only.
         if isinstance(data, str):
             data = data.encode()
         await self.r.publish(self.channel_for(request_id), data)
@@ -285,7 +284,7 @@ class System:
                     full.append(tok)
                     await self.queue.publish(request_id, tok)
         except Exception as e:
-            err = {"type": "error", "message": str(str(e))}
+            err = {"type": "error", "message": str(e)}
             await self.queue.publish(request_id, json.dumps(err))
         finally:
             if full:
@@ -341,9 +340,14 @@ class System:
                         try:
                             await self.queue.ack(entry_id)
                         except Exception as e:
-                            pass
+                            print (f"""
+                                [ERROR] [backend.services.caching.core.controller.system] Failed to run System.worker_loop().ack
+                                \t{str(e)}
+                            """, flush = True)
         finally:
-            pass
+            print (f"""
+                [INFO] [backend.services.caching.core.controller.system] Exited System.worker_loop()
+            """, flush = True)
 
     async def close(self) -> None:
         await self.__r.aclose()

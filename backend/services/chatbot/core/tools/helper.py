@@ -3,11 +3,13 @@ from services.chatbot.core.constants.prompts import PARAPHRASE_USER_MESSAGE_PROM
 
 from dotenv import load_dotenv
 load_dotenv()
-from concurrent.futures import ThreadPoolExecutor, TimeoutError
 
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from langsmith import traceable
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
+from langchain_huggingface import HuggingFaceEmbeddings
+from threading import Lock
 
 class UserMessagePreprocesser:
     def __init__(self, chat_model:str, max_workers:int, temperature:int = 0):
@@ -53,4 +55,21 @@ class LawTypeIdentifier:
             HumanMessage(content = f"User Message: {user_message}")
         ]
         response = self.__llm.invoke(prompt)
-        return response.content   
+        return response.content
+
+class EmbeddingModelLoad: 
+    _instance = None
+    _model_name = None
+    _lock = Lock()
+
+    def get_instance(self, embedding_model): 
+        if self._instance is None or self._model_name != embedding_model:
+            with self._lock: 
+                self._instance = HuggingFaceEmbeddings(model_name = embedding_model) 
+                self._model_name = embedding_model
+        return self._instance 
+        
+    def reset(self): 
+        with self._lock: 
+            self._instance = None
+            self._model_name = None
