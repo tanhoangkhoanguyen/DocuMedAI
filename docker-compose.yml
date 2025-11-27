@@ -1,151 +1,72 @@
 services:
-  la-redis:
-    image: redis:7.2-alpine
-    container_name: la-redis-service
-    command: [
-      "redis-server",
-      "--appendonly", "yes",
-      "--port", "${REDIS_PORT:-6379}",
-      "--requirepass", "${REDIS_PASSWORD}"
-    ]
-    ports:
-      - "${REDIS_PORT:-6379}:${REDIS_PORT:-6379}"
-    environment:
-      REDIS_PASSWORD: ${REDIS_PASSWORD}
-      REDIS_PORT: ${REDIS_PORT:-6379}
-      REDIS_DB: ${REDIS_DB:-0}
-    volumes:
-      - redis_data:/data
-    networks:
-      - backend-net
-    healthcheck:
-      test: ["CMD-SHELL", "redis-cli -a ${REDIS_PASSWORD} -p ${REDIS_PORT:-6379} ping | grep PONG"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-    restart: unless-stopped
-
   la-qdrant:
-    image: qdrant/qdrant:latest
+    image: qdrant/qdrant:v1.16.1
     restart: unless-stopped
     container_name: la-qdrant-service
     ports:
-      - "9001:6333"
-      - "6335:6334"
+      - "8001:6333"
+    networks:
+      - backend-net
     volumes:
       - ./qdrant_data:/qdrant/storage
-      - ./qdrant_config/production.yaml:/qdrant/config/production.yaml
-    environment:
-      - QDRANT__SERVICE__API_KEY=${QDRANT_API_KEY}
-    networks:
-      - backend-net
 
   la-elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.8.1
-    container_name: la-elasticsearch-service
-    environment:
-      node.name: ${NODE_NAME:-es-node1}
-      cluster.name: ${CLUSTER_NAME:-es-cluster}
-      discovery.type: ${DISCOVERY_TYPE:-single-node}
-      bootstrap.memory_lock: "true"
-      ES_JAVA_OPTS: "${ES_JAVA_OPTS:- -Xms1g -Xmx1g}"
-      xpack.security.enabled: "true"
-      ELASTIC_PASSWORD: ${ELASTIC_PASSWORD}
-    ulimits:
-      memlock:
-        soft: -1
-        hard: -1
-    volumes:
-      - esdata:/usr/share/elasticsearch/data
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.17.10
+    restart: unless-stopped
+    container_name: la-eslaticsearch-service
     ports:
-      - "9002:9200"
+      - "8002:9200"
     networks:
       - backend-net
-  
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms256m -Xmx256m
+    volumes:
+      - ./elasticsearch_data:/usr/share/elasticsearch/data
+
   la-mongodb:
-    image: mongo:7.0
-    container_name: la-mongodb-services
-    environment:
-      MONGO_INITDB_ROOT_USERNAME: ${MONGO_INITDB_ROOT_USERNAME}
-      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_INITDB_ROOT_PASSWORD}
+    image: mongo:8.0.13-noble
+    restart: unless-stopped
+    container_name: la-mongodb-service
     ports:
-      - "9003:27017"
-    volumes:
-      - mongodb_data:/data/db
+      - "8003:27017"
     networks:
       - backend-net
+    volumes:
+      - ./mongodb_data:/data/db
+
+  la-redis:
+    image: redis:7.2-alpine
+    restart: unless-stopped
+    container_name: la-redis-service
+    ports:
+      - "8004:6379"
+    networks:
+      - backend-net
+    volumes:
+      - ./redis_data:/data
 
   la-backend:
     build:
       context: .
       dockerfile: backend/Dockerfile
-    container_name: la-backend-service
-    volumes:
-      - ./backend:/backend
-      - ./db:/backend/db
-    ports:
-      - "9004:9004"
+    depends_on:
+      - la-qdrant
+      - la-elasticsearch
+      - la-mongodb
     stdin_open: true
     tty: true
     restart: always
-    command: python -m services.caching.app.caching_api
-    environment:
-      REDIS_URL: "redis://:${REDIS_PASSWORD}@la-redis:${REDIS_PORT:-6379}/${REDIS_DB:-0}"
-      REDIS_PASSWORD: ${REDIS_PASSWORD}
-      REDIS_PORT: ${REDIS_PORT:-6379}
-      REDIS_DB: ${REDIS_DB:-0}
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
-      TAVILY_API_KEY: ${TAVILY_API_KEY}
-      TAVILY_SEARCH_URL: ${TAVILY_SEARCH_URL}
-      LANGCHAIN_TRACING_V2: ${LANGCHAIN_TRACING_V2}
-      LANGCHAIN_ENDPOINT: ${LANGCHAIN_ENDPOINT}
-      LANGCHAIN_API_KEY: ${LANGCHAIN_API_KEY}
-      LANGCHAIN_PROJECT: ${LANGCHAIN_PROJECT}
-      QDRANT_URL: ${QDRANT_URL}
-      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY}
-      ELASTIC_HOST: ${ELASTIC_HOST}
-      ELASTIC_PASSWORD: ${ELASTIC_PASSWORD}
-      MONGODB_URI: mongodb+srv://${MONGO_INITDB_ROOT_USERNAME}:${MONGO_INITDB_ROOT_PASSWORD}@cluster0.rcb50pi.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0
-    env_file:
-      - .env
-      
-    depends_on:
-      - la-qdrant
-      - la-redis
-      - la-elasticsearch
-      - la-mongodb
-    networks:
-      - backend-net
-
-  la-frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    container_name: la-frontend-service
-    volumes:
-      - ./frontend:/frontend
+    command: python -m mongodb_test
+    container_name: la-backend-service
     ports:
-      - "9005:9005"
-    stdin_open: true
-    tty: true
-    command: python -m run
-    environment:
-      - CHATBOT_SERVICE_URL=http://la-backend-service:9004
-    depends_on:
-      - la-backend
+      - "8005:8005"
     networks:
-      - frontend-net
       - backend-net
-
-volumes:
-  redis_data:
-  esdata:
-    driver: local
-  mongodb_data:
-    driver: local
+    volumes:
+      - ./backend/playground:/app
 
 networks:
   backend-net:
-    driver: bridge
-  frontend-net:
     driver: bridge

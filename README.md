@@ -9,14 +9,14 @@
 [![Streamlit](https://img.shields.io/badge/Streamlit-1.28.0-FF4B4B)](https://streamlit.io/)
 
 <p align="center"> 
-  <img src="backend/services/chatbot/assets/system_design-phase_2.png" width="" alt="">
+  <img src="backend/services/caching/assets/system_design-phase_2.png" width="" alt="">
   <br>
   <b>Figure 1:</b> System Design
   <br><br><br>
   <img src="backend/services/chatbot/assets/chatbot-phase_2 (detailed).png" width="" alt="">
   <b>Figure 2:</b> Multi Agents core (detail)
   <br><br><br>
-  <img src="backend/services/chatbot/assets/chatbot-UI.png" width="" alt="">
+  <img src="backend/services/caching/assets/chatbot-UI.png" width="" alt="">
   <b>Figure 3:</b> Chatbot UI
 </p>
 
@@ -111,3 +111,64 @@ MIT License – see [LICENSE](https://mit-license.org/)
 <p align="center">
   <i>Built with 💙 for a more advanced future</i>
 </p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# **Updated Note**
+Clean up docker completely
+docker system prune -af
+docker volume prune -f
+
+
+Qdrant Services: http://localhost:8001
+Qdrant UI: http://localhost:8001/dashboard#/collections 
+
+ElasticSearch slows down at its start up a bit
+All documents: http://localhost:9002/lawadvisory-f_prj/_search?pretty
+Document count: http://localhost:9002/lawadvisory-f_prj/_count?pretty
+Index mapping: http://localhost:9002/lawadvisory-f_prj/_mapping?pretty
+Cluster info: http://localhost:9002/_cluster/health?pretty
+All indices: http://localhost:9002/_cat/indices?v

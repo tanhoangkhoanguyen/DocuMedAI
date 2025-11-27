@@ -156,7 +156,7 @@ class ElasticSetup:
                 doc_dict[name].append({
                     "_index": name,
                     "_source": {
-                    "text": doc_str[i:bound]
+                        "text": doc_str[i:bound]
                     }
                 })
         for _, doc in doc_dict.items():
