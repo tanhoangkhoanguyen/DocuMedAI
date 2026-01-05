@@ -2,7 +2,6 @@ from services.chatbot.core.constants.schemas import GraphState, MessageAnalysisS
 from services.chatbot.core.constants.prompts import MESSAGE_ANALYSIS_PROMPT_1, MESSAGE_ANALYSIS_PROMPT_2, MEMORY_CONTROLLER_PROMPT_1, MEMORY_CONTROLLER_PROMPT_2, INTENT_ANALYSIS_PROMPT_1, INTENT_ANALYSIS_PROMPT_2, SYNTHESIS_PROMPT
 from services.chatbot.core.agents.law_support import lawSupporter
 from services.chatbot.core.agents.chit_chat import ChitChater
-from services.chatbot.core.agents.instruction_support import InstructionSupporter
 from services.chatbot.core.tools.rerank import ReRanker
 from services.chatbot.core.tools.helper import EmbeddingModelLoad
 
@@ -46,7 +45,7 @@ class MessageAnalysis(Runnable):
 class NodeController(Runnable):
     def __init__(
             self,
-            chat_model:str, 
+            chat_model:str,
             embedding_model:str,
             qdrant_threshold:int,
             reranking_model:str,
@@ -82,7 +81,6 @@ class NodeController(Runnable):
                 reranking_threshold = reranking_threshold,
                 max_workers = max_workers
             )
-        self.__instruction_support = InstructionSupporter()
 
     def __chat_pool_retrieval(self, query, collection_name = "chat_pool", top_k:int = 1):
         embedded_query = self.__embedding_model.embed_query(query)

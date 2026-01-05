@@ -71,6 +71,7 @@ class Graph:
             reranking_threshold = reranking_threshold,
             max_workers = max_workers
         )
+        # TODO: Why `MemorySaver`
         memory = MemorySaver()
         return builder.build_graph().compile(checkpointer = memory)
 
@@ -92,6 +93,6 @@ def build_graph(
         max_workers = max_workers
     )
     if save_graph:
-        with open("playground/khoanth/chatbot/assets/chatbot-phase_2.png", "wb") as f:
+        with open("services/chatbot/assets/chatbot-phase_2.png", "wb") as f:
             f.write(graph.get_graph().draw_mermaid_png())
     return graph

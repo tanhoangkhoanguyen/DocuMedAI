@@ -1,4 +1,4 @@
-from typing import Annotated, List, Set, Optional
+from typing import Annotated, List, Dict, Set, Optional
 from pydantic import BaseModel, Field
 
 from langchain_core.messages import AnyMessage
@@ -25,3 +25,18 @@ class NodeControllerState(BaseModel):
 
 class LLMInvokeState(BaseModel):
     unit: List[str]
+
+class UserInfo(BaseModel):
+    user_id: str
+    user_name: str
+    password: str
+    plan: str
+
+class UserData(BaseModel):
+    user_id: str
+    chat_id: List[str]
+
+class UserChat(BaseModel):
+    chat_id: str
+    chat_name: str
+    chat_history: List[Dict]

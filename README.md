@@ -157,6 +157,7 @@ MIT License – see [LICENSE](https://mit-license.org/)
 
 
 
+<!-- 
 # **Updated Note**
 Clean up docker completely
 docker system prune -af
@@ -171,4 +172,9 @@ All documents: http://localhost:9002/lawadvisory-f_prj/_search?pretty
 Document count: http://localhost:9002/lawadvisory-f_prj/_count?pretty
 Index mapping: http://localhost:9002/lawadvisory-f_prj/_mapping?pretty
 Cluster info: http://localhost:9002/_cluster/health?pretty
-All indices: http://localhost:9002/_cat/indices?v
+All indices: http://localhost:9002/_cat/indices?v 
+
+
+Current worklog:
+- Done double checking the workflow file. Next -> general.py
+-->

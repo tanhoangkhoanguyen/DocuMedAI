@@ -1,15 +1,56 @@
-from backend.playground.khoanth.chatbot.core.main import embedding_model
 from data_setup.qdrant_setup import QdrantSetup
-from data_setup.elastic_setup import ElasticSetup
+from data_setup.elasticsearch_setup import ElasticSearchSetup
 from data_setup.mongodb_setup import MongoDBSetup
 
-if __name__ == "__main__":
-    elastic_configuration = ElasticSetup(chunk_size = 2400)
-    elastic_configuration.elastic_setup()
+import sys, os, re, json
+# from langchain.document_loaders import PyPDFLoader
+from langchain_community.document_loaders import PyPDFLoader
 
-    mongo_configuration = MongoDBSetup()
-    mongo_configuration.mongo_setup()
+def clean_text(text: str) -> str:
+    text = text.encode("ascii", errors = "ignore").decode()    # Remove non-ASCII characters
+    text = re.sub(r"\s+", " ", text)                           # Normalize whitespace
+    text = text.strip()                                        # Remove whitespace from both ends
+    return text
+
+def load_and_clean_pdfs(
+        input_path: str = "data_setup/raw_documents",
+        output_path: str = "data_setup/cleaned_documents/example_document.jsonl"    # A format where each line is a valid JSON object
+    ):
+    with open(output_path, "a", encoding = "utf-8") as f:
+        for file_name in os.listdir(input_path):
+            if not file_name.endswith(".pdf"):
+                continue
+
+            file_path = os.path.join(input_path, file_name)
+            loader = PyPDFLoader(file_path)
+            pages = loader.load()
+
+            record = {
+                "file_name": file_name,
+                "content": ""
+            }
+
+            for doc in pages:
+                cleaned = clean_text(doc.page_content)
+                if len(cleaned) < 50:                          # Skip junk pages
+                    continue
+                record["content"] += cleaned
+
+            f.write(json.dumps(record, ensure_ascii = True) + '\n')
+
+if __name__ == "__main__":
+    user_input = input("Type 'Execute' to run: ")
+    if user_input != "Execute":
+        sys.exit()
+
+    load_and_clean_pdfs()
 
     embedding_model = "sentence-transformers/all-MiniLM-L6-v2"
     qdrant_configuration = QdrantSetup(embedding_model = embedding_model)
-    qdrant_configuration.qdrant_setup()
+    qdrant_configuration.execute()
+
+    elastic_configuration = ElasticSearchSetup()
+    elastic_configuration.execute()
+
+    mongo_configuration = MongoDBSetup()
+    mongo_configuration.execute()

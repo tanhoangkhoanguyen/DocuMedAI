@@ -4,9 +4,12 @@ venv
 
 # Cache
 **/__pycache__
-**/my_chroma_store
 
 qdrant_data
 elasticsearch_data
 mongodb_data
 redis_data
+
+# Documents
+backend/data_setup/raw_documents/example_document.pdf
+backend/data_setup/cleaned_documents/example_document.jsonl

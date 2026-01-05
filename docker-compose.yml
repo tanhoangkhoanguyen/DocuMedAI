@@ -51,6 +51,8 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+    env_file:
+      - .env
     depends_on:
       - la-qdrant
       - la-elasticsearch
@@ -58,14 +60,14 @@ services:
     stdin_open: true
     tty: true
     restart: always
-    command: python -m mongodb_test
+    command: python -m services.chatbot.core.main
     container_name: la-backend-service
     ports:
       - "8005:8005"
     networks:
       - backend-net
     volumes:
-      - ./backend/playground:/app
+      - ./backend:/backend
 
 networks:
   backend-net:

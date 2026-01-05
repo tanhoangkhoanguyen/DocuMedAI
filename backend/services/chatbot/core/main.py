@@ -1,9 +1,9 @@
 from services.chatbot.core.workflow import build_graph
 
-import os
+import os, sys
 from langchain_core.messages import HumanMessage, AIMessage
 
-def call_agent(user_input:str, chat_id:str = "session-123"):
+def call_agent(user_input:str, chat_id:str):
     human_msg = HumanMessage(content = user_input)
     init_state = {
         "chat_history": [human_msg]   
@@ -23,33 +23,21 @@ def test_chatbot():
     call_agent("""
         Hi chatbot.
     """)
-    return
-    call_agent("""
-            I am a tenant in New York and my landlord hasn’t fixed the broken heating for two weeks.
-            What laws protect tenants in this situation?
-            Response in markdown format please. Also, think carefully before answering me.
-        """)
-    call_agent("""
-            Rewrited your previous response in 1 super short setence.
-        """)
-    call_agent("""
-            Chatbot response is too dump. From now on, reponse in 1 paragraph ok?
-        """)
-    call_agent("""
-            In strictly 50 words, teach me everything I need to know to learn Python.
-        """)
-    call_agent("""
-            What is my case with the landlord?
-            How can I use Python to build tools that help with cases like me?
-        """)
 
 if __name__ == "__main__":
+    user_input = input("Type 'Execute' to run: ")
+    if user_input != "Execute":
+        sys.exit()
+
+    # TODO: Why input values?
     chat_model = "gpt-4o-mini"
     embedding_model = "sentence-transformers/all-MiniLM-L6-v2"
     qdrant_threshold = 0.25
     reranking_model = "BAAI/bge-reranker-v2-m3"
     reranking_threshold = -5
     max_workers = max(1, os.cpu_count() - 3)
+    chat_id = "session-123"
+
     global graph
     graph = build_graph(
         chat_model = chat_model,
@@ -57,6 +45,7 @@ if __name__ == "__main__":
         qdrant_threshold = qdrant_threshold,
         reranking_model = reranking_model,
         reranking_threshold = reranking_threshold,
-        max_workers = max_workers
+        max_workers = max_workers,
+        chat_id = chat_id
     )
     test_chatbot()
