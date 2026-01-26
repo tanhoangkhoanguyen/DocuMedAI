@@ -16,6 +16,7 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
+from langchain_community.embeddings import HuggingFaceEmbeddings
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import VectorParams, Distance, PointStruct
 from pymongo import MongoClient
@@ -23,15 +24,24 @@ from pymongo.server_api import ServerApi
 from cryptography.fernet import Fernet
 from datetime import datetime
 
+QDRANT_URL = "http://la-qdrant:6333"
+
 class MessageAnalysis(Runnable):
     def __init__(
             self, 
-            chat_model:str,
-            temperature:int = 0
+            chat_model: str,
+            temperature: int = 0
         ):
-        self.__llm = ChatOpenAI(model_name = chat_model, temperature = temperature)
+        self.__llm = ChatOpenAI(
+                model_name = chat_model, 
+                temperature = temperature
+            )
 
-    def invoke(self, state:GraphState, config = None):
+    def invoke(
+            self, 
+            state: GraphState, 
+            config = None
+        ):
         user_message = state.chat_history[-1].content
         prompt = [
             SystemMessage(content = MESSAGE_ANALYSIS_PROMPT_1),
@@ -45,23 +55,19 @@ class MessageAnalysis(Runnable):
 class NodeController(Runnable):
     def __init__(
             self,
-            chat_model:str,
-            embedding_model:str,
-            qdrant_threshold:int,
-            reranking_model:str,
-            reranking_threshold:int,
-            max_workers:int,
-            temperature:int = 0,
-            timeout = None
+            chat_model: str,
+            embedding_model: str,
+            reranking_model: str,
+            qdrant_threshold: int,
+            reranking_threshold: int,
+            temperature: int = 0
         ):
-        self.__llm = ChatOpenAI(model_name = chat_model, temperature = temperature)
-        self.__embedding_model = EmbeddingModelLoad.get_instance(embedding_model = embedding_model)
-        self.__max_workers = max_workers
-        self.__qdrant_client = QdrantClient(
-            url = os.getenv("QDRANT_URL"),
-            api_key = os.getenv("QDRANT_API_KEY"),
-            timeout = timeout
-        )
+        self.__llm = ChatOpenAI(
+                model_name = chat_model, 
+                temperature = temperature
+            )
+        self.__embedding_model = HuggingFaceEmbeddings(model_name = embedding_model)
+        self.__qdrant_client = QdrantClient(url = QDRANT_URL)
         self.__qdrant_threshold = qdrant_threshold
         self.__mongodb_client = MongoClient(
             os.getenv("MONGODB_URI"), 

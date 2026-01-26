@@ -1,18 +1,29 @@
+# Torch & Transformers
 --extra-index-url https://download.pytorch.org/whl/cpu
-torch==2.2.0+cpu
-
+torch==2.9.1+cpu
 transformers==4.41.2
 tokenizers==0.19.1
 sentence-transformers==2.7.0
 
+# Math & Data
 numpy==1.26.2
+datasets
+
+# Vector DB clients
 qdrant-client==1.16.1
+weaviate-client==4.6.1
+pinecone==8.0.0
+pymilvus==2.4.7
+pyvespa==0.63.0
 elasticsearch==8.17.2
 pymongo==4.0.1
 redis==5.0.8
+
+# Web / API
 fastapi==0.122.0
 uvicorn==0.38.0
 
+# LangChain
 langchain==0.3.25
 langchain-core==0.3.61
 langchain-community==0.3.24
@@ -20,6 +31,7 @@ langchain-openai==0.3.18
 langchain-huggingface==0.1.2
 langgraph==0.4.5
 
+# Utilities
 tavily-python==0.7.2
 python-dotenv==1.1.0
 pypdf==4.2.0

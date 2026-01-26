@@ -57,19 +57,19 @@ class LawTypeIdentifier:
         response = self.__llm.invoke(prompt)
         return response.content
 
-class EmbeddingModelLoad: 
-    _instance = None
-    _model_name = None
-    _lock = Lock()
+# class EmbeddingModelLoad: 
+#     _instance = None
+#     _model_name = None
+#     _lock = Lock()
 
-    def get_instance(self, embedding_model): 
-        if self._instance is None or self._model_name != embedding_model:
-            with self._lock: 
-                self._instance = HuggingFaceEmbeddings(model_name = embedding_model) 
-                self._model_name = embedding_model
-        return self._instance 
+#     def get_instance(self, embedding_model): 
+#         if self._instance is None or self._model_name != embedding_model:
+#             with self._lock: 
+#                 self._instance = HuggingFaceEmbeddings(model_name = embedding_model) 
+#                 self._model_name = embedding_model
+#         return self._instance 
         
-    def reset(self): 
-        with self._lock: 
-            self._instance = None
-            self._model_name = None
+#     def reset(self): 
+#         with self._lock: 
+#             self._instance = None
+#             self._model_name = None

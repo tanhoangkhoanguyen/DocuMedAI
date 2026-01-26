@@ -34,7 +34,7 @@ Output:
   },
   {
     "context": "I am applying for graduate school soon.",
-    "messages": ["Can you help me review my SOP?"],
+    "messages": ["Can you help me review my personal essay?"],
     "instruction": "List suggestions in bullet points."
 }]
 
@@ -44,14 +44,6 @@ Output:
     "context": "",
     "messages": ["Rewrited your previous response in 1 super short setence."],
     "instruction": "Rewrited your previous response in 1 super short setence."
-}]
-
-User message: "From now on, only respond in Markdown."
-Output:
-[{
-    "context": "",
-    "messages": [],
-    "instruction": "From now on, only respond in Markdown."
 }]
 """
 

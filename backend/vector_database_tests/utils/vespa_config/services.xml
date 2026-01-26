@@ -1,0 +1,16 @@
+<services version="1.0">
+  <container id="default" version="1.0">
+    <search/>
+    <document-api/>
+  </container>
+
+  <content id="vector" version="1.0">
+    <redundancy>1</redundancy>
+    <documents>
+      <document type="vector" mode="index"/>
+    </documents>
+    <nodes>
+      <node distribution-key="0" hostalias="node1"/>
+    </nodes>
+  </content>
+</services>

@@ -1,9 +1,6 @@
-from data_setup.qdrant_setup import QdrantSetup
-from data_setup.elasticsearch_setup import ElasticSearchSetup
 from data_setup.mongodb_setup import MongoDBSetup
 
 import sys, os, re, json
-# from langchain.document_loaders import PyPDFLoader
 from langchain_community.document_loaders import PyPDFLoader
 
 def clean_text(text: str) -> str:
@@ -16,7 +13,7 @@ def load_and_clean_pdfs(
         input_path: str = "data_setup/raw_documents",
         output_path: str = "data_setup/cleaned_documents/example_document.jsonl"    # A format where each line is a valid JSON object
     ):
-    with open(output_path, "a", encoding = "utf-8") as f:
+    with open(output_path, 'a', encoding = "utf-8") as f:
         for file_name in os.listdir(input_path):
             if not file_name.endswith(".pdf"):
                 continue
@@ -39,18 +36,7 @@ def load_and_clean_pdfs(
             f.write(json.dumps(record, ensure_ascii = True) + '\n')
 
 if __name__ == "__main__":
-    user_input = input("Type 'Execute' to run: ")
-    if user_input != "Execute":
-        sys.exit()
-
     load_and_clean_pdfs()
-
-    embedding_model = "sentence-transformers/all-MiniLM-L6-v2"
-    qdrant_configuration = QdrantSetup(embedding_model = embedding_model)
-    qdrant_configuration.execute()
-
-    elastic_configuration = ElasticSearchSetup()
-    elastic_configuration.execute()
 
     mongo_configuration = MongoDBSetup()
     mongo_configuration.execute()

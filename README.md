@@ -177,4 +177,8 @@ All indices: http://localhost:9002/_cat/indices?v
 
 Current worklog:
 - Done double checking the workflow file. Next -> general.py
+
+
+chroma
+concurrency of 50 active users
 -->

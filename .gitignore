@@ -1,15 +1,12 @@
 # Environment
 **/.env
-venv
+/venv
 
 # Cache
 **/__pycache__
-
-qdrant_data
-elasticsearch_data
-mongodb_data
-redis_data
+/backend/vector_database_tests/utils/data_storage/
 
 # Documents
-backend/data_setup/raw_documents/example_document.pdf
-backend/data_setup/cleaned_documents/example_document.jsonl
+**.pdf
+**.json
+**.jsonl

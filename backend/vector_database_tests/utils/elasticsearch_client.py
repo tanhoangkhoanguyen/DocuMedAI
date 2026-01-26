@@ -90,5 +90,9 @@ class ElasticSearchSetup:
                     self.__push_to_index(self.__index, record["content"][i:boundary])
         
 if __name__ == "__main__":
+    user_input = input("Type 'Execute' to run: ")
+    if user_input != "Execute":
+        sys.exit()
+
     elasticsearch_setup = ElasticSearchSetup()
     elasticsearch_setup.execute()

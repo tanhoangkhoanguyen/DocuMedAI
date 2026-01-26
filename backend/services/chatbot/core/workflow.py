@@ -10,20 +10,18 @@ from langgraph.checkpoint.memory import MemorySaver
 class GraphBuilder:
     def __init__(
             self,
-            chat_model:str, 
-            embedding_model:str,
-            qdrant_threshold:int,
-            reranking_model:str,
-            reranking_threshold:int,
-            max_workers:int
+            chat_model: str, 
+            embedding_model: str,
+            reranking_model: str,
+            qdrant_threshold: int,
+            reranking_threshold: int
         ):
         self.builder = StateGraph(GraphState)
         self.chat_model = chat_model
         self.embedding_model = embedding_model
-        self.qdrant_threshold = qdrant_threshold
         self.reranking_model = reranking_model
+        self.qdrant_threshold = qdrant_threshold
         self.reranking_threshold = reranking_threshold
-        self.max_workers = max_workers
 
     def build_graph(self):
         self.message_analysis = MessageAnalysis(
@@ -32,10 +30,9 @@ class GraphBuilder:
         self.node_controller = NodeController(
             chat_model = self.chat_model,
             embedding_model = self.embedding_model,
-            qdrant_threshold = self.qdrant_threshold,
             reranking_model = self.reranking_model,
-            reranking_threshold = self.reranking_threshold,            
-            max_workers = self.max_workers
+            qdrant_threshold = self.qdrant_threshold,
+            reranking_threshold = self.reranking_threshold,
         )
         self.schema_reset_node = SchemaResetNode(
             chat_model = self.chat_model,
@@ -56,41 +53,36 @@ class GraphBuilder:
 class Graph:
     @staticmethod
     def compile(
-            chat_model:str, 
-            embedding_model:str,
-            qdrant_threshold:int,
-            reranking_model:str,
-            reranking_threshold:int,
-            max_workers:int
+            chat_model: str, 
+            embedding_model: str,
+            reranking_model: str,
+            qdrant_threshold: int,
+            reranking_threshold: int
         ):
         builder = GraphBuilder(
             chat_model = chat_model,
             embedding_model = embedding_model,
-            qdrant_threshold = qdrant_threshold,
             reranking_model = reranking_model,
-            reranking_threshold = reranking_threshold,
-            max_workers = max_workers
+            qdrant_threshold = qdrant_threshold,
+            reranking_threshold = reranking_threshold
         )
-        # TODO: Why `MemorySaver`
         memory = MemorySaver()
         return builder.build_graph().compile(checkpointer = memory)
 
 def build_graph(
-        chat_model:str, 
-        embedding_model:str,
-        qdrant_threshold:int,
-        reranking_model:str,
-        reranking_threshold:int,
-        max_workers:int,
-        save_graph:bool = False
+        chat_model: str, 
+        embedding_model: str,
+        reranking_model: str,
+        qdrant_threshold: int,
+        reranking_threshold: int,
+        save_graph: bool = False
     ):
     graph = Graph.compile(
         chat_model = chat_model,
         embedding_model = embedding_model,
-        qdrant_threshold = qdrant_threshold,
         reranking_model = reranking_model,
-        reranking_threshold = reranking_threshold,
-        max_workers = max_workers
+        qdrant_threshold = qdrant_threshold,
+        reranking_threshold = reranking_threshold
     )
     if save_graph:
         with open("services/chatbot/assets/chatbot-phase_2.png", "wb") as f:

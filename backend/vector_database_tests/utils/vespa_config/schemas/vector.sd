@@ -1,0 +1,20 @@
+schema vector {
+    document vector {
+        field text type string {
+            indexing: summary
+        }
+        field embedding type tensor<float>(x[384]) {
+            indexing: index | attribute
+            attribute { distance-metric: angular }
+        }
+    }
+    
+    rank-profile default {
+        inputs {
+            query(query_embedding) tensor<float>(x[384])
+        }
+        first-phase {
+            expression: closeness(field, embedding)
+        }
+    }
+}

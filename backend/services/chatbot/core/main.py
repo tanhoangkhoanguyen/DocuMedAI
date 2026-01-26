@@ -29,23 +29,30 @@ if __name__ == "__main__":
     if user_input != "Execute":
         sys.exit()
 
-    # TODO: Why input values?
-    chat_model = "gpt-4o-mini"
+    # Fast and low cost, with low intelligence large language model.
+    # Reference: https://platform.openai.com/docs/models/compare
+    chat_model = "gpt-4o-mini"                                 
+
+    # Fast, medium quality embedding model.
     embedding_model = "sentence-transformers/all-MiniLM-L6-v2"
-    qdrant_threshold = 0.25
+
+    # cross-encoder reranking model
     reranking_model = "BAAI/bge-reranker-v2-m3"
+
+    # Thresholds are task-dependent. For custom definitions of similarity or domain-specific embeddings, thresholds must 
+    # be tuned empirically, or if labeled data is unavailable, assumptions based on embedding distributions are acceptable.
+    qdrant_threshold = 0.25
     reranking_threshold = -5
-    max_workers = max(1, os.cpu_count() - 3)
+
     chat_id = "session-123"
 
     global graph
     graph = build_graph(
         chat_model = chat_model,
         embedding_model = embedding_model,
-        qdrant_threshold = qdrant_threshold,
         reranking_model = reranking_model,
+        qdrant_threshold = qdrant_threshold,
         reranking_threshold = reranking_threshold,
-        max_workers = max_workers,
         chat_id = chat_id
     )
     test_chatbot()

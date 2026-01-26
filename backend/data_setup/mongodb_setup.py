@@ -79,9 +79,5 @@ class MongoDBSetup:
         self.__client.close()
 
 if __name__ == "__main__":
-    user_input = input("Type 'Execute' to run: ")
-    if user_input != "Execute":
-        sys.exit()
-
     mongodb_setup = MongoDBSetup()
     mongodb_setup.execute()

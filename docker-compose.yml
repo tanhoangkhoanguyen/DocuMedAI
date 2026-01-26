@@ -1,69 +1,136 @@
 services:
-  la-qdrant:
-    image: qdrant/qdrant:v1.16.1
-    restart: unless-stopped
-    container_name: la-qdrant-service
-    ports:
-      - "8001:6333"
-    networks:
-      - backend-net
-    volumes:
-      - ./qdrant_data:/qdrant/storage
+#   la-qdrant:
+#     image: qdrant/qdrant:v1.16.1
+#     restart: unless-stopped
+#     container_name: la-qdrant-service
+#     ports:
+#       - "8001:6333"
+#     networks:
+#       - backend-net
+#     volumes:
+#       - ./volumes/qdrant_data:/qdrant/storage
 
-  la-elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.17.10
-    restart: unless-stopped
-    container_name: la-eslaticsearch-service
-    ports:
-      - "8002:9200"
-    networks:
-      - backend-net
-    environment:
-      - discovery.type=single-node
-      - xpack.security.enabled=false
-      - ES_JAVA_OPTS=-Xms256m -Xmx256m
-    volumes:
-      - ./elasticsearch_data:/usr/share/elasticsearch/data
+#   la-pinecone:
+#     image: ghcr.io/pinecone-io/pinecone-local:latest
+#     container_name: la-pinecone-service
+#     restart: unless-stopped
+#     ports:
+#       - "8002:5080"
+#       - "9003:5081"
+#     volumes:
+#       - ./volumes/pinecone_data:/pinecone/data
+#     networks:
+#       - backend-net
 
-  la-mongodb:
-    image: mongo:8.0.13-noble
-    restart: unless-stopped
-    container_name: la-mongodb-service
-    ports:
-      - "8003:27017"
-    networks:
-      - backend-net
-    volumes:
-      - ./mongodb_data:/data/db
+#   la-milvus:
+#     image: milvusdb/milvus:v2.3.5
+#     command: milvus run standalone
+#     ports:
+#       - "19530:19530"
+#     environment:
+#       ETCD_USE_EMBED: "true"
+#       COMMON_STORAGETYPE: local
+#     networks:
+#       - backend-net
 
-  la-redis:
-    image: redis:7.2-alpine
-    restart: unless-stopped
-    container_name: la-redis-service
+  # la-weaviate:
+  #   image: semitechnologies/weaviate:1.34.8
+  #   container_name: la-weaviate-service
+  #   restart: unless-stopped
+  #   ports:
+  #     - "8004:8080"   # Host port 8004 -> container 8080
+  #   environment:
+  #     AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "true"
+  #     PERSISTENCE_DATA_PATH: "/var/lib/weaviate"
+  #     ENABLE_MODULES: ""       # No modules needed
+  #     DEFAULT_VECTORIZER_MODULE: ""  # No auto embedding
+  #     CLUSTER_HOSTNAME: "node1"
+  #   volumes:
+  #     - ./volumes/weaviate_data:/var/lib/weaviate
+  #   networks:
+  #     - backend-net
+
+    # la-chromadb:
+    #   image: chromadb/chroma:1.4.2.dev36
+    #   restart: unless-stopped
+    #   container_name: la-chromadb-service
+    #   ports:
+    #     - "8007:8000"
+    #   networks:
+    #     - backend-net
+    #   volumes:
+    #     - ./volumes/chroma_data:/chroma/chroma
+
+
+#   la-elasticsearch:
+#     image: docker.elastic.co/elasticsearch/elasticsearch:8.17.10
+#     restart: unless-stopped
+#     container_name: la-eslaticsearch-service
+#     ports:
+#       - "8000:9200"
+#     networks:
+#       - backend-net
+#     environment:
+#       - discovery.type=single-node
+#       - xpack.security.enabled=false
+#       - ES_JAVA_OPTS=-Xms256m -Xmx256m
+#     volumes:
+#       - ./volumes/elasticsearch_data:/usr/share/elasticsearch/data
+
+#   la-mongodb:
+#     image: mongo:8.0.13-noble
+#     restart: unless-stopped
+#     container_name: la-mongodb-service
+#     ports:
+#       - "8006:27017"
+#     networks:
+#       - backend-net
+#     volumes:
+#       - ./volumes/mongodb_data:/data/db
+
+#   la-redis:
+#     image: redis:7.2-alpine
+#     restart: unless-stopped
+#     container_name: la-redis-service
+#     ports:
+#       - "8007:6379"
+#     networks:
+#       - backend-net
+#     volumes:
+#       - ./volumes/redis_data:/data
+
+  la-vespa:
+    image: vespaengine/vespa:8.629.20
+    # restart: unless-stopped
+    container_name: la-vespa-service
+    hostname: vespa-container
     ports:
-      - "8004:6379"
+      - "8080:8080"
+      - "19071:19071"
     networks:
       - backend-net
     volumes:
-      - ./redis_data:/data
+      - ./backend/vector_database_tests/utils/vespa_config:/app
+      - ./backend/vector_database_tests/utils/data_storage/vespa_data:/opt/vespa/var
+    deploy:
+      resources:
+        limits:
+          memory: 4g
 
   la-backend:
     build:
       context: .
-      dockerfile: backend/Dockerfile
+      dockerfile: ./backend/Dockerfile
     env_file:
       - .env
     depends_on:
-      - la-qdrant
-      - la-elasticsearch
-      - la-mongodb
+      - la-vespa
     stdin_open: true
     tty: true
     restart: always
-    command: python -m services.chatbot.core.main
     container_name: la-backend-service
     ports:
-      - "8005:8005"
+      - "8000:8000"
     networks:
       - backend-net
     volumes:
