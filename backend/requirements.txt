@@ -10,11 +10,10 @@ numpy==1.26.2
 datasets
 
 # Vector DB clients
+chromadb==1.4.1
 qdrant-client==1.16.1
 weaviate-client==4.6.1
-pinecone==8.0.0
 pymilvus==2.4.7
-pyvespa==0.63.0
 elasticsearch==8.17.2
 pymongo==4.0.1
 redis==5.0.8

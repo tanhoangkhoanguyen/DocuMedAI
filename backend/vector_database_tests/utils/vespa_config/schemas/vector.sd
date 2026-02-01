@@ -1,20 +1,25 @@
 schema vector {
     document vector {
-        field text type string {
+        field collection type string {
+            indexing: attribute | summary
+        }
+        field query type string {
             indexing: summary
         }
-        field embedding type tensor<float>(x[384]) {
-            indexing: index | attribute
-            attribute { distance-metric: angular }
+        field embedded_query type tensor<float>(x[384]) {
+            indexing: attribute
+            attribute {
+                distance-metric: angular
+            }
         }
     }
-    
+
     rank-profile default {
         inputs {
             query(query_embedding) tensor<float>(x[384])
         }
         first-phase {
-            expression: closeness(field, embedding)
+            expression: closeness(field, embedded_query)
         }
     }
 }

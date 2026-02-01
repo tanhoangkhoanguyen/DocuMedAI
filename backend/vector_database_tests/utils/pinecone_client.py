@@ -1,214 +1,153 @@
-# import os, sys, json, uuid, pytz, time, statistics, warnings
-# warnings.filterwarnings("ignore")
+import sys, requests, warnings
+warnings.filterwarnings("ignore")
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from typing import List
 
-# from dotenv import load_dotenv
-# load_dotenv()
+PINECONE_CONTROL_URL = "http://la-pinecone:5080"
+PINECONE_DATA_URL = "http://la-pinecone:5081"
+PINECONE_API_KEY = "pclocal"
 
-# from langchain_community.embeddings import HuggingFaceEmbeddings
-# from pinecone import Pinecone, PodSpec, ServerlessSpec
-# from datetime import datetime
-# from queue import Queue
+class PineconeClient:
+    def __init__(
+            self,
+            embedding_model: str,
+            embedding_dimension: int
+        ):
+        self.__embedding_model = HuggingFaceEmbeddings(model_name = embedding_model)
+        self.__embedding_dimension = embedding_dimension
 
+    def list_collections(self) -> List[str]:
+        try:
+            response = requests.get(
+                f"{PINECONE_CONTROL_URL}/indexes",
+                headers = {"Api-Key": PINECONE_API_KEY}
+            )
+            response.raise_for_status()
+            collections_info = response.json()
+            collection_names = [idx["name"] for idx in collections_info.get("indexes", [])]
+            return collection_names
+        except Exception as e:
+            print(f"""
+                [ERROR] [backend.vector_databases_tests.utils.pinecone_client] Failed to list collections
+                \t{str(e)}
+            """)
+            return []
+    
+    def delete_collection(
+            self,
+            collection_name: str
+        ):
+        try:
+            response = requests.delete(
+                    f"{PINECONE_CONTROL_URL}/indexes/{collection_name}",
+                    headers = {"Api-Key": PINECONE_API_KEY}
+                )
+            response.raise_for_status()
+            print(f"""
+                [INFO] [backend.vector_databases_tests.utils.pinecone_client] Deleted collection '{collection_name}'
+            """)
+        except Exception as e:
+            print(f"""
+                [ERROR] [backend.vector_databases_tests.utils.pinecone_client] Failed to deleted collection '{collection_name}'
+                \t{str(e)}
+            """)
+            raise
 
-# PINECONE_API_KEY = "pclocal"
-# PINECONE_URL = "http://la-pinecone:5081"
+    def create_collection(
+        self,
+        collection_name: str
+    ):
+        try:
+            existing_collections = self.list_collections()
+            if collection_name in existing_collections:
+                self.delete_collection(collection_name)
+                
+            response = requests.post(
+                f"{PINECONE_CONTROL_URL}/indexes",
+                json = {
+                    "name": collection_name,
+                    "dimension": self.__embedding_dimension,
+                    "metric": "cosine",
+                    "spec": {
+                        "pod": {
+                            "environment": "us-east-1-aws",
+                            "pod_type": "p1.x1"
+                        }
+                    }
+                },
+                headers = {"Api-Key": PINECONE_API_KEY}
+            )
+            response.raise_for_status()            
+            print(f"""
+                [INFO] [backend.vector_databases_tests.utils.pinecone_client] Created collection '{collection_name}'
+            """)
+        except Exception as e:
+            print(f"""
+                [ERROR] [backend.vector_databases_tests.utils.pinecone_client] Failed to create collection '{collection_name}'
+                \t{str(e)}
+            """)
+            raise
 
-# class PineconeSetup:
-#     def __init__(
-#             self,
-#             embedding_model: str,
-#             embedding_dimension: int,
-#             index_name: str = "latency-test"
-#         ):
-#         self.__embedding_model = HuggingFaceEmbeddings(
-#             model_name=embedding_model
-#         )
-#         self.__embedding_dimension = embedding_dimension
-#         self.__index_name = index_name
-#         self.__pinecone = Pinecone(
-#                 api_key = PINECONE_API_KEY,
-#                 host = PINECONE_URL
-#             )
-#         self.__uuid_namespace = uuid.UUID(os.getenv("UUID_NAMESPACE"))
+    def embed_query(
+            self,
+            query: str
+        ):
+        embedded_query = self.__embedding_model.embed_query(query)
+        return embedded_query
 
-#     def __create_index(self):
-#         try:
-#             if self.__index_name in self.__pinecone.list_indexes().names():
-#                 self.__pinecone.delete_index(self.__index_name)
+    def push_to_collection(
+            self,
+            collection_name: str,
+            ids: List[str],
+            queries,
+            embedded_queries
+        ):
+        try:
+            vectors = []
+            for idx in range(len(ids)):
+                id = ids[idx]
+                query = queries[idx]
+                embedded_query = embedded_queries[idx]
+                vectors.append({
+                    "id": id,
+                    "values": embedded_query,
+                    "metadata": {
+                        "query": query
+                    }
+                })
+            response = requests.post(
+                f"{PINECONE_DATA_URL}/vectors/upsert",
+                json = {"vectors": vectors},
+                headers = {"Api-Key": PINECONE_API_KEY}
+            )
+            response.raise_for_status()
+        except Exception as e:
+            print(f"""
+                [ERROR] [backend.vector_databases_tests.utils.pinecone_client] Failed to push to collection '{collection_name}'
+                \t{str(e)}
+            """)
 
-#             self.__pinecone.create_index(
-#                 name = self.__index_name,
-#                 dimension = self.__embedding_dimension,
-#                 metric = "cosine",
-#                 spec = ServerlessSpec(
-#                     cloud = "aws",
-#                     region = "us-east-1"
-#                 )
-#             )
-
-#             self.__index = self.__pinecone.Index(self.__index_name)
-
-#             print(f"""
-#                 [INFO] [backend.data_setup.pinecone_setup] Created index '{self.__index_name}'
-#             """)
-#         except Exception as e:
-#             print(f"""
-#                 [ERROR] [backend.data_setup.pinecone_setup] Failed to create index '{self.__index_name}'
-#                 \t{str(e)}
-#             """)
-#             sys.exit()
-
-#     def __embed_query(self, query: str):
-#         embedded_text = self.__embedding_model.embed_query(query)
-#         return embedded_text
-
-#     def __push_to_collection(
-#             self,
-#             embedded_queries: list
-#         ):
-#         try:
-#             vectors = []
-
-#             for embedded_query in embedded_queries:
-#                 id = str(datetime.now(pytz.utc))
-#                 hashed_id = str(uuid.uuid5(self.__uuid_namespace, id))
-
-#                 vectors.append((
-#                     hashed_id,
-#                     embedded_query,
-#                     {"query": ""}
-#                 ))
-
-#             self.__index.upsert(vectors = vectors)
-#         except Exception as e:
-#             print(f"""
-#                 [ERROR] [backend.data_setup.pinecone_setup] Failed to upsert vectors
-#                 \t{str(e)}
-#             """)
-
-#     def __retrieve_query(
-#             self,
-#             embedded_query: list,
-#             top_k: int = 50
-#         ):
-#         response = self.__index.query(
-#             vector = embedded_query,
-#             top_k = top_k,
-#             include_metadata = False,
-#             include_values = False
-#         )
-#         return response
-
-#     def execute(
-#         self,
-#         dataset_name: str,
-#         input_dataset_path: str = "vector_database_tests/encoded_dataset",
-#         input_questions_path: str = "vector_database_tests/generated_questions.json"
-#     ):
-#         input_dataset_path = os.path.join(
-#             input_dataset_path,
-#             dataset_name.replace("/", "-") + ".jsonl"
-#         )
-
-#         self.__create_index()
-
-#         batch_size = 100
-#         q = Queue()
-
-#         with open(input_dataset_path, "r", encoding = "utf-8") as f:
-#             batch = []
-#             for line in f:
-#                 record = json.loads(line)
-#                 batch.append(record["embedding"])
-
-#                 if len(batch) == batch_size:
-#                     q.put(batch)
-#                     batch = []
-#                     break
-#             if batch:
-#                 q.put(batch)
-
-#         while not q.empty():
-#             self.__push_to_collection(q.get())
-
-#         return
-
-#         record_time = []
-#         warm_up_counter = 0
-
-#         with open(input_questions_path, "r", encoding="utf-8") as f:
-#             questions = json.load(f)[dataset_name]
-#             for question in questions:
-#                 embedded_question = self.__embed_query(question)
-
-#                 start = time.perf_counter()
-#                 self.__retrieve_query(embedded_question)
-#                 end = time.perf_counter()
-
-#                 warm_up_counter += 1
-#                 if warm_up_counter > 50:
-#                     record_time.append((end - start) * 1000)
-
-#         record_time.sort()
-#         n = len(record_time)
-
-#         print("\n\n\nPinecone vector DB latency report:")
-#         print(f"Avg: {statistics.mean(record_time):.2f} ms")
-#         print(f"p50: {record_time[int(0.50 * n)]:.2f} ms")
-#         print(f"p95: {record_time[int(0.95 * n)]:.2f} ms")
-#         print(f"p99: {record_time[int(0.99 * n)]:.2f} ms")
-
-
-# if __name__ == "__main__":
-#     dataset_name = "gamino/wiki_medical_terms"
-#     embedding_model = "all-MiniLM-L6-v2"
-#     embedding_dimension = 384
-
-#     pinecone_setup = PineconeSetup(
-#         embedding_model = embedding_model,
-#         embedding_dimension = embedding_dimension
-#     )
-
-#     pinecone_setup.execute(dataset_name = dataset_name)
-from pinecone import Pinecone, ServerlessSpec
-
-# Control plane (index management)
-pc = Pinecone(
-    api_key="pclocal",
-    host="http://localhost:8002"
-)
-
-INDEX_NAME = "test-index"
-DIM = 3
-
-# Create index with ServerlessSpec
-if INDEX_NAME not in pc.list_indexes().names():
-    pc.create_index(
-        name=INDEX_NAME,
-        dimension=DIM,
-        metric="cosine",
-        spec=ServerlessSpec(
-            cloud="aws",
-            region="us-east-1"
-        )
-    )
-
-# Connect to index - remove api_key parameter
-index = pc.Index(
-    host="http://localhost:9003"
-)
-
-# Upsert vectors
-index.upsert([
-    ("vec1", [1.0, 0.0, 0.0], {"label": "x"}),
-    ("vec2", [0.0, 1.0, 0.0], {"label": "y"})
-])
-
-# Query
-res = index.query(
-    vector=[1.0, 0.0, 0.0],
-    top_k=2,
-    include_metadata=True
-)
-
-print("Query result:", res)
+    def retrieve_query(
+            self,
+            collection_name: str,
+            embedded_query: list,
+            top_k: int = 50
+        ):
+        try:
+            response = requests.post(
+                f"{PINECONE_DATA_URL}/query",
+                json = {
+                    "vector": embedded_query,
+                    "topK": top_k,
+                    "includeMetadata": True
+                },
+                headers = {"Api-Key": PINECONE_API_KEY}
+            )
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            print(f"""
+                [ERROR] [backend.vector_databases_tests.utils.pinecone_client] Failed to retrieve from collection '{collection_name}'
+                \t{str(e)}
+            """)
+            return []

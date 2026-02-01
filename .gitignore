@@ -5,6 +5,7 @@
 # Cache
 **/__pycache__
 /backend/vector_database_tests/utils/data_storage/
+/backend/chroma
 
 # Documents
 **.pdf

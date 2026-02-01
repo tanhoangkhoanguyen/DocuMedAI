@@ -27,7 +27,7 @@ def test_chatbot():
 if __name__ == "__main__":
     user_input = input("Type 'Execute' to run: ")
     if user_input != "Execute":
-        sys.exit()
+        raise
 
     # Fast and low cost, with low intelligence large language model.
     # Reference: https://platform.openai.com/docs/models/compare

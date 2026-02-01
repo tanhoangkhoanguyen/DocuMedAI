@@ -1,8 +1,7 @@
-import warnings
-warnings.filterwarnings("ignore")
 from dotenv import load_dotenv
 load_dotenv()
-import os, random, pytz, uuid, json
+import os, pytz, uuid, json, warnings
+warnings.filterwarnings("ignore")
 from datasets import load_dataset
 from itertools import islice
 from langchain.text_splitter import TokenTextSplitter
@@ -26,11 +25,11 @@ class DataProcessing:
             # self.raw_dataset = dataset["train"].shuffle(seed = 42)
             self.raw_dataset = load_dataset(self.dataset_name, split = "train", streaming = True)
             print(f"""
-                [INFO] [backend.vector_database_tests.main] Loaded dataset '{self.dataset_name}'
+                [INFO] [backend.vector_database_tests.data_processing] Loaded dataset '{self.dataset_name}'
             """)
         except Exception as e:
             print(f"""
-                [ERROR] [backend.vector_database_tests.main] Failed to load dataset '{self.dataset_name}'
+                [ERROR] [backend.vector_database_tests.data_processing] Failed to load dataset '{self.dataset_name}'
             """)
     
     def embed_query(
@@ -49,62 +48,54 @@ class DataProcessing:
             output_path = os.path.join(output_path, self.dataset_name.replace("/", "-") + ".jsonl")
             with open(output_path, 'w', encoding = "utf-8") as f:
                 for data in self.raw_dataset:
-                    query = f"{data['title']} definition"
+                    query = f"{data['page_title']} definition"
                     embedded_query = self.embed_query(query)
                     record = {
                         "query": query,
                         "embedded_query": embedded_query,
-                        "answer": data["text"]
+                        "answer": data["page_text"]
                     }
                     f.write(json.dumps(record, ensure_ascii = False) + '\n')
                     num_queries -= 1
                     if num_queries == 0:
                         break
             print(f"""
-                [INFO] [backend.vector_database_tests.main] Generated queries for dataset '{self.dataset_name}'
+                [INFO] [backend.vector_database_tests.data_processing] Generated queries for dataset '{self.dataset_name}'
             """)
         except Exception as e:
             print(f"""
-                [ERROR] [backend.vector_database_tests.main] Failed to create queries for dataset '{self.dataset_name}'
+                [ERROR] [backend.vector_database_tests.data_processing] Failed to create queries for dataset '{self.dataset_name}'
                 \t{str(e)}
             """)
 
     def __split_dataset(self):
         try:
-
-
-            cheating = 25185
-
-
+            seen = set()
             for data in self.raw_dataset:
-
-
-                if cheating > 0:
-                    cheating -= 1
-                    if cheating % 100 == 0:
-                        print ("A few more ", cheating)
-                    continue
-
-
                 chunks = TokenTextSplitter(
                     chunk_size = 512,
                     chunk_overlap = 64
-                ).split_text(data["text"])
+                ).split_text(data["page_text"])
 
                 for chunk in chunks:
+                    if chunk in seen:
+                        continue
+                    else:
+                        seen.add(chunk)
+
                     id = str(datetime.now(pytz.utc))
                     hashed_id = str(uuid.uuid5(self.__uuid_namespace, id))
                     yield {
                         "id": hashed_id,
-                        "page_title": data["title"],
+                        "title": data["page_title"],
                         "split_text": chunk,
                     }
             print(f"""
-                [INFO] [backend.vector_database_tests.main] Split dataset '{self.dataset_name}'
+                [INFO] [backend.vector_database_tests.data_processing] Split dataset '{self.dataset_name}'
             """)
         except Exception as e:
             print(f"""
-                [ERROR] [backend.vector_database_tests.main] Failed to split dataset '{self.dataset_name}'
+                [ERROR] [backend.vector_database_tests.data_processing] Failed to split dataset '{self.dataset_name}'
                 \t{str(e)}
             """)
 
@@ -114,31 +105,29 @@ class DataProcessing:
         ):
         try:
             for chunk in chunks:
-                chunk["embedded_test"] = self.embed_query(chunk["split_text"])
+                chunk["embedded_test"] = self.embed_query(chunk["split_text"]) # embedded_text
                 yield chunk                    
             print(f"""
-                [INFO] [backend.vector_database_tests.main] Embedded dataset '{self.dataset_name}'
+                [INFO] [backend.vector_database_tests.data_processing] Embedded dataset '{self.dataset_name}'
             """)
         except Exception as e:
             print(f"""
-                [ERROR] [backend.vector_database_tests.main] Failed to embedded dataset '{self.dataset_name}'
+                [ERROR] [backend.vector_database_tests.data_processing] Failed to embedded dataset '{self.dataset_name}'
                 \t{str(e)}
             """)
 
     def __save_to_jsonl(
             self,
             embedded_chunks,
-            batch_size = 50000,
+            batch_size: int = 50000,
             output_path: str = "vector_database_tests/dataset"
         ):
         try:
             base_path = os.path.join(output_path, self.dataset_name.replace("/", "-"))
 
-
-            file_count = 6
-            count = 185
-            f = open(f"{base_path}-{file_count}.jsonl", 'a', encoding = "utf-8")
-
+            file_count = 1
+            count = 0
+            f = open(f"{base_path}-{file_count}.jsonl", 'w', encoding = "utf-8")
 
             for chunk in embedded_chunks:
                 f.write(json.dumps(chunk, ensure_ascii = False) + '\n')
@@ -149,25 +138,69 @@ class DataProcessing:
                     count = 0
                     f = open(f"{base_path}-{file_count}.jsonl", 'w', encoding = "utf-8")
             print(f"""
-                [INFO] [backend.vector_database_tests.main] Saved dataset '{self.dataset_name}'
+                [INFO] [backend.vector_database_tests.data_processing] Saved dataset '{self.dataset_name}'
             """)
         except Exception as e:
             print(f"""
-                [ERROR] [backend.vector_database_tests.main] Failed to save dataset '{self.dataset_name}'
+                [ERROR] [backend.vector_database_tests.data_processing] Failed to save dataset '{self.dataset_name}'
                 \t{str(e)}
             """)
     
+    def describe_folder(
+            self,
+            folder_path: str,
+            field: str
+        ):
+        try:
+            count = 0
+            duplicate = 0
+            seen = set()
+
+            for filename in os.listdir(folder_path):
+                if not filename.endswith(".jsonl"):
+                    continue
+                
+                file_path = os.path.join(folder_path, filename)
+                with open(file_path, "r", encoding = "utf-8") as f:
+                    for line in f:
+                        record = json.loads(line)
+                        text = record[field]
+                        if text in seen:
+                            duplicate += 1
+                        else:
+                            seen.add(text)
+                        count += 1
+            print(f"""
+                [INFO] [backend.vector_database_tests.data_processing]
+                \tCount:     {count}
+                \tDuplicate: {duplicate}
+            """)
+        except Exception as e:
+            print(f"""
+                [ERROR] [backend.vector_database_tests.data_processing] Failed to describe dataset folder
+                \t{str(e)}
+            """)
+
     def data_processing(self):
         self.load_dataset()
-        # self.generated_queries()
+        self.generated_queries()
 
         chunks = self.__split_dataset()
         embedded_chunks = self.__embed_dataset(chunks)
         self.__save_to_jsonl(embedded_chunks)
 
+        self.describe_folder(
+            folder_path = "vector_database_tests/generated_queries",
+            field = "query"
+        )
+        self.describe_folder(
+            folder_path = "vector_database_tests/dataset",
+            field = "split_text"
+        )
+
 if __name__ == "__main__":
-    # dataset_name = "gamino/wiki_medical_terms"
-    dataset_name = "Qdrant/dbpedia-entities-openai3-text-embedding-3-large-3072-1M"
+    dataset_name = "gamino/wiki_medical_terms"
+    # dataset_name = "Qdrant/dbpedia-entities-openai3-text-embedding-3-large-3072-1M"
     embedding_model = "sentence-transformers/all-MiniLM-L6-v2"
 
     data_processing = DataProcessing(

@@ -28,7 +28,7 @@ class ElasticSearchSetup:
                 [ERROR] [backend.data_setup.elasticsearch_setup] Failed to connect to ElasticSearch:
                 \t{str(e)}
             """)
-            sys.exit()
+            raise
 
     def __create_index(
             self, 
@@ -54,7 +54,7 @@ class ElasticSearchSetup:
                 [ERROR] [backend.data_setup.elasticsearch_setup] Failed to create index '{index}':
                 \t{str(e)}
             """)
-            sys.exit()
+            raise
 
     def __push_to_index(
             self, 
