@@ -164,21 +164,14 @@ docker system prune -af
 docker volume prune -f
 
 
-Qdrant Services: http://localhost:8001
-Qdrant UI: http://localhost:8001/dashboard#/collections 
-
-ElasticSearch slows down at its start up a bit
-All documents: http://localhost:9002/lawadvisory-f_prj/_search?pretty
-Document count: http://localhost:9002/lawadvisory-f_prj/_count?pretty
-Index mapping: http://localhost:9002/lawadvisory-f_prj/_mapping?pretty
-Cluster info: http://localhost:9002/_cluster/health?pretty
-All indices: http://localhost:9002/_cat/indices?v 
+Qdrant indexing time: 1096.2069219800205s
+Qdrant querying time
+                - P50 latency: 3.3144184520006092s
+                - P95 latency: 4.613433798998813s
 
 
-Current worklog:
-- Done double checking the workflow file. Next -> general.py
-
-
-chroma
-concurrency of 50 active users
+Milvus indexing time: 353.3424170119706s
+Milvus querying time:
+                - P50 latency: 0.956792498998766s
+                - P95 latency: 1.0996329679983319s
 -->

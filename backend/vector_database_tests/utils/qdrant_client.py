@@ -34,7 +34,9 @@ class QdrantClient:
             collection_name: str
         ):
         try:
-            self.__client.delete_collection(collection_name)
+            collection_names = self.list_collection()
+            if collection_name in collection_names:
+                self.__client.delete_collection(collection_name)
             print(f"""
                 [INFO] [backend.vector_databases_tests.utils.qdrant_client] Deleted collection '{collection_name}'
             """)
@@ -50,11 +52,7 @@ class QdrantClient:
             collection_name: str
         ):
         try:
-            try:
-                self.delete_collection(collection_name)
-            except Exception as e:
-                pass
-
+            self.delete_collection(collection_name)
             self.__client.create_collection(
                 collection_name = collection_name,
                 vectors_config = VectorParams(

@@ -28,13 +28,30 @@ class ChromadbClient:
             """)
             raise
 
+    def delete_collection(
+            self,
+            collection_name: str
+        ):
+        try:
+            self.__chromadb_client.delete_collection(collection_name)
+            print(f"""
+                [INFO] [backend.vector_databases_tests.utils.chromadb_client] Deleted collection '{collection_name}'
+            """)
+        except Exception as e:
+            print(f"""
+                [ERROR] [backend.vector_databases_tests.utils.chromadb_client] Failed to delete collection '{collection_name}'
+                \t{str(e)}
+            """)
+            raise
+
+
     def create_collection(
             self,
             collection_name: str
         ):
         try:
             try:
-                self.__chromadb_client.delete_collection(collection_name)
+                self.delete_collection(collection_name)
             except Exception as e:
                 pass
             self.__chromadb_client.create_collection(
@@ -87,7 +104,7 @@ class ChromadbClient:
         try:
             collection = self.__chromadb_client.get_collection(collection_name)
             response = collection.query(
-                query_embeddings=[embedded_query],
+                query_embeddings = [embedded_query],
                 n_results = top_k
             )
             return response
@@ -95,4 +112,4 @@ class ChromadbClient:
             print(f"""
                 [ERROR] [backend.vector_databases_tests.utils.chromadb_client] Failed to retrieve from collection '{collection_name}'
                 \t{str(e)}
-            """)   
+            """)

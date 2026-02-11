@@ -1,6 +1,6 @@
 # Torch & Transformers
 --extra-index-url https://download.pytorch.org/whl/cpu
-torch==2.9.1+cpu
+torch
 transformers==4.41.2
 tokenizers==0.19.1
 sentence-transformers==2.7.0
@@ -13,8 +13,7 @@ datasets
 chromadb==1.4.1
 qdrant-client==1.16.1
 weaviate-client==4.6.1
-pymilvus==2.4.7
-elasticsearch==8.17.2
+pymilvus==2.6.9
 pymongo==4.0.1
 redis==5.0.8
 

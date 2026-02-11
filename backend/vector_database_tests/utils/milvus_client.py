@@ -39,7 +39,8 @@ class MilvusClient:
             collection_name: str
         ):
         try:
-            utility.drop_collection(collection_name)
+            if utility.has_collection(collection_name):
+                utility.drop_collection(collection_name)
             print(f"""
                 [INFO] [backend.vector_databases_tests.utils.milvus_client] Deleted collection '{collection_name}'
             """)
@@ -55,9 +56,7 @@ class MilvusClient:
             collection_name: str
         ):
         try:
-            if utility.has_collection(collection_name):
-                self.delete_collection(collection_name)
-
+            self.delete_collection(collection_name)
             fields = [
                 FieldSchema(
                     name = "id",
@@ -74,7 +73,7 @@ class MilvusClient:
                 FieldSchema(
                     name = "query",
                     dtype = DataType.VARCHAR,
-                    max_length = 2048
+                    max_length = 4096
                 )
             ]
             schema = CollectionSchema(
@@ -167,11 +166,11 @@ class MilvusClient:
                 anns_field = "embedded_query",
                 param = search_params,
                 limit = top_k,
-                output_fields = []
+                output_fields = ["id", "query"]
             )
             return response
         except Exception as e:
             print(f"""
                 [ERROR] [backend.vector_databases_tests.utils.milvus_client] Failed to retrieve from collection '{collection_name}'
                 \t{str(e)}
-            """)        
+            """)

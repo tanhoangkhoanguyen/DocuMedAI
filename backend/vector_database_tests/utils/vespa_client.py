@@ -42,28 +42,48 @@ class VespaClient:
         embedded_query = self.__embedding_model.embed_query(query)
         return embedded_query
 
-    def create_collection(
+    def delete_collection(
             self,
             collection_name: str
         ):
         try:
             query_body = {
-                "yql": f'select * from vector where collection = "{collection_name}"',
-                "hits": 1
+                "yql": f'select id from vector where collection = "{collection_name}"',
+                "hits": 1000
             }
             response = requests.post(f"{VESPA_URL}/search/", json = query_body).json()
             hits = response.get("root", {}).get("children", [])
-            
-            if not hits:
-                doc = {
-                    "fields": {
-                        "collection": collection_name,
-                        "query": "__dummy__",
-                        "embedded_query": [0.0]*self.__embedding_dimension
-                    }
+            print(f"""
+                [INFO] [backend.vector_databases_tests.utils.vespa_client] Collection '{collection_name}' doesnt exist
+            """)
+
+            if hits:
+                for hit in hits:
+                    doc_id = hit["id"]
+                    delete_url = doc_id.replace("id:", f"{VESPA_URL}/document/v1/")
+                    requests.delete(delete_url)
+                print(f"""
+                    [INFO] [backend.vector_databases_tests.utils.vespa_client] Delete collection '{collection_name}'
+                """)
+        except Exception as e:
+            print(f"""
+                [ERROR] [backend.vector_databases_tests.utils.vespa_client] Failed to delete collection '{collection_name}'
+                \t{str(e)}
+            """)
+            raise
+
+    def create_collection(self, collection_name: str):
+        try:
+            self.delete_collection(collection_name)
+            doc = {
+                "fields": {
+                    "collection": collection_name,
+                    "query": "__dummy__",
+                    "embedded_query": [0.0] * self.__embedding_dimension
                 }
-                url = f"{VESPA_URL}/document/v1/mynamespace/vector/docid/{collection_name}-dummy"
-                requests.post(url, json = doc)
+            }
+            url = f"{VESPA_URL}/document/v1/mynamespace/vector/docid/{collection_name}-dummy"
+            requests.post(url, json = doc)
             print(f"""
                 [INFO] [backend.vector_databases_tests.utils.vespa_client] Created collection '{collection_name}'
             """)

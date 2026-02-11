@@ -27,35 +27,35 @@ class LatencyTest:
 
             batch_size = 100
             ids, queries, embedded_queries = [], [], []
+            total_indexing_time = 0
             for filename in os.listdir(folder_path):
                 if not filename.endswith(".jsonl"):
                     continue
 
                 file_path = os.path.join(folder_path, filename)
                 print (file_path)
-                count = 0
                 with open(file_path, 'r', encoding = "utf-8") as f:
                     for obj in f:
                         object = json.loads(obj)
                         ids.append(object["id"])
                         queries.append(object["split_text"])
                         embedded_queries.append(object["embedded_test"])
-                        count += 1
 
                         if len(ids) == batch_size:
+                            start_time = time.perf_counter()
                             self.client.push_to_collection(
                                 self.collection_name, ids, queries, embedded_queries
                             )
+                            end_time = time.perf_counter()
+                            total_indexing_time += end_time - start_time
                             ids, queries, embedded_queries = [], [], []
-                            print (count)
-                            break
-                break
             if ids:
                 self.client.push_to_collection(
                     self.collection_name, ids, queries, embedded_queries
                 )
             print(f"""
                 [INFO] [backend.vector_database_tests.data_processing] Uploaded dataset for vector db test
+                \t- Total indexing time: {total_indexing_time}s
             """)
         except Exception as e: 
             print(f""" 
@@ -69,7 +69,7 @@ class LatencyTest:
             embedded_query,
         ):
         start_time = time.perf_counter()
-        self.client.retrieve_query(self.collection_name, embedded_query)
+        response = self.client.retrieve_query(self.collection_name, embedded_query)
         end_time = time.perf_counter()
         return end_time - start_time
 
@@ -116,8 +116,8 @@ class LatencyTest:
             p95 = latencies[int(0.95 * len(latencies)) - 1]
         print(f"""
             [INFO] [backend.vector_database_tests.data_processing] Latency test results:
-            \t- P50 latency: {p50 * 1000}ms
-            \t- P95 latency: {p95 * 1000}ms
+            \t- P50 latency: {p50}s
+            \t- P95 latency: {p95}s
         """)
 
     def latency_test(self):
@@ -131,6 +131,5 @@ if __name__ == "__main__":
         )
     collection_name = "LatencyTest"
     latency_test = LatencyTest(client, collection_name)
-    latency_test.latency_test()
-    response = latency_test.client.list_collections()
-    print (response)
+    # latency_test.latency_test()
+    print (latency_test.client.list_collections())
