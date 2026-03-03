@@ -17,6 +17,9 @@ class LatencyTest:
         ):
         self.client = client
         self.collection_name = collection_name
+        print(f"""
+            [INFO] [backend.vector_database_tests.latency_test] Initialized LatencyTest object
+        """)
 
     def upload_dataset(
             self,
@@ -25,9 +28,20 @@ class LatencyTest:
         try:
             self.client.create_collection(self.collection_name)
 
-            batch_size = 100
+            batch_size = 1000
             ids, queries, embedded_queries = [], [], []
             total_indexing_time = 0
+
+            def indexing():
+                nonlocal total_indexing_time, ids, queries, embedded_queries
+                start_time = time.perf_counter()
+                self.client.push_to_collection(
+                    self.collection_name, ids, queries, embedded_queries
+                )
+                end_time = time.perf_counter()
+                total_indexing_time += end_time - start_time
+                ids, queries, embedded_queries = [], [], []
+
             for filename in os.listdir(folder_path):
                 if not filename.endswith(".jsonl"):
                     continue
@@ -42,19 +56,16 @@ class LatencyTest:
                         embedded_queries.append(object["embedded_test"])
 
                         if len(ids) == batch_size:
-                            start_time = time.perf_counter()
-                            self.client.push_to_collection(
-                                self.collection_name, ids, queries, embedded_queries
-                            )
-                            end_time = time.perf_counter()
-                            total_indexing_time += end_time - start_time
-                            ids, queries, embedded_queries = [], [], []
+                            indexing()
             if ids:
-                self.client.push_to_collection(
-                    self.collection_name, ids, queries, embedded_queries
-                )
+                indexing()
+            start_time = time.perf_counter()
+            # self.client._milvus_client.flush()
+            # self.client.create_index(self.collection_name)
+            end_time = time.perf_counter()
+            total_indexing_time += end_time - start_time
             print(f"""
-                [INFO] [backend.vector_database_tests.data_processing] Uploaded dataset for vector db test
+                [INFO] [backend.vector_database_tests.latency_test] Uploaded dataset for vector db test
                 \t- Total indexing time: {total_indexing_time}s
             """)
         except Exception as e: 
@@ -77,7 +88,8 @@ class LatencyTest:
             self,
             folder_path: str = "vector_database_tests/generated_queries",
             max_workers: int = 100,
-            warm_up_size: int = 50
+            warm_up_size: int = 50,
+            timeout = 3600
         ):
         queries = []
         for file_name in os.listdir(folder_path):
@@ -88,19 +100,30 @@ class LatencyTest:
             with open(file_path, 'r', encoding = "utf-8") as f:
                 queries.extend([json.loads(obj) for obj in f])
 
+        # print (1)
+        # print (self.__worker_func(queries[0]["embedded_query"]))
+        # return
+        print(f"""
+            [INFO] [backend.vector_database_tests.latency_test] Read retrieve queries
+        """)
+
+        # self.client.bind_collection(self.collection_name, True)
+        for i in range(warm_up_size):
+            self.client.retrieve_query(self.collection_name, queries[i]["embedded_query"])
+
         with ThreadPoolExecutor(max_workers = max_workers) as executor:
             futures = [
                 executor.submit(self.__worker_func, obj["embedded_query"])
-                for obj in queries
+                for obj in queries[warm_up_size : len(queries)]
             ]
 
             try:
                 latencies = []
-                warm_up_counter = 0
-                for future in as_completed(futures):
-                    warm_up_counter += 1
-                    if warm_up_counter > warm_up_size:
-                        latencies.append(future.result())
+                for future in as_completed(futures, timeout = timeout):
+                    # print(f"""
+                    #     [INFO] [backend.vector_database_tests.latency_test] Processed {warm_up_counter} queries over {len(queries)}
+                    # """)
+                    latencies.append(future.result())
             except Exception as e:
                 executor.shutdown(wait = False, cancel_futures = True)
                 print(f"""
@@ -109,23 +132,25 @@ class LatencyTest:
                 """)
                 raise
 
+        # self.client._milvus_client.release()
+
         latencies.sort()
         p50 = p95 = 1
         if latencies:
             p50 = latencies[int(0.50 * len(latencies)) - 1]
             p95 = latencies[int(0.95 * len(latencies)) - 1]
         print(f"""
-            [INFO] [backend.vector_database_tests.data_processing] Latency test results:
+            [INFO] [backend.vector_database_tests.latency_test] Latency test results:
             \t- P50 latency: {p50}s
             \t- P95 latency: {p95}s
         """)
 
     def latency_test(self):
-        self.upload_dataset()
+        # self.upload_dataset()
         self.retrieve_data()
 
 if __name__ == "__main__":
-    client = VespaClient(
+    client = ChromadbClient(
             embedding_model = "sentence-transformers/all-MiniLM-L6-v2",
             embedding_dimension = 384
         )
@@ -133,3 +158,4 @@ if __name__ == "__main__":
     latency_test = LatencyTest(client, collection_name)
     # latency_test.latency_test()
     print (latency_test.client.list_collections())
+    print (latency_test.client.count_collection(collection_name))

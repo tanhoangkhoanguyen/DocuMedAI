@@ -32,10 +32,15 @@ class WeaviateClient:
             class_name: str
         ):
         try:
-            self.__weaviate_client.schema.delete_class(class_name)
-            print(f"""
-                [INFO] [backend.vector_databases_tests.utils.weaviate_client] Deleted class '{class_name}'
-            """)
+            if class_name in self.list_collections():
+                self.__weaviate_client.schema.delete_class(class_name)
+                print(f"""
+                    [INFO] [backend.vector_databases_tests.utils.weaviate_client] Deleted class '{class_name}'
+                """)
+            else:
+                print(f"""
+                    [INFO] [backend.vector_databases_tests.utils.weaviate_client] Class '{class_name}' doesnt exist
+                """)
         except Exception as e:
             print(f"""
                 [ERROR] [backend.vector_databases_tests.utils.weaviate_client] Failed to deleted class '{class_name}'
@@ -48,9 +53,7 @@ class WeaviateClient:
             class_name: str
         ):
         try:
-            if class_name in self.list_collections():
-                self.delete_collection(class_name)
-
+            self.delete_collection(class_name)
             self.__weaviate_client.schema.create_class({
                 "class": class_name,
                 "vectorizer": "none",
@@ -90,10 +93,10 @@ class WeaviateClient:
                 batch.batch_size = 100
                 for idx in range(len(ids)):
                     batch.add_data_object(
-                        data_object={"query": queries[idx]},
-                        class_name=class_name,
-                        vector=embedded_queries[idx],
-                        uuid=ids[idx]
+                        data_object = {"query": queries[idx]},
+                        class_name = class_name,
+                        vector = embedded_queries[idx],
+                        uuid = ids[idx]
                     )
         except Exception as e:
             print(f"""

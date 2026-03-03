@@ -20,6 +20,7 @@ redis==5.0.8
 # Web / API
 fastapi==0.122.0
 uvicorn==0.38.0
+locust
 
 # LangChain
 langchain==0.3.25

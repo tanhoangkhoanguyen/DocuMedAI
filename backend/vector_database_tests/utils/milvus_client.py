@@ -15,7 +15,9 @@ class MilvusClient:
         ):
         self.__embedding_model = HuggingFaceEmbeddings(model_name = embedding_model)
         self.__embedding_dimension = embedding_dimension
-        self.__milvus_client = None
+        self._milvus_client = None
+        self.__current_collection = None
+        self.__is_loaded = False
 
         connections.connect(
             alias = "default",
@@ -41,9 +43,13 @@ class MilvusClient:
         try:
             if utility.has_collection(collection_name):
                 utility.drop_collection(collection_name)
-            print(f"""
-                [INFO] [backend.vector_databases_tests.utils.milvus_client] Deleted collection '{collection_name}'
-            """)
+                print(f"""
+                    [INFO] [backend.vector_databases_tests.utils.milvus_client] Deleted collection '{collection_name}'
+                """)
+            else:
+                print(f"""
+                    [INFO] [backend.vector_databases_tests.utils.milvus_client] Collection '{collection_name}' doesnt exist
+                """)
         except Exception as e:
             print(f"""
                 [ERROR] [backend.vector_databases_tests.utils.milvus_client] Failed to deleted collection '{collection_name}'
@@ -80,22 +86,10 @@ class MilvusClient:
                 fields = fields,
                 description = ""
             )
-            self.__milvus_client = Collection(
+            self._milvus_client = Collection(
                 name = collection_name,
                 schema = schema
             )
-            self.__milvus_client.create_index(
-                field_name = "embedded_query",
-                index_params = {
-                    "index_type": "HNSW",
-                    "metric_type": "COSINE",
-                    "params": {
-                        "M": 16,
-                        "efConstruction": 200
-                    }
-                }
-            )
-            self.__milvus_client.load()
             print(f"""
                 [INFO] [backend.vector_databases_tests.utils.milvus_client] Created collection '{collection_name}'
             """)
@@ -106,23 +100,59 @@ class MilvusClient:
             """)
             raise
 
-    def __bind_collection(
-            self,
-            collection_name: str
-        ):
-        if not utility.has_collection(collection_name):
-            raise ValueError(f"""
-                [ERROR] [backend.vector_databases_tests.utils.milvus_client] Collection '{collection_name}' does not exist
-            """)
-        self.__milvus_client = Collection(collection_name)
-        self.__milvus_client.load()
-
     def embed_query(
             self,
             query: str
         ):
         embedded_query = self.__embedding_model.embed_query(query)
         return embedded_query
+
+    def bind_collection(
+            self, 
+            collection_name: str, 
+            is_retrieval: bool = False
+        ):
+        if self.__current_collection != collection_name:
+            if not utility.has_collection(collection_name):
+                raise ValueError(f"""
+                    [ERROR] [backend.vector_databases_tests.utils.milvus_client] Collection '{collection_name}' does not exist
+                """)
+            self._milvus_client = Collection(collection_name)
+            self.__current_collection = collection_name
+            self.__is_loaded = False
+        
+        if is_retrieval and not self.__is_loaded:
+            self._milvus_client.load()
+            self.__is_loaded = True
+
+    def create_index(self, collection_name: str):
+        try:
+            self.bind_collection(collection_name)
+            self._milvus_client.create_index(
+                field_name = "embedded_query",
+                index_params = {
+                    "index_type": "HNSW",
+                    "metric_type": "COSINE",
+                    "params": {
+                        "M": 16,
+                        "efConstruction": 200
+                    }
+                }
+            )
+        except Exception as e:
+            print(f"""
+                [ERROR] [backend.vector_databases_tests.utils.milvus_client] Failed to create index for collection '{collection_name}'
+                \t{str(e)}
+            """)
+            raise
+
+    def count_collection(
+            self,
+            collection_name: str
+        ) -> int:
+        self.bind_collection(collection_name)
+        total_data = self._milvus_client.num_entities
+        return total_data
 
     def push_to_collection(
             self,
@@ -132,14 +162,14 @@ class MilvusClient:
             embedded_queries
         ):
         try:
+            self.bind_collection(collection_name)
             objects = [
                 ids,
                 embedded_queries,
                 queries
             ]
-
-            self.__bind_collection(collection_name)
-            self.__milvus_client.insert(objects)
+            self._milvus_client.insert(objects)
+            # self._milvus_client.flush()
         except Exception as e:
             print(f"""
                 [ERROR] [backend.vector_databases_tests.utils.milvus_client] Failed to push to collection '{collection_name}'
@@ -153,15 +183,14 @@ class MilvusClient:
             top_k: int = 50
         ):
         try:
+            self.bind_collection(collection_name, True)
             search_params = {
                 "metric_type": "COSINE",
                 "params": {
                     "ef": 64
                 }
             }
-
-            self.__bind_collection(collection_name)
-            response = self.__milvus_client.search(
+            response = self._milvus_client.search(
                 data = [embedded_query],
                 anns_field = "embedded_query",
                 param = search_params,
@@ -174,3 +203,4 @@ class MilvusClient:
                 [ERROR] [backend.vector_databases_tests.utils.milvus_client] Failed to retrieve from collection '{collection_name}'
                 \t{str(e)}
             """)
+            return []

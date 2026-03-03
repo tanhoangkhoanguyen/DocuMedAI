@@ -157,11 +157,19 @@ MIT License – see [LICENSE](https://mit-license.org/)
 
 
 
-<!-- 
-# **Updated Note**
-Clean up docker completely
-docker system prune -af
-docker volume prune -f
+<!--
+**Dont print anything. It takes much longer
+
+Chromadb indexing time: 33845.948056254085s
+Chromadb querying time:
+                At 1M [996559] db scale (right after pushing)
+                - P50 latency: 1.966143519999605s
+                - P95 latency: 21.79400253499989s3
+
+                After days
+                - P50 latency: 2.241129211000043s
+                - P95 latency: 257.713266749s
+
 
 
 Qdrant indexing time: 1096.2069219800205s
@@ -170,8 +178,14 @@ Qdrant querying time
                 - P95 latency: 4.613433798998813s
 
 
-Milvus indexing time: 353.3424170119706s
-Milvus querying time:
-                - P50 latency: 0.956792498998766s
-                - P95 latency: 1.0996329679983319s
+
+Milvus indexing time: 1526.9991428760027s + 6284.002070385066s + 23914.80000402911s vs 30014.607518057048s
+Milvus querying time (loading 1M vectors take too much time)
+
+
+
+Pinecone indexing time: s (no persistent)
+Pinecone querying time
+                - P50 latency: s
+                - P95 latency: s
 -->

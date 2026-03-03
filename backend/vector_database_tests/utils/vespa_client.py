@@ -13,6 +13,7 @@ class VespaClient:
         ):
         self.__embedding_model = HuggingFaceEmbeddings(model_name = embedding_model)
         self.__embedding_dimension = embedding_dimension
+        self.__session = requests.Session()
 
     def list_collections(self) -> List[str]:
         try:
@@ -20,7 +21,9 @@ class VespaClient:
                 "yql": 'select collection from vector where true',
                 "hits": 400
             }
-            response = requests.post(f"{VESPA_URL}/search/", json=query_body).json()
+            resp = self.__session.post(f"{VESPA_URL}/search/", json = query_body)
+            resp.raise_for_status()
+            response = resp.json()
             hits = response.get("root", {}).get("children", [])
             collections = set()
             for doc in hits:
@@ -51,7 +54,9 @@ class VespaClient:
                 "yql": f'select id from vector where collection = "{collection_name}"',
                 "hits": 1000
             }
-            response = requests.post(f"{VESPA_URL}/search/", json = query_body).json()
+            resp = self.__session.post(f"{VESPA_URL}/search/", json = query_body)
+            resp.raise_for_status()
+            response = resp.json()
             hits = response.get("root", {}).get("children", [])
             print(f"""
                 [INFO] [backend.vector_databases_tests.utils.vespa_client] Collection '{collection_name}' doesnt exist
@@ -61,9 +66,14 @@ class VespaClient:
                 for hit in hits:
                     doc_id = hit["id"]
                     delete_url = doc_id.replace("id:", f"{VESPA_URL}/document/v1/")
-                    requests.delete(delete_url)
+                    response = self.__session.delete(delete_url)
+                    response.raise_for_status()
                 print(f"""
                     [INFO] [backend.vector_databases_tests.utils.vespa_client] Delete collection '{collection_name}'
+                """)
+            else:
+                print(f"""
+                    [INFO] [backend.vector_databases_tests.utils.vespa_client] Collection '{collection_name}' doesnt exist
                 """)
         except Exception as e:
             print(f"""
@@ -83,7 +93,8 @@ class VespaClient:
                 }
             }
             url = f"{VESPA_URL}/document/v1/mynamespace/vector/docid/{collection_name}-dummy"
-            requests.post(url, json = doc)
+            response = self.__session.post(url, json = doc)
+            response.raise_for_status()
             print(f"""
                 [INFO] [backend.vector_databases_tests.utils.vespa_client] Created collection '{collection_name}'
             """)
@@ -114,7 +125,7 @@ class VespaClient:
                     }
                 }
                 url = f"{VESPA_URL}/document/v1/mynamespace/vector/docid/{id}"
-                response = requests.post(
+                response = self.__session.post(
                     url,
                     json = doc
                 )
@@ -142,10 +153,12 @@ class VespaClient:
                 "ranking.profile": "default",
                 "hits": top_k
             }
-            response = requests.post(
+            resp = self.__session.post(
                     f"{VESPA_URL}/search/",
                     json = query_body
-                ).json()
+                )
+            resp.raise_for_status()
+            response = resp.json()
             return response
         except Exception as e:
             print(f"""

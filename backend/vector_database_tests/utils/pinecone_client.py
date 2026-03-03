@@ -15,13 +15,12 @@ class PineconeClient:
         ):
         self.__embedding_model = HuggingFaceEmbeddings(model_name = embedding_model)
         self.__embedding_dimension = embedding_dimension
+        self.__session = requests.Session()
+        self.__session.headers.update({"Api-Key": PINECONE_API_KEY})
 
     def list_collections(self) -> List[str]:
         try:
-            response = requests.get(
-                f"{PINECONE_CONTROL_URL}/indexes",
-                headers = {"Api-Key": PINECONE_API_KEY}
-            )
+            response = self.__session.get(f"{PINECONE_CONTROL_URL}/indexes")
             response.raise_for_status()
             collections_info = response.json()
             collection_names = [idx["name"] for idx in collections_info.get("indexes", [])]
@@ -38,14 +37,16 @@ class PineconeClient:
             collection_name: str
         ):
         try:
-            response = requests.delete(
-                    f"{PINECONE_CONTROL_URL}/indexes/{collection_name}",
-                    headers = {"Api-Key": PINECONE_API_KEY}
-                )
-            response.raise_for_status()
-            print(f"""
-                [INFO] [backend.vector_databases_tests.utils.pinecone_client] Deleted collection '{collection_name}'
-            """)
+            if collection_name in self.list_collections():
+                response = self.__session.delete(f"{PINECONE_CONTROL_URL}/indexes/{collection_name}")
+                response.raise_for_status()
+                print(f"""
+                    [INFO] [backend.vector_databases_tests.utils.pinecone_client] Deleted collection '{collection_name}'
+                """)
+            else:
+                print(f"""
+                    [INFO] [backend.vector_databases_tests.utils.pinecone_client] Collection '{collection_name}' doesnt exist
+                """)
         except Exception as e:
             print(f"""
                 [ERROR] [backend.vector_databases_tests.utils.pinecone_client] Failed to deleted collection '{collection_name}'
@@ -58,26 +59,22 @@ class PineconeClient:
         collection_name: str
     ):
         try:
-            existing_collections = self.list_collections()
-            if collection_name in existing_collections:
-                self.delete_collection(collection_name)
-                
-            response = requests.post(
+            self.delete_collection(collection_name)
+            response = self.__session.post(
                 f"{PINECONE_CONTROL_URL}/indexes",
                 json = {
                     "name": collection_name,
                     "dimension": self.__embedding_dimension,
                     "metric": "cosine",
                     "spec": {
-                        "pod": {
-                            "environment": "us-east-1-aws",
-                            "pod_type": "p1.x1"
+                        "serverless": {
+                            "cloud": "aws",
+                            "region": "us-east-1"
                         }
                     }
-                },
-                headers = {"Api-Key": PINECONE_API_KEY}
+                }
             )
-            response.raise_for_status()            
+            response.raise_for_status()
             print(f"""
                 [INFO] [backend.vector_databases_tests.utils.pinecone_client] Created collection '{collection_name}'
             """)
@@ -103,6 +100,7 @@ class PineconeClient:
             embedded_queries
         ):
         try:
+            # Assuming that the collection_name always exist
             vectors = []
             for idx in range(len(ids)):
                 id = ids[idx]
@@ -115,11 +113,14 @@ class PineconeClient:
                         "query": query
                     }
                 })
-            response = requests.post(
-                f"{PINECONE_DATA_URL}/vectors/upsert",
-                json = {"vectors": vectors},
-                headers = {"Api-Key": PINECONE_API_KEY}
-            )
+            batch_size = 100
+            for i in range (0, len(vectors), batch_size):
+                batch = vectors[i : i + batch_size]
+                response = self.__session.post(
+                    f"{PINECONE_DATA_URL}/vectors/upsert",
+                    headers = {"X-Pinecone-Index-Name": collection_name},
+                    json = {"vectors": batch}
+                )
             response.raise_for_status()
         except Exception as e:
             print(f"""
@@ -130,18 +131,22 @@ class PineconeClient:
     def retrieve_query(
             self,
             collection_name: str,
-            embedded_query: list,
-            top_k: int = 50
+            embedded_query,
+            top_k: int = 10
         ):
         try:
+            # Assuming that the collection_name always exist
             response = requests.post(
                 f"{PINECONE_DATA_URL}/query",
+                headers = {
+                    'Api-Key': 'pclocal', 
+                    'X-Pinecone-Index-Name': 'latencytest'
+                }, 
                 json = {
-                    "vector": embedded_query,
-                    "topK": top_k,
-                    "includeMetadata": True
-                },
-                headers = {"Api-Key": PINECONE_API_KEY}
+                    'vector': embedded_query, 
+                    'topK': 1, 
+                    'includeMetadata': True
+                }
             )
             response.raise_for_status()
             return response.json()

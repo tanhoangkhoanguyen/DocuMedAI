@@ -34,12 +34,16 @@ class QdrantClient:
             collection_name: str
         ):
         try:
-            collection_names = self.list_collection()
+            collection_names = self.list_collections()
             if collection_name in collection_names:
                 self.__client.delete_collection(collection_name)
-            print(f"""
-                [INFO] [backend.vector_databases_tests.utils.qdrant_client] Deleted collection '{collection_name}'
-            """)
+                print(f"""
+                    [INFO] [backend.vector_databases_tests.utils.qdrant_client] Deleted collection '{collection_name}'
+                """)
+            else:
+                print(f"""
+                    [INFO] [backend.vector_databases_tests.utils.qdrant_client] Collection '{collection_name}' doesnt exist
+                """)
         except Exception as e:
             print(f"""
                 [ERROR] [backend.vector_databases_tests.utils.qdrant_client] Failed to delete collection '{collection_name}'

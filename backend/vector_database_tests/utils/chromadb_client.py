@@ -3,6 +3,9 @@ warnings.filterwarnings("ignore")
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from typing import List
 
+HASH_BASE = 257
+MODULO = 10**9 + 7
+
 class ChromadbClient:
     def __init__(
             self, 
@@ -16,6 +19,8 @@ class ChromadbClient:
                     persist_directory = "/backend/"
                 )
             )
+        self.__current_collection = None
+        self.__collection = None
 
     def list_collections(self) -> List[str]:
         try:
@@ -33,10 +38,15 @@ class ChromadbClient:
             collection_name: str
         ):
         try:
-            self.__chromadb_client.delete_collection(collection_name)
-            print(f"""
-                [INFO] [backend.vector_databases_tests.utils.chromadb_client] Deleted collection '{collection_name}'
-            """)
+            if collection_name in self.list_collections():
+                self.__chromadb_client.delete_collection(collection_name)
+                print(f"""
+                    [INFO] [backend.vector_databases_tests.utils.chromadb_client] Deleted collection '{collection_name}'
+                """)
+            else:
+                print(f"""
+                    [INFO] [backend.vector_databases_tests.utils.chromadb_client] Collection '{collection_name}' doesnt exist
+                """)
         except Exception as e:
             print(f"""
                 [ERROR] [backend.vector_databases_tests.utils.chromadb_client] Failed to delete collection '{collection_name}'
@@ -44,16 +54,12 @@ class ChromadbClient:
             """)
             raise
 
-
     def create_collection(
             self,
             collection_name: str
         ):
         try:
-            try:
-                self.delete_collection(collection_name)
-            except Exception as e:
-                pass
+            self.delete_collection(collection_name)
             self.__chromadb_client.create_collection(
                 name = collection_name,
                 metadata = {"hnsw:space": "cosine"}
@@ -67,6 +73,26 @@ class ChromadbClient:
                 \t{str(e)}
             """)
             raise
+    
+    def bind_collection(
+            self,
+            collection_name: str
+        ):
+        if self.__current_collection == collection_name:
+            return
+        if collection_name not in self.list_collections():
+            raise ValueError(f"""
+                [ERROR] [backend.vector_databases_tests.utils.chromadb_client] Collection '{collection_name}' does not exist
+            """)
+        self.__collection = self.__chromadb_client.get_collection(collection_name)
+        self.__current_collection = collection_name
+    
+    def count_collection(
+            self, 
+            collection_name: str
+        ) -> int:
+        self.bind_collection(collection_name)
+        return self.__collection.count()
 
     def embed_query(
             self,
@@ -83,8 +109,8 @@ class ChromadbClient:
             embedded_queries
         ):
         try:
-            collection = self.__chromadb_client.get_collection(collection_name)
-            collection.add(
+            self.bind_collection(collection_name)
+            self.__collection.add(
                 embeddings = embedded_queries,
                 documents = queries,
                 ids = ids
@@ -102,8 +128,8 @@ class ChromadbClient:
             top_k: int = 50
         ):
         try:
-            collection = self.__chromadb_client.get_collection(collection_name)
-            response = collection.query(
+            self.bind_collection(collection_name)
+            response = self.__collection.query(
                 query_embeddings = [embedded_query],
                 n_results = top_k
             )
@@ -113,3 +139,4 @@ class ChromadbClient:
                 [ERROR] [backend.vector_databases_tests.utils.chromadb_client] Failed to retrieve from collection '{collection_name}'
                 \t{str(e)}
             """)
+            return []

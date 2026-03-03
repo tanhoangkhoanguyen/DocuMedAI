@@ -15,6 +15,7 @@ services:
     command: milvus run standalone
     ports:
       - "19530:19530"
+      - "9091:9091"
     environment:
       ETCD_USE_EMBED: "true"
       COMMON_STORAGETYPE: local
@@ -50,21 +51,6 @@ services:
       - backend-net
     volumes:
       - ./backend/vector_database_tests/utils/data_storage/weaviate_data:/var/lib/weaviate
-
-#   la-elasticsearch:
-#     image: docker.elastic.co/elasticsearch/elasticsearch:8.17.10
-#     restart: unless-stopped
-#     container_name: la-eslaticsearch-service
-#     ports:
-#       - "9200:9200"
-#     networks:
-#       - backend-net
-#     environment:
-#       - discovery.type=single-node
-#       - xpack.security.enabled=false
-#       - ES_JAVA_OPTS=-Xms256m -Xmx256m
-#     volumes:
-#       - ./backend/vector_database_tests/utils/data_storage/elasticsearch_data:/usr/share/elasticsearch/data
 
   la-mongodb:
     image: mongo:8.0.13-noble
@@ -126,6 +112,7 @@ services:
     container_name: la-backend-service
     ports:
       - "2010:2010"
+      - "8089:8089"
     networks:
       - backend-net
     volumes:
