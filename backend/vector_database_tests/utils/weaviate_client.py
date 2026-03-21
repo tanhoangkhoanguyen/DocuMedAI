@@ -1,8 +1,11 @@
-import sys, weaviate, warnings
+from logger import get_logger
+
+import torch, weaviate, warnings
 warnings.filterwarnings("ignore")
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from typing import List
 
+LOGGER = get_logger(__name__)
 WEAVIATE_URL = "http://la-weaviate:8080"
 
 class WeaviateClient:
@@ -11,41 +14,55 @@ class WeaviateClient:
             embedding_model: str,
             embedding_dimension: int
         ):
-        self.__embedding_model = HuggingFaceEmbeddings(model_name = embedding_model)
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.__embedding_model = HuggingFaceEmbeddings(
+                model_name = embedding_model,
+                model_kwargs = {"device": device}
+            )
         self.__embedding_dimension = embedding_dimension
         self.__weaviate_client = weaviate.Client(url = WEAVIATE_URL)
 
-    def list_collections(self) -> List[str]:
+    def embed_query(
+            self,
+            query: str
+        ):
+        embedded_query = self.__embedding_model.embed_query(query)
+        return embedded_query
+
+    def list_collections(self):
         try:
             schema = self.__weaviate_client.schema.get()
             classes = [cls['class'] for cls in schema.get("classes", [])]
             return classes
         except Exception as e:
-            print(f"""
-                  [ERROR] [backend.vector_databases_tests.utils.weaviate_client] Failed to list collections
-                  \t{str(e)}
-                """)
-            return []
+            LOGGER.error(f"Failed to list classes\n\t{str(e)}")
+            raise
     
+    def collection_exists(
+            self,
+            class_name: str,
+        ):
+        try:
+            if class_name in self.list_collections():
+                return True
+            return False
+        except Exception as e:
+            LOGGER.error(f"Failed to check '{class_name}' existence\n\t{e}")
+            return False
+
     def delete_collection(
             self,
             class_name: str
         ):
         try:
-            if class_name in self.list_collections():
-                self.__weaviate_client.schema.delete_class(class_name)
-                print(f"""
-                    [INFO] [backend.vector_databases_tests.utils.weaviate_client] Deleted class '{class_name}'
-                """)
-            else:
-                print(f"""
-                    [INFO] [backend.vector_databases_tests.utils.weaviate_client] Class '{class_name}' doesnt exist
-                """)
+            if not self.collection_exists(class_name):
+                LOGGER.info(f"Class '{class_name}' doesnt exist")
+                return
+            
+            self.__weaviate_client.schema.delete_class(class_name)
+            LOGGER.info(f"Deleted class '{class_name}'")
         except Exception as e:
-            print(f"""
-                [ERROR] [backend.vector_databases_tests.utils.weaviate_client] Failed to deleted class '{class_name}'
-                \t{str(e)}
-            """)
+            LOGGER.error(f"Failed to delete class '{class_name}'\n\t{str(e)}")
             raise
 
     def create_collection(
@@ -56,7 +73,13 @@ class WeaviateClient:
             self.delete_collection(class_name)
             self.__weaviate_client.schema.create_class({
                 "class": class_name,
-                "vectorizer": "none",
+                "vectorizer": "none", 
+                "vectorIndexType": "hnsw",
+                "vectorIndexConfig": {
+                    "ef": 64,
+                    "efConstruction": 200, 
+                    "M": 64
+                },
                 "properties": [
                     {
                         "name": "query",
@@ -64,33 +87,21 @@ class WeaviateClient:
                     }
                 ]
             })
-            print(f"""
-                [INFO] [backend.vector_databases_tests.utils.weaviate_client] Created class '{class_name}'
-            """)
+            LOGGER.info(f"Created class '{class_name}'")
         except Exception as e:
-            print(f"""
-                [ERROR] [backend.vector_databases_tests.utils.weaviate_client] Failed to create class '{class_name}'
-                \t{str(e)}
-            """)
+            LOGGER.error(f"Failed to create class '{class_name}'\n\t{str(e)}")
             raise
 
-    def embed_query(
-            self,
-            query: str
-        ):
-        embedded_query = self.__embedding_model.embed_query(query)
-        return embedded_query
-
-    def push_to_collection(
+    def push_documents(
             self,
             class_name: str,
             ids: List[str],
-            queries,
-            embedded_queries: list
+            queries: List[str],
+            embedded_queries: List[List[float]]
         ):
         try:
             with self.__weaviate_client.batch as batch:
-                batch.batch_size = 100
+                batch.batch_size = 1000
                 for idx in range(len(ids)):
                     batch.add_data_object(
                         data_object = {"query": queries[idx]},
@@ -99,26 +110,20 @@ class WeaviateClient:
                         uuid = ids[idx]
                     )
         except Exception as e:
-            print(f"""
-                [ERROR] [backend.vector_databases_tests.utils.weaviate_client] Failed to push to class '{class_name}'
-                \t{str(e)}
-            """)
+            LOGGER.error(f"Failed to push to class '{class_name}'\n\t{str(e)}")
 
     def retrieve_query(
             self, 
             class_name: str,
-            embedded_query, 
+            embedded_query: List[float],
             top_k: int = 50
         ):
         try:
-            response = self.__weaviate_client.query.get(class_name, ["*"]) \
+            resp = self.__weaviate_client.query.get(class_name, ["*"]) \
                 .with_near_vector({"vector": embedded_query}) \
                 .with_limit(top_k) \
                 .do()
-            return response
+            return resp
         except Exception as e:
-            print(f"""
-                [ERROR] [backend.vector_databases_tests.utils.weaviate_client] Failed to retrieve from class '{class_name}'
-                \t{str(e)}
-            """)
+            LOGGER.error(f"Failed to retrieve from class '{class_name}'\n\t{str(e)}")
             return []

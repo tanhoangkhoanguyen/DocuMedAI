@@ -1,14 +1,4 @@
 services:
-  la-pinecone:
-    image: ghcr.io/pinecone-io/pinecone-local:latest
-    container_name: la-pinecone-service
-    restart: unless-stopped
-    ports:
-      - "5080:5080"
-      - "5081:5081"
-    networks:
-      - backend-net
-
   la-milvus:
     image: milvusdb/milvus:v2.3.5
     container_name: la-milvus-service
@@ -24,6 +14,16 @@ services:
     volumes:
       - ./backend/vector_database_tests/utils/data_storage/milvus_data:/var/lib/milvus
 
+  la-pinecone:
+    image: ghcr.io/pinecone-io/pinecone-local:latest
+    container_name: la-pinecone-service
+    restart: unless-stopped
+    ports:
+      - "5080:5080"
+      - "5081:5081"
+    networks:
+      - backend-net
+
   la-qdrant:
     image: qdrant/qdrant:v1.16.1
     restart: unless-stopped
@@ -34,6 +34,24 @@ services:
       - backend-net
     volumes:
       - ./backend/vector_database_tests/utils/data_storage/qdrant_data:/qdrant/storage
+
+  la-vespa:
+    image: vespaengine/vespa:8.629.20
+    restart: unless-stopped
+    container_name: la-vespa-service
+    hostname: vespa-container
+    ports:
+      - "8080:8080"
+      - "19071:19071"
+    networks:
+      - backend-net
+    volumes:
+      - ./backend/vector_database_tests/utils/vespa_config:/app
+      - ./backend/vector_database_tests/utils/data_storage/vespa_data:/opt/vespa/var
+    deploy:
+      resources:
+        limits:
+          memory: 100g
 
   la-weaviate:
     image: semitechnologies/weaviate:1.34.8
@@ -73,24 +91,6 @@ services:
       - backend-net
     volumes:
       - ./backend/vector_database_tests/utils/data_storage/redis_data:/data
-
-  la-vespa:
-    image: vespaengine/vespa:8.629.20
-    restart: unless-stopped
-    container_name: la-vespa-service
-    hostname: vespa-container
-    ports:
-      - "8080:8080"
-      - "19071:19071"
-    networks:
-      - backend-net
-    volumes:
-      - ./backend/vector_database_tests/utils/vespa_config:/app
-      - ./backend/vector_database_tests/utils/data_storage/vespa_data:/opt/vespa/var
-    deploy:
-      resources:
-        limits:
-          memory: 4g
 
   la-backend:
     build:

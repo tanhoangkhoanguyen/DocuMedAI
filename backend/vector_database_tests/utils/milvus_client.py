@@ -1,9 +1,12 @@
-import sys, warnings
+from logger import get_logger
+
+import warnings
 warnings.filterwarnings("ignore")
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from pymilvus import connections, FieldSchema, CollectionSchema, DataType, Collection, utility
 from typing import List
 
+LOGGER = get_logger(__name__)
 MILVUS_HOST = "la-milvus"
 MILVUS_PORT = "19530"
 
@@ -25,36 +28,46 @@ class MilvusClient:
             port = MILVUS_PORT
         )
 
+    def embed_query(
+            self,
+            query: str
+        ):
+        embedded_query = self.__embedding_model.embed_query(query)
+        return embedded_query
+
     def list_collections(self) -> List[str]:
         try:
             collections = utility.list_collections()
             return collections
         except Exception as e:
-            print(f"""
-                [ERROR] [backend.vector_databases_tests.utils.milvus_client] Failed to list collections
-                \t{str(e)}
-            """)
+            LOGGER.error(f"Failed to list collections\n\t{str(e)}")
             return []
+    
+    def collection_exists(
+            self,
+            collection_name: str,
+        ):
+        try:
+            if utility.has_collection(collection_name):
+                return True
+            return False
+        except Exception as e:
+            LOGGER.error(f"Failed to check '{collection_name}' existence\n\t{e}")
+            return False
     
     def delete_collection(
             self,
             collection_name: str
         ):
         try:
-            if utility.has_collection(collection_name):
-                utility.drop_collection(collection_name)
-                print(f"""
-                    [INFO] [backend.vector_databases_tests.utils.milvus_client] Deleted collection '{collection_name}'
-                """)
-            else:
-                print(f"""
-                    [INFO] [backend.vector_databases_tests.utils.milvus_client] Collection '{collection_name}' doesnt exist
-                """)
+            if not self.collection_exists(collection_name):
+                LOGGER.info(f"Collection '{collection_name}' doesnt exist")
+                return
+            
+            utility.drop_collection(collection_name)
+            LOGGER.info(f"Deleted collection '{collection_name}'")
         except Exception as e:
-            print(f"""
-                [ERROR] [backend.vector_databases_tests.utils.milvus_client] Failed to deleted collection '{collection_name}'
-                \t{str(e)}
-            """)
+            LOGGER.error(f"Failed to delete collection '{collection_name}'\n\t{str(e)}")
             raise
 
     def create_collection(
@@ -90,22 +103,10 @@ class MilvusClient:
                 name = collection_name,
                 schema = schema
             )
-            print(f"""
-                [INFO] [backend.vector_databases_tests.utils.milvus_client] Created collection '{collection_name}'
-            """)
+            LOGGER.info(f"Created collection '{collection_name}'")
         except Exception as e:
-            print(f"""
-                [ERROR] [backend.vector_databases_tests.utils.milvus_client] Failed to create collection '{collection_name}'
-                \t{str(e)}
-            """)
+            LOGGER.error(f"Failed to create collection '{collection_name}'\n\t{str(e)}")
             raise
-
-    def embed_query(
-            self,
-            query: str
-        ):
-        embedded_query = self.__embedding_model.embed_query(query)
-        return embedded_query
 
     def bind_collection(
             self, 
@@ -114,9 +115,7 @@ class MilvusClient:
         ):
         if self.__current_collection != collection_name:
             if not utility.has_collection(collection_name):
-                raise ValueError(f"""
-                    [ERROR] [backend.vector_databases_tests.utils.milvus_client] Collection '{collection_name}' does not exist
-                """)
+                raise ValueError(f"Collection '{collection_name}' does not exist")
             self._milvus_client = Collection(collection_name)
             self.__current_collection = collection_name
             self.__is_loaded = False
@@ -134,32 +133,21 @@ class MilvusClient:
                     "index_type": "HNSW",
                     "metric_type": "COSINE",
                     "params": {
-                        "M": 16,
+                        "M": 64,
                         "efConstruction": 200
                     }
                 }
             )
         except Exception as e:
-            print(f"""
-                [ERROR] [backend.vector_databases_tests.utils.milvus_client] Failed to create index for collection '{collection_name}'
-                \t{str(e)}
-            """)
+            LOGGER.error(f"Failed to create index for collection '{collection_name}'\n\t{str(e)}")
             raise
 
-    def count_collection(
-            self,
-            collection_name: str
-        ) -> int:
-        self.bind_collection(collection_name)
-        total_data = self._milvus_client.num_entities
-        return total_data
-
-    def push_to_collection(
+    def push_documents(
             self,
             collection_name: str,
             ids: List[str],
-            queries,
-            embedded_queries
+            queries: List[str],
+            embedded_queries: List[List[float]]
         ):
         try:
             self.bind_collection(collection_name)
@@ -171,10 +159,7 @@ class MilvusClient:
             self._milvus_client.insert(objects)
             # self._milvus_client.flush()
         except Exception as e:
-            print(f"""
-                [ERROR] [backend.vector_databases_tests.utils.milvus_client] Failed to push to collection '{collection_name}'
-                \t{str(e)}
-            """)
+            LOGGER.error(f"Failed to push to collection '{collection_name}'\n\t{str(e)}")
 
     def retrieve_query(
             self,
@@ -190,17 +175,14 @@ class MilvusClient:
                     "ef": 64
                 }
             }
-            response = self._milvus_client.search(
+            resp = self._milvus_client.search(
                 data = [embedded_query],
                 anns_field = "embedded_query",
                 param = search_params,
                 limit = top_k,
                 output_fields = ["id", "query"]
             )
-            return response
+            return resp
         except Exception as e:
-            print(f"""
-                [ERROR] [backend.vector_databases_tests.utils.milvus_client] Failed to retrieve from collection '{collection_name}'
-                \t{str(e)}
-            """)
+            LOGGER.error(f"Failed to retrieve from collection '{collection_name}'\n\t{str(e)}")
             return []

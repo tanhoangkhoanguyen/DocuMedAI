@@ -7,7 +7,7 @@ sentence-transformers==2.7.0
 
 # Math & Data
 numpy==1.26.2
-datasets
+datasets==4.6.1
 
 # Vector DB clients
 chromadb==1.4.1
@@ -20,7 +20,7 @@ redis==5.0.8
 # Web / API
 fastapi==0.122.0
 uvicorn==0.38.0
-locust
+locust==2.43.3
 
 # LangChain
 langchain==0.3.25
