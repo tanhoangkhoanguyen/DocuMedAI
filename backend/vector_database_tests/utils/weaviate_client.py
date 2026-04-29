@@ -5,7 +5,10 @@ warnings.filterwarnings("ignore")
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from typing import List
 
-LOGGER = get_logger(__name__)
+LOGGER = get_logger(
+    name = "Weaviate_tool",
+    level = "INFO"
+)
 WEAVIATE_URL = "http://la-weaviate:8080"
 
 class WeaviateClient:

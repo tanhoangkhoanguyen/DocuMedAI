@@ -1,37 +1,47 @@
 from services.chatbot.core.workflow import build_graph
+from services.chatbot.core.constants.schemas import UnitState
+from logger import get_logger
 
-import os, sys
 from langchain_core.messages import HumanMessage, AIMessage
 
-def call_agent(user_input:str, chat_id:str):
+_LOGGER = get_logger(
+    name = "chatbot",
+    level = "INFO"
+)
+
+def call_agent(user_input: str, chat_id: str):
     human_msg = HumanMessage(content = user_input)
-    init_state = {
-        "chat_history": [human_msg]   
-    }
-    result = graph.invoke(
-        input = init_state,
-        config = {"configurable": {"thread_id": chat_id}}
+    init_state = UnitState(
+        chat_history = [human_msg]   
     )
-    ai_response = result["chat_history"][-1]
-    chatbot_response = ai_response.content if isinstance(ai_response, AIMessage) else "Sorry, I didn't understand that."
-    print(f"""
-        [INFO] [backend.services.chatbot.core.main] AI response:
-        \t{chatbot_response}
-    """)
+    try:
+        result = graph.invoke(
+            input = init_state,
+            config = {"configurable": {"thread_id": chat_id}}
+        )
+
+        if not result.get("chat_history", []):
+            raise ValueError("Empty chat history")
+
+        ai_response = result["chat_history"][-1]
+        if isinstance(ai_response, AIMessage):
+            chatbot_response = ai_response.content
+        else:
+            chatbot_response = "Sorry, I didn't understand that."
+        _LOGGER.info(f"Chatbot response: {chatbot_response}")
+    except Exception as e:
+        _LOGGER.error(f"Error during graph invoke: {e}")
 
 def test_chatbot():
     call_agent("""
         Hi chatbot.
-    """)
+    """, chat_id = "12345")
 
 if __name__ == "__main__":
-    user_input = input("Type 'Execute' to run: ")
-    if user_input != "Execute":
-        raise
-
     # Fast and low cost, with low intelligence large language model.
     # Reference: https://platform.openai.com/docs/models/compare
-    chat_model = "gpt-4o-mini"                                 
+    chat_model = "gpt-4o-mini"
+    chat_model = "gemini-2.5-flash"
 
     # Fast, medium quality embedding model.
     embedding_model = "sentence-transformers/all-MiniLM-L6-v2"
@@ -42,7 +52,8 @@ if __name__ == "__main__":
     # Thresholds are task-dependent. For custom definitions of similarity or domain-specific embeddings, thresholds must 
     # be tuned empirically, or if labeled data is unavailable, assumptions based on embedding distributions are acceptable.
     qdrant_threshold = 0.25
-    reranking_threshold = -5
+    topic_threshold = -5
+    rag_threshold = -5
 
     chat_id = "session-123"
 
@@ -52,7 +63,8 @@ if __name__ == "__main__":
         embedding_model = embedding_model,
         reranking_model = reranking_model,
         qdrant_threshold = qdrant_threshold,
-        reranking_threshold = reranking_threshold,
+        topic_threshold = topic_threshold,
+        rag_threshold = rag_threshold,
         chat_id = chat_id
     )
     test_chatbot()

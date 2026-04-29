@@ -1,3 +1,19 @@
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from cryptography.fernet import Fernet
+from datetime import datetime
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
+from langchain_core.runnables import Runnable
+from langchain_google_genai import ChatGoogleGenerativeAI
+# from langchain_openai import ChatOpenAI
+from pymongo import MongoClient
+from pymongo.server_api import ServerApi
+
+import os, pytz, queue, uuid, warnings
+warnings.filterwarnings("ignore")
+from dotenv import load_dotenv
+load_dotenv()
+
 from services.chatbot.core.constants.schemas import GraphState, MessageAnalysisState, NodeControllerState, UnitState
 from services.chatbot.core.constants.prompts import MESSAGE_ANALYSIS_PROMPT_1, MESSAGE_ANALYSIS_PROMPT_2, MEMORY_CONTROLLER_PROMPT_1, MEMORY_CONTROLLER_PROMPT_2, INTENT_ANALYSIS_PROMPT_1, INTENT_ANALYSIS_PROMPT_2, SYNTHESIS_PROMPT
 from services.chatbot.core.agents.law_support import lawSupporter
@@ -5,35 +21,14 @@ from services.chatbot.core.agents.chit_chat import ChitChater
 from services.chatbot.core.tools.rerank import ReRanker
 from services.chatbot.core.tools.helper import EmbeddingModelLoad
 
-import warnings
-warnings.filterwarnings("ignore")
-from dotenv import load_dotenv
-load_dotenv()
-
-import os, uuid, pytz, queue
-from langchain_core.runnables import Runnable
-from langchain_openai import ChatOpenAI
-from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from threading import Lock
-from langchain_community.embeddings import HuggingFaceEmbeddings
-from qdrant_client import QdrantClient
-from qdrant_client.http.models import VectorParams, Distance, PointStruct
-from pymongo import MongoClient
-from pymongo.server_api import ServerApi
-from cryptography.fernet import Fernet
-from datetime import datetime
-
-QDRANT_URL = "http://la-qdrant:6333"
-
 class MessageAnalysis(Runnable):
     def __init__(
             self, 
             chat_model: str,
             temperature: int = 0
         ):
-        self.__llm = ChatOpenAI(
-                model_name = chat_model, 
+        self.__llm = ChatGoogleGenerativeAI(
+                model_name = chat_model,
                 temperature = temperature
             )
 
@@ -45,7 +40,7 @@ class MessageAnalysis(Runnable):
         user_message = state.chat_history[-1].content
         prompt = [
             SystemMessage(content = MESSAGE_ANALYSIS_PROMPT_1),
-            SystemMessage(content = MESSAGE_ANALYSIS_PROMPT_2),
+            SystemMessage(content = MESSAGE_ANALYSIS_PROMPT_2), 
             HumanMessage(content = f"USER MESSAGE: {user_message}")
         ]
         response = self.__llm.with_structured_output(MessageAnalysisState).invoke(prompt)

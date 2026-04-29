@@ -5,7 +5,10 @@ warnings.filterwarnings("ignore")
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from typing import List
 
-LOGGER = get_logger(__name__)
+LOGGER = get_logger(
+    name = "Chromadb_tool",
+    level = "INFO"
+)
 
 class ChromadbClient:
     def __init__(

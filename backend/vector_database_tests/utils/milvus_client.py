@@ -6,7 +6,10 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 from pymilvus import connections, FieldSchema, CollectionSchema, DataType, Collection, utility
 from typing import List
 
-LOGGER = get_logger(__name__)
+LOGGER = get_logger(
+    name = "Milvus_tool",
+    level = "INFO"
+)
 MILVUS_HOST = "la-milvus"
 MILVUS_PORT = "19530"
 

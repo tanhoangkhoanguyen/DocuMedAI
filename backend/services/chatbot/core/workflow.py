@@ -13,15 +13,17 @@ class GraphBuilder:
             chat_model: str, 
             embedding_model: str,
             reranking_model: str,
-            qdrant_threshold: int,
-            reranking_threshold: int
+            qdrant_threshold: float,
+            topic_threshold: float,
+            rag_threshold: float,
         ):
         self.builder = StateGraph(GraphState)
         self.chat_model = chat_model
         self.embedding_model = embedding_model
         self.reranking_model = reranking_model
         self.qdrant_threshold = qdrant_threshold
-        self.reranking_threshold = reranking_threshold
+        self.topic_threshold = topic_threshold
+        self.rag_threshold = rag_threshold
 
     def build_graph(self):
         self.message_analysis = MessageAnalysis(
@@ -32,7 +34,7 @@ class GraphBuilder:
             embedding_model = self.embedding_model,
             reranking_model = self.reranking_model,
             qdrant_threshold = self.qdrant_threshold,
-            reranking_threshold = self.reranking_threshold,
+            rag_threshold = self.rag_threshold,
         )
         self.schema_reset_node = SchemaResetNode(
             chat_model = self.chat_model,
@@ -56,15 +58,17 @@ class Graph:
             chat_model: str, 
             embedding_model: str,
             reranking_model: str,
-            qdrant_threshold: int,
-            reranking_threshold: int
+            qdrant_threshold: float,
+            topic_threshold: float,
+            rag_threshold: float,
         ):
         builder = GraphBuilder(
             chat_model = chat_model,
             embedding_model = embedding_model,
             reranking_model = reranking_model,
             qdrant_threshold = qdrant_threshold,
-            reranking_threshold = reranking_threshold
+            topic_threshold = topic_threshold,
+            rag_threshold = rag_threshold,
         )
         memory = MemorySaver()
         return builder.build_graph().compile(checkpointer = memory)
@@ -73,8 +77,9 @@ def build_graph(
         chat_model: str, 
         embedding_model: str,
         reranking_model: str,
-        qdrant_threshold: int,
-        reranking_threshold: int,
+        qdrant_threshold: float,
+        topic_threshold: float,
+        rag_threshold: float,
         save_graph: bool = False
     ):
     graph = Graph.compile(
@@ -82,9 +87,10 @@ def build_graph(
         embedding_model = embedding_model,
         reranking_model = reranking_model,
         qdrant_threshold = qdrant_threshold,
-        reranking_threshold = reranking_threshold
+        topic_threshold = topic_threshold,
+        rag_threshold = rag_threshold
     )
     if save_graph:
-        with open("services/chatbot/assets/chatbot-phase_2.png", "wb") as f:
+        with open("services/chatbot/assets/chatbot-overview.png", "wb") as f:
             f.write(graph.get_graph().draw_mermaid_png())
     return graph

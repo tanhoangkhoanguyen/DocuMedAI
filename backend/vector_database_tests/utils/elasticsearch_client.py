@@ -6,7 +6,10 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 from elasticsearch import Elasticsearch
 from typing import List
 
-LOGGER = get_logger(__name__)
+LOGGER = get_logger(
+    name = "ElasticSearch_tool",
+    level = "INFO"
+)
 ELASTICSEARCH_URL = "http://la-elasticsearch:9200"
 
 class ElasticsearchClient:

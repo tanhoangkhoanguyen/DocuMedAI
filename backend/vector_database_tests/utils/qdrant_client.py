@@ -7,7 +7,10 @@ from qdrant_client import QdrantClient as SDKQdrantClient
 from qdrant_client.http.models import VectorParams, Distance, PointStruct, HnswConfigDiff, OptimizersConfigDiff, SearchParams
 from typing import List
 
-LOGGER = get_logger(__name__)
+LOGGER = get_logger(
+    name = "Qdrant_tool",
+    level = "INFO"
+)
 QDRANT_URL = "http://la-qdrant:6333"
 
 class QdrantClient:
@@ -36,10 +39,11 @@ class QdrantClient:
     def collection_exists(
             self,
             collection_name: str,
-        ):
+        ) -> bool:
         try:
             return self.__client.collection_exists(collection_name)
-        except:
+        except Exception as e:
+            LOGGER.error(f"Failed to check collection '{collection_name}'\n\t{str(e)}")
             return False
     
     def delete_collection(
@@ -114,7 +118,6 @@ class QdrantClient:
                 points = points
             )
         except Exception as e:
-            pass
             LOGGER.error(f"Failed to push to collection '{collection_name}'\n\t{str(e)}")
 
     def retrieve_query(

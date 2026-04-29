@@ -8,7 +8,10 @@ from urllib3.util.retry import Retry
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from typing import List
 
-LOGGER = get_logger(__name__)
+LOGGER = get_logger(
+    name = "Pinecone_tool",
+    level = "INFO"
+)
 PINECONE_CONTROL_URL = "http://la-pinecone:5080"
 PINECONE_DATA_URL = "http://la-pinecone:5081"
 PINECONE_API_KEY = "pclocal"

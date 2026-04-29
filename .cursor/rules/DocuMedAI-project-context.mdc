@@ -1,0 +1,51 @@
+---
+description: Product goals, agent design, data stores, and orchestration stack for DocuMedAI
+globs:
+alwaysApply: false
+---
+
+# DocuMedAI – project context
+
+## Product goal
+
+DocuMedAI is a **medical-oriented chatbot**. When a user asks about a **medical term**, the assistant answers using **RAG**: retrieve relevant passages from a vector database, then ground the reply in that context.
+
+## User message understanding
+
+Before agents routing, the pipeline **analyzes the user message** to extract sub requests in a user message:
+
+- **Context** - background, situation, or emotion describing *who*, *where*, *when*, *why*, or *how*.
+- **Requests** -  explicit user requests, tasks, or questions related to that context.
+- **Instructions** - formatting instruction specifying how output should appear.
+
+## Agents and routing
+
+The runtime uses **two main agents**. **Routing** is decided with **MCP**.
+
+| Agent | Role |
+|--------|------|
+| **`chit_chat`** | General conversation: greetings, small talk, and non-clinical chat that does not require grounded medical knowledge. |
+| **`health_support`** | **Medical insight** for a **medical term** (or clinical-style question): use retrieval + structured reasoning; stay within retrieved context and appropriate disclaimers. |
+
+## Data stores
+
+| Store | Purpose |
+|--------|---------|
+| **Qdrant** | **Vector store for RAG context** (medical insights). Long-term memory summaries are stored here for semantic recall. |
+| **MongoDB** | **Conversation persistence**: threads, messages, metadata needed to resume sessions and audit. |
+| **Redis** | **Cache layer** to cut latency when loading recent accessed chat. |
+
+## Orchestration and observability
+
+- **LangGraph** – **primary structure** for chatbot logic (connecting nodes).
+- **LangSmith** – **tracing and evaluation** runs, latency, tool/MCP calls, and prompt versions for debugging and regression checks.
+- **LangChain**, **LlamaIndex** – graphs, **tools**, **structured output / Pydantic schemas**, **retrievers**, and LLM wrappers where they match the codebase.
+
+## Memory (personalization)
+
+- **Short-term (local)** – **last 5 messages** in the active thread for immediate coherence and follow-ups.
+- **Long-term (global)** – **summarized conversation topics** embedded and stored in **Qdrant** so later turns can pull semantically related past themes.
+
+## Performance
+
+Use **`asyncio`** (async HTTP/DB clients, parallel retrieval + LLM prep where safe) to reduce wall-clock time; keep shared resource limits (connection pools, rate limits) in mind.

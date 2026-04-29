@@ -11,7 +11,10 @@ from requests.adapters import HTTPAdapter
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from typing import List
 
-LOGGER = get_logger(__name__)
+LOGGER = get_logger(
+    name = "Vespa_tool",
+    level = "INFO"
+)
 VESPA_URL = "http://la-vespa:8080"
 
 class VespaClient:

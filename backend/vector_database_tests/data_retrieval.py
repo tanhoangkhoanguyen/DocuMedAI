@@ -23,12 +23,15 @@ def load_queries(folder_path: str = "vector_database_tests/generated_queries") -
     return queries
 
 SHARED_CLIENT = None
+EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+EMBEDDING_DIMENSION = 384
+
 def get_shared_client():
     global SHARED_CLIENT
     if SHARED_CLIENT is None:
         SHARED_CLIENT = WeaviateClient(
-            embedding_model = "sentence-transformers/all-MiniLM-L6-v2",
-            embedding_dimension = 384,
+            embedding_model = EMBEDDING_MODEL,
+            embedding_dimension = EMBEDDING_DIMENSION,
         )
     return SHARED_CLIENT
 
