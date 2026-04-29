@@ -6,9 +6,9 @@ from langgraph.graph.message import add_messages
 import Dict
 
 class GraphState(BaseModel):
-    chat_history: Annotated[List[AnyMessage], add_messages]
-    local_context: Optional[List[str]] = Field(default_factory = list)
-    user_inputs: Optional[MessageAnalysisState] = Field(default_factory = list)
+    chat_history: Annotated[List[AnyMessage], add_messages]                     # chat_id conversation history
+    local_context: Optional[List[str]] = Field(default_factory = list)          # 
+    user_inputs: Optional[MessageAnalysisState] = Field(default_factory = list) # Analyzed user input
 
 # LLM formatted outputs
 class UnitState(BaseModel):
