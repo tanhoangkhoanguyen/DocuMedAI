@@ -1,1 +1,0 @@
-Navigate to lawAdvisory\backend\vector_database_tests, run python -m vector_database_tests.data_processing to load the data

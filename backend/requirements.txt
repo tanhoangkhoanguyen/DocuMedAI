@@ -27,8 +27,12 @@ langchain==0.3.25
 langchain-core==0.3.61
 langchain-community==0.3.24
 langchain-openai==0.3.18
+langchain-google-genai>=2.0.0
 langchain-huggingface==0.1.2
 langgraph==0.4.5
+
+# Model Context Protocol (agent router stdio server + client)
+mcp>=1.2.0
 
 # Utilities
 tavily-python==0.7.2

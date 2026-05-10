@@ -77,7 +77,3 @@ class MongoDBSetup:
         self.__test_connection()
         self.__create_admin()        
         self.__client.close()
-
-if __name__ == "__main__":
-    mongodb_setup = MongoDBSetup()
-    mongodb_setup.execute()
