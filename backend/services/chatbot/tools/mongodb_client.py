@@ -1,6 +1,6 @@
 from services.chatbot.core.constants.schemas import UserInfo, UserData, UserChat
 
-import os, sys, uuid, bcrypt, pytz
+import os, uuid, bcrypt, pytz
 from dotenv import load_dotenv
 load_dotenv()
 from pymongo import MongoClient

@@ -1,3 +1,5 @@
+from crewai import Agent, Crew, Process, Task
+from crewai.tools import BaseTool
 from concurrent.futures import ThreadPoolExecutor
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langchain_core.runnables import Runnable
@@ -16,13 +18,16 @@ from services.chatbot.constants.schemas import (
     SubMessageState,
     TaskState,
     ToolCallState,
+    DraftAgentState,
+    CritiqueAgentState
 )
 from services.chatbot.constants.prompts import (
     TOPIC_SUMMARIZED_PROMPT,
     MESSAGE_ANALYSIS_PROMPT_1,
     MESSAGE_ANALYSIS_PROMPT_2,
     AGENT_PLANNER_PROMPT,
-    AGGREGATE_AND_REVISE_PROMPT
+    DRAFT_AGENT_PROMPT,
+    CRITIC_AGENT_PROMPT
 )
 from vector_database_tests.utils.qdrant_client import QdrantClient
 from services.chatbot.mcp import MCPServer
@@ -65,7 +70,6 @@ class TopicChecker(Runnable):
         return state
 
 
-# Reasoning mode
 class MessageAnalysis(Runnable):
     """
     Analyze message into submessages with
@@ -146,7 +150,7 @@ class LongTermMemoryRetriever(Runnable):
             if not unit.messages:
                 continue
             memories = self.__search_memory(unit)
-            state.append([
+            state.task_list.append([
                 TaskState(
                         context = mem, 
                         message = msg,
@@ -158,26 +162,26 @@ class LongTermMemoryRetriever(Runnable):
         return state
 
 
-class Agent(Runnable):
-    """
-    Planner -> MCP tool execution (parallel over tasks) -> per-unit aggregation + revision.
-    """
-
+class Agents(Runnable):
     class planner_output_schema(BaseModel):
         tool_calls: List[ToolCallState]
 
     def __init__(
-        self,
-        chat_model: str,
-        temperature: float,
-        max_workers: int,
-    ):
+            self,
+            chat_model: str,
+            temperature: float,
+            max_workers: int,
+            shortterm_memory_size: int,
+            max_revision_cycles: int,
+        ):
         self.__llm = ChatGoogleGenerativeAI(
             model = chat_model,
             temperature = temperature,
         )
         self.__max_workers = max_workers
         self.__mcp_client = MCPServer()
+        self.__shortterm_memory_size = shortterm_memory_size
+        self.__max_revision_cycles = max_revision_cycles
 
     def __run_planner(self, task: TaskState):
         catalog = self.__mcp_client.format_registry()
@@ -209,36 +213,80 @@ class Agent(Runnable):
             results = [f.result() for f in futures]
         task.result = "\n".join(results)
 
-    def __aggregate_results(self, state: GraphState, tool_results: str):
-        prompt = [
-            SystemMessage(
-                content = AGGREGATE_AND_REVISE_PROMPT.format(
-                    user_message = state.chat_history[-1].content,
-                    shortterm_memory = '\n'.join(state.shortterm_memory)
-                )
+    def invoke(self, state: GraphState, config = None):
+        user_message = state.chat_history[-1].content
+        shortterm_memory = '\n'.join(state.shortterm_memory[-1 * self.__shortterm_memory_size])
+
+        critic_agent = Agent(
+            role = "Critic",
+            goal = "Emit structured pass/fail critiques.",
+            backstory = "Detect hallucinations, incorrect output format and missing retrieval.",
+            llm = self.__llm,
+            verbose = False,
+            allow_delegation = False,
+        )
+
+        mcp_outputs = ""
+        revision_notes = ""
+        for _ in range (self.__max_revision_cycles):
+            if state.task_list:
+                # Update mcp_outputs
+                for idx, tasks in enumerate(state.task_list):
+                    with ThreadPoolExecutor(max_workers = self.__max_workers) as pool:
+                        futures = [pool.submit(self.__process_task, task) for task in tasks]
+                        for task, future in zip(state.task_list[idx], futures):
+                            task.result = future.result()
+                            mcp_outputs += f"\n{task.result or ''}"
+
+            draft_agent = Agent(
+                role = "Draft Writer",
+                goal = "Produce user-facing replies grounded only in supplied evidence.",
+                backstory = "Never invent facts absent from the evidence bundle.",
+                llm = self.__llm,
+                verbose = False,
+                allow_delegation = False,
             )
-        ]
-        return self.__llm.invoke(prompt)
 
-    def invoke(self, state: GraphState, config = None):
-        if state.task_list:
-            for idx, tasks in enumerate(state.task_list):
-                unit_syntheses: List[str] = []
-                with ThreadPoolExecutor(max_workers = self.__max_workers) as pool:
-                    futures = [pool.submit(self.__process_task, task) for task in tasks]
-                    for task, future in zip(state.task_list[idx], futures):
-                        task.result = future.result()
-                        unit_syntheses.append(task.result)
-        state.chat_history.append(self.__aggregate_results("\n\n".join(unit_syntheses)))
-        return state
+            draft_task = Task(
+                description = DRAFT_AGENT_PROMPT.format(
+                    evidence = mcp_outputs,
+                    user_message = user_message,
+                    shortterm_memory = shortterm_memory,
+                    revision_notes = revision_notes,
+                ),
+                expected_output = "DraftOutput JSON.",
+                agent = draft_agent,
+                output_pydantic = DraftAgentState,
+            )
+            critic_task = Task(
+                description = CRITIC_AGENT_PROMPT.format(
+                    evidence = mcp_outputs,
+                    user_message = user_message
+                ),
+                expected_output = "CritiqueOutput JSON.",
+                agent = critic_agent,
+                output_pydantic = CritiqueAgentState,
+                context = [draft_task],
+            )
+            tasks = [draft_task, critic_task]
+            agents = [draft_agent, critic_agent]
+            draft_idx, critic_idx = 0, 1
 
+            crew = Crew(
+                agents = agents,
+                tasks = tasks,
+                process = Process.sequential,
+                verbose = False,
+            )
+            try:
+                crew.kickoff()
+            except Exception:
+                break
 
-class Evaluator(Runnable):
-    def __init__(self):
-        pass
-
-    def invoke(self, state: GraphState, config = None):
-        # TODO: CrewAI
+            critic_obj = tasks[critic_idx]
+            if isinstance(critic_obj, CritiqueAgentState) and critic_obj.pass_fail == "pass":
+                break
+            revision_notes = critic_obj.feedback
         return state
 
 
@@ -247,7 +295,7 @@ class SchemaUpdater(Runnable):
             self,
             shortterm_memory_size: int
         ):
-        self.__shortterm_memory_size = 5
+        self.__shortterm_memory_size = shortterm_memory_size
 
     def invoke(self, state: GraphState, config = None):
         state.user_inputs = state.task_list = None

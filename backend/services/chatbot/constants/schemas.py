@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from langchain_core.messages import AnyMessage
 from langgraph.graph.message import add_messages
 from pydantic import BaseModel, Field
-from typing import Annotated, Any, Callable, Dict, List, Optional
+from typing import Annotated, Any, Callable, Dict, List, Literal, Optional
 
 # ==================== Graph State ====================
 class ToolCallState(BaseModel):
@@ -30,6 +30,15 @@ class TaskState(BaseModel):
     message: Optional[str] = None
     feedback: Optional[str] = None
     result: Optional[str] = None
+
+
+class DraftAgentState(BaseModel):
+    reply_text: str = ""
+
+
+class CritiqueAgentState(BaseModel):
+    pass_fail: Literal["pass", "fail"]
+    feedback: str = ""
 
 
 class SubMessageState(BaseModel):

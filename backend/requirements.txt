@@ -31,6 +31,9 @@ langchain-google-genai>=2.0.0
 langchain-huggingface==0.1.2
 langgraph==0.4.5
 
+# Multi-agent orchestration
+crewai>=0.126.0
+
 # Model Context Protocol (agent router stdio server + client)
 mcp>=1.2.0
 

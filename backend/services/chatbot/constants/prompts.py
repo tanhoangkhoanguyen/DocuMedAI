@@ -53,7 +53,7 @@ Output:
 }]
 """
 
-# ==================== NodeController prompt ====================
+# ==================== RAG prompt ====================
 PARAPHRASE_MESSAGE_PROMPT = """
 You are an expert in message rephrasing.
 Generate {number} versions of the user’s message that keep the original meaning but express it in different ways to improve search coverage.
@@ -70,7 +70,7 @@ Input: "Lionel Messi's was born in what country?"
 Output: "What is Lionel Messi's personal history?"
 """
 
-# ==================== Agent (MCP planner + synthesis) ====================
+# ==================== Agents ====================
 AGENT_PLANNER_PROMPT = """
 You are a planning assistant that chooses MCP tools for each user sub-message.
 
@@ -90,19 +90,22 @@ USER SUB-MESSAGE TO SATISFY:
 {message}
 """
 
-AGGREGATE_AND_REVISE_PROMPT = """
-You combine several tool/MCP result snippets into one coherent answer for the user.
+DRAFT_AGENT_PROMPT = """
+USER_MESSAGE:\n{user_message}
 
-OUTPUT RULES
-- Merge content clearly (sections or bullets when helpful).
-- Apply FORMATTING / STYLE instruction below strictly when non-empty.
+EVIDENCE:\n{evidence}
 
-USER CONTEXT (may be empty):
-{context}
+SHORT_TERM_MEMORY (May use for conversational continuity only. Do not treat it as new evidence beyond what the user already said):\n{shortterm_memory}
 
-USER FORMATTING INSTRUCTION (may be empty):
-{instruction}
+PRIOR_CRITIC_REVISION_INSTRUCTIONS:\n{revision_notes}
 
-TOOL RESULTS (each block addresses part of the user's requests):
-{blocks}
+Return a ground reply_text.
+"""
+
+CRITIC_AGENT_PROMPT = """
+Evaluate the draft against USER_MESSAGE and EVIDENCE_PACKAGE_JSON.
+If the resposne perfectly answer the user's request, return pass. Otherwise, return fail and feedback.
+EVIDENCE_PACKAGE_JSON:\n{evidence}
+
+USER_MESSAGE:\n{user_message}
 """
