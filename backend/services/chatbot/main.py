@@ -39,15 +39,21 @@ def call_agent(user_input: str, chat_id: str):
 
 def test_chatbot():
     call_agent("""
-        Hi chatbot.
+        Hi - quick question: what’s the difference between stenosis and stenotic when people describe blood vessels? I’m trying to use the words correctly.
+    """, chat_id = "12345")
+    call_agent("""
+        Unrelated: I’m picking a laptop for coding — would you lean toward more RAM or a faster CPU if you had to choose one?
+    """, chat_id = "12345")
+    call_agent("""
+        Do you remember what I asked you earlier about those medical words for blood vessels? Which term fits better if I am describing a narrowed vessel? My laptop and this are not related (2 topics) right?
     """, chat_id = "12345")
 
 
 if __name__ == "__main__":
     # Fast and low cost, with low intelligence large language model.
     # Reference: https://platform.openai.com/docs/models/compare
-    # chat_model = "gpt-4o-mini"
-    chat_model = "gemini-2.5-flash"
+    chat_model = "gpt-4o-mini"
+    # chat_model = "gemini-2.5-flash"
     temperature = 0
 
     # Fast, medium quality embedding model.
@@ -105,7 +111,7 @@ if __name__ == "__main__":
         raise
 
     shortterm_memory_size = 5
-    max_revision_cycles = 3
+    max_revision_cycles = 2
 
     global graph
     graph = build_graph(

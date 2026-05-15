@@ -36,12 +36,12 @@ class MCPServer:
             rag_threshold: float,
             extra_tools: Optional[Sequence[McpToolDefinition]] = None
         ):
-        self.chat_model = chat_model,
-        self.temperature = temperature,
-        self.embedding_model = embedding_model,
-        self.embedding_dimension = embedding_dimension,
-        self.reranking_model = reranking_model,
-        self.rag_threshold = rag_threshold,
+        self.chat_model = chat_model
+        self.temperature = temperature
+        self.embedding_model = embedding_model
+        self.embedding_dimension = embedding_dimension
+        self.reranking_model = reranking_model
+        self.rag_threshold = rag_threshold
 
         self.__registry: Dict[str, McpToolDefinition] = {}
         self._build_mcp_registry(extra_tools or ())

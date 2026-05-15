@@ -32,7 +32,7 @@ class RAG:
         reranking_model: str,
         reranking_threshold: float,
     ):
-        self.__llm = ChatGoogleGenerativeAI(
+        self.__llm = ChatOpenAI(
             model = chat_model,
             temperature = temperature,
         )

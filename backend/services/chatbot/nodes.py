@@ -3,8 +3,9 @@ from concurrent.futures import ThreadPoolExecutor
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langchain_core.runnables import Runnable
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_openai import ChatOpenAI
 from pydantic import BaseModel
-from typing import List
+from typing import Any, List, Optional, Type
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -55,7 +56,7 @@ class TopicChecker(Runnable):
             reranking_model = reranking_model,
             reranking_threshold = topic_threshold
         )
-        self.__llm = ChatGoogleGenerativeAI(
+        self.__llm = ChatOpenAI(
                 model = chat_model,
                 temperature = temperature
             )
@@ -106,7 +107,7 @@ class MessageAnalysis(Runnable):
         user_inputs: List[SubMessageState]
 
     def __init__(self, chat_model: str, temperature: float):
-        self.__llm = ChatGoogleGenerativeAI(
+        self.__llm = ChatOpenAI(
                 model = chat_model,
                 temperature = temperature
             )
@@ -199,6 +200,15 @@ class Agents(Runnable):
     class planner_output_schema(BaseModel):
         tool_calls: List[ToolCallState]
 
+    @staticmethod
+    def get_crew_model(chat_model: str):
+        if "/" in chat_model:
+            return chat_model
+        if chat_model.startswith(("gpt")):
+            return f"openai/{chat_model}"
+        if chat_model.startswith(("gemini")):
+            return f"gemini/{chat_model}"
+
     def __init__(
             self,
             chat_model: str,
@@ -211,13 +221,12 @@ class Agents(Runnable):
             shortterm_memory_size: int,
             max_revision_cycles: int,
         ):
-        self.__llm = ChatGoogleGenerativeAI(
+        self.__llm = ChatOpenAI(
             model = chat_model,
             temperature = temperature,
         )
-        crew_model = chat_model if "/" in chat_model else f"gemini/{chat_model}"
         self.__crew_llm = LLM(
-            model = crew_model,
+            model = Agents.get_crew_model(chat_model),
             temperature = temperature,
         )
         self.__max_workers = max_workers
@@ -276,6 +285,38 @@ class Agents(Runnable):
                 seen.add(ctx)
                 out.append(ctx)
         return '\n'.join(out) if out else ""
+
+    @staticmethod
+    def __parse_crew_output(model_cls: Type[BaseModel], raw: Any) -> Optional[BaseModel]:
+        """
+        CrewAI Task.output is TaskOutput class
+        """
+        if raw is None:
+            return None
+        if isinstance(raw, model_cls):
+            return raw
+        for x in (
+            getattr(raw, "pydantic", None),
+            getattr(raw, "json_dict", None),
+            getattr(raw, "raw", None),
+            raw,
+        ):
+            if isinstance(x, dict) and x:
+                try:
+                    return model_cls.model_validate(x)
+                except Exception:
+                    pass
+            elif isinstance(x, str) and x.strip():
+                try:
+                    return model_cls.model_validate_json(x.strip())
+                except Exception:
+                    pass
+        if isinstance(raw, BaseModel):
+            try:
+                return model_cls.model_validate(raw.model_dump())
+            except Exception:
+                pass
+        return None
 
     def invoke(self, state: GraphState, config = None):
         long_term_memory = Agents.__get_long_term_memory(state.task_list)
@@ -352,16 +393,17 @@ class Agents(Runnable):
             except Exception:
                 break
 
-            draft_out = getattr(draft_task, "output", None)
-            if isinstance(draft_out, DraftAgentState) and draft_out.reply_text:
-                last_reply = draft_out.reply_text
+            parsed_draft = Agents.__parse_crew_output(DraftAgentState, getattr(draft_task, "output", None))
+            if parsed_draft and parsed_draft.reply_text:
+                last_reply = parsed_draft.reply_text
 
-            critic_out = getattr(critic_task, "output", None)
-            if isinstance(critic_out, CritiqueAgentState) and critic_out.pass_fail == "pass":
+            parsed_critic = Agents.__parse_crew_output(CritiqueAgentState, getattr(critic_task, "output", None))
+            if parsed_critic and parsed_critic.pass_fail == "pass":
                 break
-            revision_notes = critic_out.feedback if isinstance(critic_out, CritiqueAgentState) else ""
+            revision_notes = parsed_critic.feedback if parsed_critic else ""
 
-        return {"chat_history": [AIMessage(content = last_reply)]}
+        state.chat_history.append(AIMessage(content = last_reply))
+        return state
 
 
 class SchemaUpdater(Runnable):

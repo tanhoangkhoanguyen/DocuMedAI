@@ -110,11 +110,11 @@ CONTEXT FOR THIS TASK:
 """
 
 DRAFT_AGENT_PROMPT = """
-Answer the user using ONLY:
+Ground your answer ONLY in the materials below (internal — never quote their headings or imply you “looked something up”):
 (1) EVIDENCE (tool outputs and retrievals),
-(2) LONG_TERM_MEMORY (deduplicated snippets from prior-topic memory — factual continuity; do not invent beyond them),
-(3) SHORT_TERM_MEMORY (recent dialogue, for continuity only — do not invent facts from it),
-(4) implied USER_MESSAGE.
+(2) LONG_TERM_MEMORY (prior-topic snippets for factual continuity only),
+(3) SHORT_TERM_MEMORY (recent dialogue for continuity only — not a separate fact source),
+(4) USER_MESSAGE.
 
 USER_MESSAGE:
 {user_message}
@@ -131,18 +131,25 @@ SHORT_TERM_MEMORY (continuity only; not independent evidence):
 PRIOR_CRITIC_REVISION_INSTRUCTIONS:
 {revision_notes}
 
-If evidence is insufficient, say what is missing instead of guessing.
-Return a grounded reply_text in the structured output.
+STYLE FOR reply_text
+- Write plain, direct prose as if speaking to the user. Do not name or reference: evidence, retrieval, tools, memory (long/short), databases, sources, passages, snippets, or similar system terms.
+- Do not say "based on what you told me before", "from memory", "according to the context", etc.; just answer naturally while staying faithful to the materials above.
+If the materials are insufficient to answer safely, say briefly what is missing — still without naming those internal labels.
+Return reply_text in the structured output only.
 """
 
 CRITIC_AGENT_PROMPT = """
-Evaluate the draft against USER_MESSAGE, EVIDENCE, LONG_TERM_MEMORY, and SHORT_TERM_MEMORY.
+Evaluate the draft against USER_MESSAGE and the same internal materials the drafter used: EVIDENCE, LONG_TERM_MEMORY, SHORT_TERM_MEMORY.
 
-Pass only if:
-- Every explicit user request in USER_MESSAGE is addressed without fabrication, and
-- The draft follows any instruction implied by USER_MESSAGE, and
-- No claims appear that are not supported by EVIDENCE and/or LONG_TERM_MEMORY where applicable, and
-- SHORT_TERM_MEMORY is used only for continuity (no new unsupported facts drawn only from it).
+Requirements:
+- Every explicit ask in USER_MESSAGE is addressed without fabrication.
+- Grounding (internal): factual claims must be supported by EVIDENCE and/or LONG_TERM_MEMORY as applicable; SHORT_TERM_MEMORY only for continuity — no new unsupported facts from it alone.
+
+User-facing wording:
+- Fail if reply_text names or exposes internals: evidence, retrieval, tools, long-term memory, short-term memory, database, source, passage, snippet, or similar system jargon.
+
+USER_MESSAGE:
+{user_message}
 
 EVIDENCE:
 {evidence}
@@ -153,8 +160,5 @@ LONG_TERM_MEMORY (deduplicated; may be empty):
 SHORT_TERM_MEMORY:
 {shortterm_memory}
 
-USER_MESSAGE:
-{user_message}
-
-If the response perfectly satisfies the above, return pass. Otherwise return fail with concrete feedback.
+Return pass only if all rules hold. Otherwise fail with concrete feedback for the drafter (feedback may name EVIDENCE/MEMORY for revision — it is not shown to the end user).
 """
