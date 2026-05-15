@@ -1,4 +1,5 @@
 from datetime import datetime
+from pathlib import Path
 
 import logging
 
@@ -16,6 +17,8 @@ class SimpleLogger:
         ):
         self.name = name
         self.level = getattr(logging, level.upper())
+        self.logs_dir = Path("logs")
+        self.logs_dir.mkdir(exist_ok=True)
         self._setup_logging()
 
     def _setup_logging(self):

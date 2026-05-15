@@ -1,6 +1,5 @@
 ---
 description: How to add or edit Cursor rules in our project
-globs:
 alwaysApply: false
 ---
 # Cursor Rules Location
@@ -35,14 +34,21 @@ How to add new cursor rules to the project
     - In subdirectories outside .cursor/rules
     - In any other location
 
-5. Cursor rules have the following structure:
+5. Cursor rules use YAML frontmatter between `---` lines, then markdown body. Per [Cursor Rules](https://cursor.com/docs/rules):
+
+   - **Always Apply**: `alwaysApply: true` (globs/description ignored for inclusion).
+   - **Apply to specific files**: `alwaysApply: false` with `globs` set to a pattern (comma-separated patterns allowed, e.g. `src/**/*.tsx, src/**/*.ts`).
+   - **Apply intelligently**: `alwaysApply: false` with a good `description` and no `globs` (Agent pulls the rule when relevant).
+
+Example frontmatter and body:
 
 ```
 ---
 description: Short description of the rule's purpose
-globs: optional/path/pattern/**/*
+globs: backend/**/*.py
 alwaysApply: false
 ---
+
 # Rule Title
 
 Main content explaining the rule with markdown formatting.
@@ -50,8 +56,9 @@ Main content explaining the rule with markdown formatting.
 1. Step-by-step instructions
 2. Code examples
 3. Guidelines
+```
 
-Example:
+Code samples in the rule body use normal fenced blocks, for example:
 
 ```typescript
 // Good example

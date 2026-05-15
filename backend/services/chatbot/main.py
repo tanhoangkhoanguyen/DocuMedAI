@@ -1,6 +1,7 @@
 from langchain_core.messages import HumanMessage, AIMessage
 
-import os, json
+import os, json, warnings
+warnings.filterwarnings("ignore")
 
 from services.chatbot.workflow import build_graph
 from services.chatbot.constants.schemas import GraphState
@@ -45,7 +46,7 @@ def test_chatbot():
 if __name__ == "__main__":
     # Fast and low cost, with low intelligence large language model.
     # Reference: https://platform.openai.com/docs/models/compare
-    chat_model = "gpt-4o-mini"
+    # chat_model = "gpt-4o-mini"
     chat_model = "gemini-2.5-flash"
     temperature = 0
 
@@ -82,13 +83,6 @@ if __name__ == "__main__":
         ids, queries, embedded_queries = [], [], []
         total_indexing_time = 0
 
-        def indexing():
-            ids, queries, embedded_queries
-            qdrant_client.push_documents(
-                "MedicalTerms", ids, queries, embedded_queries
-            )
-            ids, queries, embedded_queries = [], [], []
-
         with open("vector_database_tests/dataset/gamino-wiki_medical_terms-1.jsonl", 'r', encoding = "utf-8") as f:
             for obj in f:
                 object = json.loads(obj)
@@ -97,15 +91,34 @@ if __name__ == "__main__":
                 embedded_queries.append(object["embedded_test"])
 
                 if len(ids) == batch_size:
-                    indexing()
+                    qdrant_client.push_documents(
+                        "MedicalTerms", ids, queries, embedded_queries
+                    )
+                    ids, queries, embedded_queries = [], [], []
             if ids:
-                indexing()
+                qdrant_client.push_documents(
+                    "MedicalTerms", ids, queries, embedded_queries
+                )
+                ids, queries, embedded_queries = [], [], []
     except Exception as e:
         _LOGGER.error(f"Failed to upload dataset for Qdrant\n\t{str(e)}")
         raise
 
+    shortterm_memory_size = 5
+    max_revision_cycles = 3
 
     global graph
     graph = build_graph(
+        chat_model = chat_model,
+        temperature = temperature,
+        embedding_model = embedding_model,
+        embedding_dimension = embedding_dimension,
+        reranking_model = reranking_model,
+        max_workers = max_workers,
+        topic_threshold = topic_threshold,
+        qdrant_threshold = qdrant_threshold,
+        rag_threshold = rag_threshold,
+        shortterm_memory_size = shortterm_memory_size,
+        max_revision_cycles = max_revision_cycles,
     )
     test_chatbot()

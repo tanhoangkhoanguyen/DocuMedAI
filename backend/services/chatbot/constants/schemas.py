@@ -1,8 +1,28 @@
 from dataclasses import dataclass
 from langchain_core.messages import AnyMessage
 from langgraph.graph.message import add_messages
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Annotated, Any, Callable, Dict, List, Literal, Optional
+
+
+# ==================== User Data ====================
+class UserData(BaseModel):
+    user_id: str
+    chat_id: List[str]
+
+
+class UserChat(BaseModel):
+    chat_id: str
+    chat_name: str
+    chat_history: List[dict]
+
+
+class UserInfo(BaseModel):
+    user_id: str = "2b656bec-983f-571b-88b3-9cea12d3e654"
+    user_name: str = "Admin"
+    password: str = "Admin123"
+    plan: Literal["Free", "Pro"] = "Free"
+
 
 # ==================== Graph State ====================
 class ToolCallState(BaseModel):
@@ -23,13 +43,18 @@ class McpToolDefinition:
 
 class ToolParameter(BaseModel):
     message: str
+    chat_model: str
+    temperature: float
+    embedding_model: str
+    embedding_dimension: int
+    reranking_model: str
+    rag_threshold: float
 
 
 class TaskState(BaseModel):
-    context: Optional[str] = None
-    message: Optional[str] = None
-    feedback: Optional[str] = None
-    result: Optional[str] = None
+    context: str = Field(default_factory = str)
+    message: str = Field(default_factory = str)
+    result: str = Field(default_factory = str)
 
 
 class DraftAgentState(BaseModel):
@@ -48,26 +73,15 @@ class SubMessageState(BaseModel):
 
 
 class GraphState(BaseModel):
-    chat_history: Annotated[List[AnyMessage], add_messages]
+    user_info: UserInfo = Field(default_factory = lambda: UserInfo())
+    chat_history: Annotated[List[AnyMessage], add_messages] = Field(default_factory = list)
     user_inputs: Optional[List[SubMessageState]] = None
-    task_list: Optional[List[List[TaskState]]] = None
-    shortterm_memory: Optional[List[str]] = None
+    task_list: Optional[List[List[TaskState]]] = Field(default_factory = list)
+    shortterm_memory: List[str] = Field(default_factory = list)
 
-
-# ==================== User Data ====================
-class UserData(BaseModel):
-    user_id: str
-    chat_id: List[str]
-
-
-class UserChat(BaseModel):
-    chat_id: str
-    chat_name: str
-    chat_history: List[dict]
-
-
-class UserInfo(BaseModel):
-    user_id: str
-    user_name: str
-    password: str
-    plan: str
+    @field_validator("shortterm_memory", mode = "before")
+    @classmethod
+    def _default_shortterm(cls, v):
+        if v is None:
+            return []
+        return v

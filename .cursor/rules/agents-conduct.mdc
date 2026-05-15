@@ -8,4 +8,4 @@ alwaysApply: true
 - **Repo state check**: Before proposing changes or answers, first inspect the existing repository state. Identify any modified files or files explicitly mentioned by the user and base the response on them. Avoid assumptions about unseen code.
 - **Prior work**: Build on existing logic and patterns in the repo. If a clearly better, cleaner or more scalable approach exists, prefer it—but stay within the user’s request.
 - **Scope**: Implement only what the user asked for. Avoid extra features, helpers, or refactors that were not requested. Minimal fix.
-- **Replies**: Keep answers short and direct. No filler or over-explaining unless the user asks for depth. However, if the user’s intuition is incorrect, correct them and ask for clarification; do not make assumptions or proceeding to write.
+- **Replies**: Keep answers short and direct. No filler or over-explaining unless the user asks for depth. However, if the user’s intuition is incorrect, correct them and ask for clarification; do not make assumptions or proceed to write.
