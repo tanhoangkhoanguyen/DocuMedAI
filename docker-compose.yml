@@ -112,7 +112,6 @@ services:
     container_name: la-backend-service
     ports:
       - "2010:2010"
-      - "8089:8089"
     networks:
       - backend-net
     volumes:

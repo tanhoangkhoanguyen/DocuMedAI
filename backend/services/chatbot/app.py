@@ -18,7 +18,7 @@ _LOGGER = get_logger(name = "chatbot_api", level = "INFO")
 
 def _build_graph():
     return build_graph(
-        chat_model = "gemini-2.5-flash",
+        chat_model = "gpt-4o-mini",
         temperature = 0,
         embedding_model = "sentence-transformers/all-MiniLM-L6-v2",
         embedding_dimension = 384,
@@ -35,15 +35,15 @@ def _build_graph():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.graph = _build_graph()
-    _LOGGER.info("Chatbot graph compiled for FastAPI.")
+    _LOGGER.info("Chatbot FastAPI.")
     yield
 
 
 app = FastAPI(title = "DocuMedAI Chatbot", lifespan = lifespan)
 
 
-@app.post("/chat", response_class = PlainTextResponse)
-def chat(payload: GraphState, thread_id: str = "12345") -> PlainTextResponse:
+@app.post("/chatbot", response_class = PlainTextResponse)
+def chatbot(payload: GraphState, thread_id: str = "12345") -> PlainTextResponse:
     try:
         result = app.state.graph.invoke(
             input = payload,
@@ -72,6 +72,16 @@ if __name__ == "__main__":
     uvicorn.run(
         "services.chatbot.app:app",
         host = "0.0.0.0",
-        port = 6107,
+        port = 2010,
         reload = False,
     )
+
+# Example input
+# {
+#   "chat_history": [
+#     {
+#       "type": "human",
+#       "content": "Hi chatbot"
+#     }
+#   ]
+# }
