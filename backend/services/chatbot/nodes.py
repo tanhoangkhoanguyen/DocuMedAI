@@ -39,7 +39,7 @@ _SHARED_QDRANT_CLIENT = QdrantClient(
     embedding_model = "sentence-transformers/all-MiniLM-L6-v2",
     embedding_dimension = 384
 )
-_SHARED_PATTERN_CIPHER = PatternCipher
+_SHARED_PATTERN_CIPHER = PatternCipher()
 
 
 class TopicChecker(Runnable):
@@ -87,7 +87,7 @@ class TopicChecker(Runnable):
         embedded_resp = self.__qdrant_client.embed_query(summarized_resp)
         self.__qdrant_client.push_documents(
             LONGTERM_COLLECTION,
-            [self.__pattern_cipher.encode_user_id(state.user_info.user_name)],
+            [self.__pattern_cipher.hash_user_id(state.user_info.username)],
             [summarized_resp],
             [embedded_resp],
         )
@@ -226,7 +226,7 @@ class Agents(Runnable):
             temperature = temperature,
         )
         self.__crew_llm = LLM(
-            model = Agents.get_crew_model(chat_model),
+            model = self.get_crew_model(chat_model),
             temperature = temperature,
         )
         self.__max_workers = max_workers
@@ -252,7 +252,7 @@ class Agents(Runnable):
             ),
             HumanMessage(content = f"USER MESSAGE:\n{task.message}")
         ]
-        return self.__llm.with_structured_output(Agents.planner_output_schema).invoke(prompt)
+        return self.__llm.with_structured_output(self.planner_output_schema).invoke(prompt)
 
     def __process_task(self, task: TaskState):
         plan = self.__run_planner(task)
@@ -319,7 +319,7 @@ class Agents(Runnable):
         return None
 
     def invoke(self, state: GraphState, config = None):
-        long_term_memory = Agents.__get_long_term_memory(state.task_list)
+        long_term_memory = self.__get_long_term_memory(state.task_list)
         shortterm_memories = state.shortterm_memory or []
         shortterm_memory = "\n".join(shortterm_memories[-1 * self.__shortterm_memory_size:])
         user_message = state.chat_history[-1].content
@@ -393,11 +393,11 @@ class Agents(Runnable):
             except Exception:
                 break
 
-            parsed_draft = Agents.__parse_crew_output(DraftAgentState, getattr(draft_task, "output", None))
+            parsed_draft = self.__parse_crew_output(DraftAgentState, getattr(draft_task, "output", None))
             if parsed_draft and parsed_draft.reply_text:
                 last_reply = parsed_draft.reply_text
 
-            parsed_critic = Agents.__parse_crew_output(CritiqueAgentState, getattr(critic_task, "output", None))
+            parsed_critic = self.__parse_crew_output(CritiqueAgentState, getattr(critic_task, "output", None))
             if parsed_critic and parsed_critic.pass_fail == "pass":
                 break
             revision_notes = parsed_critic.feedback if parsed_critic else ""

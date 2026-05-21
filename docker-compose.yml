@@ -70,21 +70,22 @@ services:
     volumes:
       - ./backend/vector_database_tests/utils/data_storage/weaviate_data:/var/lib/weaviate
 
-  la-mongodb:
+  la-mongo:
     image: mongo:8.0.13-noble
     restart: unless-stopped
-    container_name: la-mongodb-service
+    container_name: la-mongo-service
     ports:
       - "8006:27017"
     networks:
       - backend-net
     volumes:
-      - ./backend/vector_database_tests/utils/data_storage/mongodb_data:/data/db
+      - ./backend/vector_database_tests/utils/data_storage/mongo_data:/data/db
 
   la-redis:
     image: redis:7.2-alpine
     restart: unless-stopped
     container_name: la-redis-service
+    command: redis-server --notify-keyspace-events Ex
     ports:
       - "8007:6379"
     networks:
@@ -104,7 +105,7 @@ services:
       - la-milvus
       - la-pinecone
       - la-weaviate
-      - la-mongodb
+      - la-mongo
       - la-redis
     stdin_open: true
     tty: true
@@ -116,6 +117,26 @@ services:
       - backend-net
     volumes:
       - ./backend:/backend
+
+  la-frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+    container_name: la-frontend-service
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      INTERNAL_API_BASE: http://la-backend:2010
+      NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+    depends_on:
+      - la-backend
+    networks:
+      - backend-net
 
 networks:
   backend-net:

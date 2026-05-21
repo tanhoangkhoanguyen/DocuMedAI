@@ -6,23 +6,28 @@ from datetime import datetime
 
 class PatternCipher:
     def __init__(self):
-        self.__namespace = uuid.UUID(os.getenv("UUID_self.__namespace"))
-        return
+        raw_uuid = os.getenv("UUID_NAMESPACE")
+        if not raw_uuid:
+            raise ValueError("UUID_NAMESPACE is not configured")
+        self.__namespace = uuid.UUID(raw_uuid)
 
-    def encode_username(self, plain: str) -> str:
+    def hash_username(self, plain: str) -> str:
         return str(uuid.uuid5(self.__namespace, plain))
 
-    def encode_password(self, plain: str) -> str:
+    def hash_password(self, plain: str) -> str:
         salt = bcrypt.gensalt()
-        hashed = bcrypt.hashpw(password = plain.encode('utf-8'), salt = salt)
+        hashed = bcrypt.hashpw(plain.encode("utf-8"), salt=salt)
         return hashed.decode("utf-8")
 
-    def encode_user_id(
-        self,
-        user_name: str,
-    ) -> str:
-        composite = user_name + str(datetime.now(pytz.utc))
+    def hash_user_id(self, username: str) -> str:
+        composite = username + str(datetime.now(pytz.utc))
         return str(uuid.uuid5(self.__namespace, composite))
+
+    def stable_local_user_id(self, email: str) -> str:
+        return str(uuid.uuid5(self.__namespace, "local:" + email.strip().lower()))
+
+    def stable_supabase_user_id(self, sub: str) -> str:                                 # sub is stable per user
+        return str(uuid.uuid5(self.__namespace, "supabase:" + sub.strip()))
 
     def verify_password(self, plain: str, hashed: str) -> bool:
         return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
