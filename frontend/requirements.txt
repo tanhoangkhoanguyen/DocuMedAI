@@ -1,6 +1,0 @@
-streamlit==1.47.1
-streamlit-authenticator>=0.2.0
-PyJWT>=2.6.0
-AuthLib>=1.2.0
-requests>=2.31.0
-pydantic>=1.10

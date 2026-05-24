@@ -5,23 +5,38 @@ from pydantic import BaseModel, Field, field_validator
 from typing import Annotated, Any, Callable, Dict, List, Literal, Optional
 
 
-# ==================== User Data ====================
+# ==================== User State ====================
+class UserInfo(BaseModel):
+    user_id: str = "2b656bec-983f-571b-88b3-9cea12d3e654"
+    username: str = "Admin"
+    email: str = "admin@gmail.com"
+    password: str = "Admin123"
+    plan: Literal["Free", "Pro"] = "Free"
+
+
 class UserData(BaseModel):
     user_id: str
-    chat_id: List[str]
+    chat_ids: List[str]
 
 
 class UserChat(BaseModel):
     chat_id: str
     chat_name: str
     chat_history: List[dict]
+    shortterm_memory: List[dict]
 
 
-class UserInfo(BaseModel):
-    user_id: str = "2b656bec-983f-571b-88b3-9cea12d3e654"
-    user_name: str = "Admin"
-    password: str = "Admin123"
-    plan: Literal["Free", "Pro"] = "Free"
+class RegisterState(BaseModel):
+    email: str = Field(min_length = 2, max_length = 80)
+    password: str  = Field(min_length = 6, max_length = 128)
+
+
+class ChatRenameState(BaseModel):
+    chat_name: str = Field(min_length = 1, max_length = 200)
+
+
+class ChatMessageState(BaseModel):
+    message: str = Field(min_length = 1, max_length = 32000)
 
 
 # ==================== Graph State ====================

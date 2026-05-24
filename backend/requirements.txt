@@ -70,6 +70,7 @@ cryptography==45.0.3
 pytz==2025.2
 tenacity==9.1.4
 requests==2.33.1
+PyJWT==2.10.1
 
 # Optional performance/runtime
 uvloop==0.22.1

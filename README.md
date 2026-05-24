@@ -2,7 +2,7 @@
 [![Docker Compose](https://img.shields.io/badge/Docker--Compose-2.17.3-2496ED)](https://docs.docker.com/compose/)
 [![Qdrant](https://img.shields.io/badge/Qdrant-1.7.3-orange)](https://qdrant.tech/)
 [![Elasticsearch](https://img.shields.io/badge/Elasticsearch-8.13.4-005571)](https://www.elastic.co/elasticsearch/)
-[![MongoDB](https://img.shields.io/badge/MongoDB-4.0.1-47A248)](https://www.mongodb.com/)
+[![mongo](https://img.shields.io/badge/mongo-4.0.1-47A248)](https://www.mongo.com/)
 [![Redis](https://img.shields.io/badge/Redis-5.0.8-DC382D)](https://redis.io/)
 [![LangChain](https://img.shields.io/badge/LangChain-0.3.25-1A73E8)](https://www.langchain.com/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.111.0-009688)](https://fastapi.tiangolo.com/)
@@ -34,11 +34,11 @@
 
 **RAG Pipeline**: Dual retrieval from **Elasticsearch** and **Qdrant** with paraphrasing and generalization techniques, enhanced by **HuggingFace** reranker `BAAI/bge-reranker-v2-m3`.
 
-**DAG-based Memory Tool**: **MongoDB** stores conversation context as a DAG (user message + chatbot response); **Qdrant** (**HuggingFace** embedding model `sentence-transformers/all-MiniLM-L6-v2`) retrieves root nodes; BFS traversal retrieves related parental nodes; **HuggingFace** reranker `BAAI/bge-reranker-v2-m3` ensures top context selection. User's message is then combined with chatbot response embedded in **Qdrant** and encrypted in **MongoDB** with an assigned unique node IDs.
+**DAG-based Memory Tool**: **mongo** stores conversation context as a DAG (user message + chatbot response); **Qdrant** (**HuggingFace** embedding model `sentence-transformers/all-MiniLM-L6-v2`) retrieves root nodes; BFS traversal retrieves related parental nodes; **HuggingFace** reranker `BAAI/bge-reranker-v2-m3` ensures top context selection. User's message is then combined with chatbot response embedded in **Qdrant** and encrypted in **mongo** with an assigned unique node IDs.
 
 **Message Analysis Node**: Segments user input into context-specific chunks; each chunk can trigger multiple sub-requests based on intent classification.
 
-**Microservices Architecture**: Docker containers for five services: la-qdrant (9001), la-elasticsearch (9002), la-mongodb (9003), la-backend (9004, Swagger UI), la-frontend (9005, Streamlit UI).
+**Microservices Architecture**: Docker containers for five services: la-qdrant (9001), la-elasticsearch (9002), la-mongo (9003), la-backend (9004, Swagger UI), la-frontend (9005, Streamlit UI).
 
 **Multi-Agent Support**: Agents for chit-chat, instructional assistance, and law advisory; intent detection routes chunks to the correct agent; **Tavily** data used for final law verification.
 
@@ -68,10 +68,10 @@ ELASTIC_HOST=http://la-elasticsearch:9200
 ELASTIC_API_KEY=your_elastic_api_key
 # Default username: elastic
 
-# === MongoDB Config ===
+# === mongo Config ===
 MONGO_INITDB_ROOT_USERNAME=your_mongo_username
 MONGO_INITDB_ROOT_PASSWORD=your_mongo_password
-MONGODB_URI=mongodb+srv://<username>:<password>@<cluster-url>/?retryWrites=true&w=majority
+mongo_URI=mongo+srv://<username>:<password>@<cluster-url>/?retryWrites=true&w=majority
 
 # === Service Ports ===
 CHATBOT_SERVICE_PORT=9004
