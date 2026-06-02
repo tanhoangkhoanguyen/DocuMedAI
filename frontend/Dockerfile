@@ -1,38 +1,44 @@
+# syntax=docker/dockerfile:1
+
+
+# Multi-stage build (different stages, different filesystem)
+# Stage 1: Install pakages
 FROM node:20-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json* ./
-RUN npm ci
 
+# Docker cache for npm downloads
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci
+
+# Stage 2: Build Next.js app
 FROM node:20-alpine AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
-ARG NEXT_PUBLIC_SUPABASE_URL=dummy
-ARG NEXT_PUBLIC_SUPABASE_ANON_KEY=dummy
-ENV NEXT_PUBLIC_SUPABASE_URL=$NEXT_PUBLIC_SUPABASE_URL
-ENV NEXT_PUBLIC_SUPABASE_ANON_KEY=$NEXT_PUBLIC_SUPABASE_ANON_KEY
-ENV NEXT_TELEMETRY_DISABLED=1
+ARG NEXT_PUBLIC_SUPABASE_URL
+ARG NEXT_PUBLIC_SUPABASE_ANON_KEY
+ENV NEXT_PUBLIC_SUPABASE_URL=$NEXT_PUBLIC_SUPABASE_URL \
+    NEXT_PUBLIC_SUPABASE_ANON_KEY=$NEXT_PUBLIC_SUPABASE_ANON_KEY
 
-RUN npm run build
+RUN --mount=type=cache,target=/root/.npm \
+    npm run build
 
+# Stage 3: final small runtime image
 FROM node:20-alpine AS runner
-WORKDIR /app
+WORKDIR /frontend
 
-ENV NODE_ENV=production
-ENV NEXT_TELEMETRY_DISABLED=1
-
-RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 nextjs
+RUN addgroup --system --gid 1001 group_2
+RUN adduser --system --uid 1001 user_2
 
 COPY --from=builder /app/public ./public
-COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
-COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+COPY --from=builder --chown=user_2:group_2 /app/.next/standalone ./
+COPY --from=builder --chown=user_2:group_2 /app/.next/static ./.next/static
 
-USER nextjs
+ENV PORT=2011 \
+    HOSTNAME=0.0.0.0
 
-EXPOSE 3000
-ENV PORT=3000
-ENV HOSTNAME="0.0.0.0"
+USER user_2
 
 CMD ["node", "server.js"]

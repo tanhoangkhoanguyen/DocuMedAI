@@ -9,8 +9,6 @@ from services.chatbot.nodes import (
 
 import os, warnings
 warnings.filterwarnings("ignore")
-from dotenv import load_dotenv
-load_dotenv()
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.checkpoint.memory import MemorySaver

@@ -1,0 +1,71 @@
+# Torch & Transformers
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+torch
+transformers
+tokenizers
+sentence-transformers
+huggingface_hub
+safetensors
+
+# Math & Data
+numpy
+pandas
+scipy
+scikit-learn
+
+# Vector DB clients
+qdrant-client
+pymongo
+redis
+
+# Web / API
+fastapi
+uvicorn
+httpx
+aiohttp
+
+# LangChain
+langchain
+langchain-community
+langchain-openai
+langchain-google-genai
+langchain-huggingface
+langchain-text-splitters
+langgraph
+langgraph-checkpoint
+langgraph-prebuilt
+langgraph-sdk
+langsmith
+
+# LLM Providers
+openai
+google-genai
+tiktoken
+
+# Multi-agent orchestration
+crewai
+mcp
+
+# Database / ORM
+SQLAlchemy
+
+# Utilities
+python-dotenv
+pydantic
+pydantic-settings
+pypdf
+PyYAML
+tavily-python
+bcrypt
+cryptography
+pytz
+tenacity
+requests
+PyJWT
+
+# Optional performance/runtime
+uvloop
+httptools
+watchfiles
+orjson

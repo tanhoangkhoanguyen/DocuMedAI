@@ -42,7 +42,7 @@ export default function LoginPage() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        username: localUser.trim(),
+        email: localUser.trim(),
         password: localPass,
       }),
     });
@@ -64,7 +64,7 @@ export default function LoginPage() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        username: regUser.trim(),
+        email: regUser.trim(),
         password: regPass,
       }),
     });
@@ -87,15 +87,15 @@ export default function LoginPage() {
         </div>
 
         <section className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-6 space-y-4">
-          <h2 className="text-sm font-medium text-zinc-200">1. Username + password</h2>
+          <h2 className="text-sm font-medium text-zinc-200">1. Email + password</h2>
           <form onSubmit={passwordLogin} className="space-y-3">
             <input
-              type="text"
+              type="email"
               required
-              autoComplete="username"
+              autoComplete="email"
               value={localUser}
               onChange={(e) => setLocalUser(e.target.value)}
-              placeholder="Username"
+              placeholder="you@example.com"
               className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-zinc-500"
             />
             <input
@@ -142,17 +142,16 @@ export default function LoginPage() {
         <section className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-6 space-y-4">
           <h2 className="text-sm font-medium text-zinc-200">3. Create account (new users)</h2>
           <p className="text-xs text-zinc-500">
-            Required if you do not already have a username in the app database.
+            Required if you do not already have an account in the app database.
           </p>
           <form onSubmit={register} className="space-y-3">
             <input
-              type="text"
+              type="email"
               required
-              minLength={2}
-              autoComplete="username"
+              autoComplete="email"
               value={regUser}
               onChange={(e) => setRegUser(e.target.value)}
-              placeholder="Choose username"
+              placeholder="you@example.com"
               className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-zinc-500"
             />
             <input

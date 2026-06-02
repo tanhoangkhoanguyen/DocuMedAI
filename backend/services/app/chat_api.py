@@ -2,11 +2,11 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from typing import Any, Dict, List
 
-from services.chatbot.app.auth_deps import (
+from services.app.auth_deps import (
     get_workspace,
     require_bearer_claims
 )
-from services.chatbot.app.chatbot_workspace import ChatbotWorkspace
+from services.app.chatbot_workspace import ChatbotWorkspace
 from services.chatbot.constants.schemas import (
     ChatRenameState,
     ChatMessageState
@@ -41,11 +41,11 @@ def rename_chat(
         workspace.rename_chat(claims["id"], chat_id, body.chat_name)
     except PermissionError as exc:
         raise HTTPException(
-            status_code = 404, 
+            status_code = 404,
             detail = str(exc)
         ) from exc
     return {
-        "chat_id": chat_id, 
+        "chat_id": chat_id,
         "chat_name": body.chat_name.strip() or "Untitled",
     }
 
@@ -59,7 +59,7 @@ def get_messages(
         messages = workspace.get_messages(claims["id"], chat_id)
     except PermissionError as exc:
         raise HTTPException(
-            status_code = 404, 
+            status_code = 404,
             detail = str(exc)
         ) from exc
     return {"chat_id": chat_id, "messages": messages}
@@ -75,7 +75,7 @@ def post_message( # receive human message
     graph = getattr(request.app.state, "graph", None)
     if graph is None:
         raise HTTPException(
-            status_code = 503, 
+            status_code = 503,
             detail = "Graph not initialized"
         )
     try:
@@ -88,12 +88,12 @@ def post_message( # receive human message
         )
     except PermissionError as exc:
         raise HTTPException(
-            status_code = 404, 
+            status_code = 404,
             detail = str(exc)
         ) from exc
     except Exception as exc:
         raise HTTPException(
-            status_code = 500, 
+            status_code = 500,
             detail = str(exc)
         ) from exc
     return {"chat_id": chat_id, "reply": reply}

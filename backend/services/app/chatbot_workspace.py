@@ -2,21 +2,19 @@ from langchain_core.messages import AIMessage, HumanMessage, AnyMessage
 from typing import Any, Dict, List, Optional, Tuple
 
 import json, re
-from dotenv import load_dotenv
-load_dotenv()
 
 from logger import get_logger
 from services.chatbot.constants.schemas import GraphState, UserInfo
-from services.chatbot.tools.mongo_client import MongoClient
 from services.chatbot.tools.pattern_cipher import PatternCipher
-from services.chatbot.tools.redis_client import RedisClient
+from services.utils.mongo_client import MongoClient
+from services.utils.redis_client import RedisClient
 
 
 _SHARED_MONGO_CLIENT = MongoClient()
 _SHARED_REDIS_CLIENT = RedisClient()
 _SHARED_PATTERN_CIPHER = PatternCipher()
 _LOGGER = get_logger(
-    name = "chatbot_workspace", 
+    name = "chatbot_workspace",
     level = "INFO"
 )
 
@@ -35,7 +33,7 @@ class ChatbotWorkspace:
         self.__graph = graph
 
         # Start the service
-        self.__redis_client.start_expire_listener(self._on_redis_expired)        
+        self.__redis_client.start_expire_listener(self._on_redis_expired)
 
     def close(self) -> None:
         self.__mongo_client.close()
@@ -302,7 +300,7 @@ class ChatbotWorkspace:
         cache_key = self._user_cache_key(email)
         cached = self.__redis_client.get_key(_WORKSPACE_COLLECTION, cache_key)
         if cached is not None:
-            if cached is not password:
+            if cached != password:
                 raise ValueError("bad_credentials")
             return str(cached["user_id"]), str(cached["username"])
 
@@ -313,7 +311,7 @@ class ChatbotWorkspace:
         )
         if doc is None or not doc.get("password"):
             raise ValueError("bad_credentials")
-        if password is not doc["password"]:
+        if password != doc["password"]:
             raise ValueError("bad_credentials")
         self.__redis_client.set_key(
             _WORKSPACE_COLLECTION,
@@ -345,7 +343,7 @@ class ChatbotWorkspace:
         self.__mongo_client.insert_chat(chat_id, chat_name, user_id)
         self.__redis_client.delete_key(_WORKSPACE_COLLECTION, cache_key)
         return {
-            "chat_id": chat_id, 
+            "chat_id": chat_id,
             "chat_name": chat_name,
         }
 

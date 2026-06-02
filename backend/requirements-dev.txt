@@ -1,0 +1,11 @@
+# Vector DB clients (tests only)
+chromadb
+weaviate-client
+pymilvus
+
+# Data processing (tests only)
+datasets
+pyarrow
+
+# Load testing
+locust
