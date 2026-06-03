@@ -17,7 +17,10 @@ from services.chatbot.constants.schemas import RegisterState
 
 
 auth_router = APIRouter(tags = ["authentication"])
-_LOGGER = get_logger(name = "auth_api", level = "INFO")
+_LOGGER = get_logger(
+    name = "auth_api", 
+    level = "INFO"
+)
 
 
 @auth_router.post("/auth/register")
@@ -79,6 +82,7 @@ def auth_login(
         workspace: ChatbotWorkspace = Depends(get_workspace),
     ) -> Dict[str, str]:
     try:
+        _LOGGER.info("Attempting to login for user: %s", body.email)
         id, username = workspace.verify_login(body.email, body.password)
     except ValueError as exc:
         raise HTTPException(

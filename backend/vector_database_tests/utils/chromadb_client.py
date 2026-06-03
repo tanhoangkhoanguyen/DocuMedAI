@@ -9,6 +9,7 @@ LOGGER = get_logger(
     name = "Chromadb_tool",
     level = "INFO"
 )
+_CHROMADB_DICT = {}
 
 class ChromadbClient:
     def __init__(
@@ -135,3 +136,15 @@ class ChromadbClient:
         except Exception as e:
             LOGGER.error(f"Failed to retrieve from collection '{collection_name}'\n\t{str(e)}")
             return []
+
+
+def get_chromadb_client(
+        embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2",
+        embedding_dimension: int = 384
+    ):
+    if not embedding_model in _CHROMADB_DICT:
+        _CHROMADB_DICT[embedding_model] = ChromadbClient(
+            embedding_model = embedding_model,
+            embedding_dimension = embedding_dimension
+        )
+    return _CHROMADB_DICT[embedding_model]

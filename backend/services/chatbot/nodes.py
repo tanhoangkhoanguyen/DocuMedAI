@@ -9,8 +9,6 @@ from typing import Any, List, Optional, Type
 
 import warnings
 warnings.filterwarnings("ignore")
-from dotenv import load_dotenv
-load_dotenv()
 
 from services.chatbot.constants.schemas import (
     GraphState,
@@ -28,18 +26,13 @@ from services.chatbot.constants.prompts import (
     DRAFT_AGENT_PROMPT,
     CRITIC_AGENT_PROMPT
 )
-from vector_database_tests.utils.qdrant_client import QdrantClient
-from services.chatbot.mcp import MCPServer
-from services.chatbot.tools.rag import RAG
-from services.chatbot.tools.pattern_cipher import PatternCipher
+from vector_database_tests.utils.qdrant_client import get_qdrant_client
+from services.chatbot.mcp import get_mcp_client
+from services.chatbot.tools.rag import get_rag_client
+from services.chatbot.tools.pattern_cipher import get_pattern_cipher
 
 
 LONGTERM_COLLECTION = "LongtermMemory"
-_SHARED_QDRANT_CLIENT = QdrantClient(
-    embedding_model = "sentence-transformers/all-MiniLM-L6-v2",
-    embedding_dimension = 384
-)
-_SHARED_PATTERN_CIPHER = PatternCipher()
 
 
 class TopicChecker(Runnable):
@@ -47,28 +40,35 @@ class TopicChecker(Runnable):
             self, 
             chat_model: str,
             temperature: float,
-            reranking_model: str,
             topic_threshold: float,
+            embedding_model: str,
+            embedding_dimension: int,
+            reranking_model: str,
+            reranking_threshold: float,
         ):
-        self.__rag_client = RAG(
-            chat_model = chat_model,
-            temperature = temperature,
-            reranking_model = reranking_model,
-            reranking_threshold = topic_threshold
-        )
         self.__llm = ChatOpenAI(
                 model = chat_model,
                 temperature = temperature
             )
-        self.__qdrant_client = _SHARED_QDRANT_CLIENT
-        self.__pattern_cipher = _SHARED_PATTERN_CIPHER
+        self.__rag_client = get_rag_client(
+            chat_model = chat_model,
+            temperature = temperature,
+            reranking_model = reranking_model,
+            reranking_threshold = reranking_threshold,
+        )
+        self.__qdrant_client = get_qdrant_client(
+            embedding_model = embedding_model,
+            embedding_dimension = embedding_dimension,
+        )
+        self.__pattern_cipher = get_pattern_cipher()
+        self.__topic_threshold = topic_threshold
 
     def invoke(self, state: GraphState, config = None):
         shortterm_memories = state.shortterm_memory or []
         compressed = "\n".join(shortterm_memories)
         user_msg = state.chat_history[-1].content
 
-        if self.__rag_client.same_topic(user_msg, compressed):
+        if self.__rag_client.same_topic(user_msg, compressed, self.__topic_threshold):
             return state
 
         if not shortterm_memories:
@@ -132,9 +132,14 @@ class LongTermMemoryRetriever(Runnable):
     def __init__(
             self,
             qdrant_threshold: float,
-            max_workers: int
+            max_workers: int,
+            embedding_model: str,
+            embedding_dimension: int,
         ):
-        self.__qdrant_client = _SHARED_QDRANT_CLIENT
+        self.__qdrant_client = get_qdrant_client(
+            embedding_model = embedding_model,
+            embedding_dimension = embedding_dimension,
+        )
         self.__qdrant_threshold = qdrant_threshold
         self.__max_workers = max_workers
 
@@ -149,23 +154,7 @@ class LongTermMemoryRetriever(Runnable):
             vec
         )
 
-        # Evaluate memory
-        points = getattr(resp, "points", None)
-        if points is None and isinstance(resp, dict):
-            points = resp.get("points")
-        if not points:
-            return ""
-        p0 = points[0]
-        score = getattr(p0, "score", None)
-        if score is None and isinstance(p0, dict):
-            score = p0.get("score", 0.0)
-        if score is None or float(score) < self.__qdrant_threshold:
-            return ""
-        payload = getattr(p0, "payload", None) or {}
-        if not isinstance(payload, dict):
-            payload = {}
-        text = payload.get("query") or payload.get("text") or ""
-        return str(text).strip() if text else ""
+        return self.__qdrant_client.get_top_scored_payload(resp, self.__qdrant_threshold)
 
     def __search_memory(self, unit: SubMessageState) -> List[str]:
         ctx = (unit.context or "").strip()
@@ -213,13 +202,13 @@ class Agents(Runnable):
             self,
             chat_model: str,
             temperature: float,
-            embedding_model: str,
-            embedding_dimension: int,
-            reranking_model: str,
-            rag_threshold: float,
             max_workers: int,
             shortterm_memory_size: int,
             max_revision_cycles: int,
+            embedding_model: str,
+            embedding_dimension: int,
+            reranking_model: str,
+            reranking_threshold: float,
         ):
         self.__llm = ChatOpenAI(
             model = chat_model,
@@ -230,13 +219,13 @@ class Agents(Runnable):
             temperature = temperature,
         )
         self.__max_workers = max_workers
-        self.__mcp_client = MCPServer(
+        self.__mcp_client = get_mcp_client(
             chat_model = chat_model,
             temperature = temperature,
             embedding_model = embedding_model,
             embedding_dimension = embedding_dimension,
             reranking_model = reranking_model,
-            rag_threshold = rag_threshold,
+            reranking_threshold = reranking_threshold,
         )
         self.__shortterm_memory_size = shortterm_memory_size
         self.__max_revision_cycles = max_revision_cycles

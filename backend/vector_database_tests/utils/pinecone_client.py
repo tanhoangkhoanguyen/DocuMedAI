@@ -12,6 +12,7 @@ LOGGER = get_logger(
     name = "Pinecone_tool",
     level = "INFO"
 )
+_PINECONE_DICT = {}
 PINECONE_CONTROL_URL = "http://la-pinecone:5080"
 PINECONE_DATA_URL = "http://la-pinecone:5081"
 PINECONE_API_KEY = "pclocal"
@@ -221,3 +222,15 @@ class PineconeClient:
         except Exception as e:
             LOGGER.error(f"Failed to retrieve from collection '{collection_name}'\n\t{str(e)}")
             return []
+
+
+def get_pinecone_client(
+        embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2",
+        embedding_dimension: int = 384
+    ):
+    if not embedding_model in _PINECONE_DICT:
+        _PINECONE_DICT[embedding_model] = PineconeClient(
+            embedding_model = embedding_model,
+            embedding_dimension = embedding_dimension
+        )
+    return _PINECONE_DICT[embedding_model]

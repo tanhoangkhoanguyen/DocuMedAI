@@ -1,5 +1,4 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
 from typing import Any, Dict, List
 
 from services.app.auth_deps import (

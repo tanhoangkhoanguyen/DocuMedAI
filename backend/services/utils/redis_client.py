@@ -11,6 +11,7 @@ _LOGGER = get_logger(
     name = "Redis_tool",
     level = "INFO",
 )
+SHARED_REDIS_CLIENT = None
 REDIS_URL = "redis://la-redis:6379/0"
 DEFAULT_KEY_PREFIX = "documedai"
 _COLLECTION_MARKER = "__marker"
@@ -169,7 +170,7 @@ class RedisClient:
             ttl_seconds: Optional[int] = None,
             only_if_not_exists: bool = False,                                    # Normal cache overwrite on every write
         ) -> None:
-        rkey = self.__string_key(collection_name, key)
+        rkey = self._string_key(collection_name, key)
         try:
             payload = self.__normalize_value(value)
             if ttl_seconds is not None:
@@ -190,7 +191,7 @@ class RedisClient:
 
     def get_key(self, collection_name: str, key: str):
         try:
-            return self.__client.get(self.__string_key(collection_name, key))
+            return self.__client.get(self._string_key(collection_name, key))
         except Exception as e:
             _LOGGER.error(f"Failed to get key '{key}' from collection '{collection_name}'\n\t{str(e)}")
             return None
@@ -203,7 +204,7 @@ class RedisClient:
 
     def delete_key(self, collection_name: str, key: str) -> int:
         try:
-            num_keys = self.__client.delete(self.__string_key(collection_name, key))
+            num_keys = self.__client.delete(self._string_key(collection_name, key))
             return num_keys
         except Exception as e:
             _LOGGER.error(f"Failed to delete key '{key}' in collection '{collection_name}'\n\t{str(e)}")
@@ -211,7 +212,7 @@ class RedisClient:
 
     def key_exists(self, collection_name: str, key: str) -> bool:
         try:
-            return self.__client.exists(self.__string_key(collection_name, key))
+            return self.__client.exists(self._string_key(collection_name, key))
         except Exception as e:
             _LOGGER.error(f"Failed exists check for '{key}' in '{collection_name}'\n\t{str(e)}")
             return False
@@ -225,7 +226,7 @@ class RedisClient:
         try:
             return bool(
                 self.__client.expire(
-                    self.__string_key(collection_name, key),
+                    self._string_key(collection_name, key),
                     ttl_seconds,
                 )
             )
@@ -241,7 +242,7 @@ class RedisClient:
         - -2 if missing.
         """
         try:
-            return self.__client.ttl(self.__string_key(collection_name, key))
+            return self.__client.ttl(self._string_key(collection_name, key))
         except Exception as e:
             _LOGGER.error(f"Failed to read TTL for '{key}' in '{collection_name}'\n\t{str(e)}")
             return -2
@@ -346,3 +347,10 @@ class RedisClient:
             self.__client.close()
         except Exception as e:
             _LOGGER.error(f"Failed to close Redis client\n\t{str(e)}")
+
+
+def get_redis_client():
+    global SHARED_REDIS_CLIENT
+    if SHARED_REDIS_CLIENT is None:
+        SHARED_REDIS_CLIENT = RedisClient()
+    return SHARED_REDIS_CLIENT

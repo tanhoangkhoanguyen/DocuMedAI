@@ -30,7 +30,7 @@ def _build_graph():
         max_workers = 4,
         topic_threshold = -5,
         qdrant_threshold = 0.25,
-        rag_threshold = -5,
+        reranking_threshold = -5,
         shortterm_memory_size = 5,
         max_revision_cycles = 3,
     )
@@ -88,15 +88,5 @@ if __name__ == "__main__":
         "services.app.run_app:app",
         host = "0.0.0.0",
         port = 2010,
-        reload = False,
+        reload = True,
     )
-
-# Example input
-# {
-#   "chat_history": [
-#     {
-#       "type": "human",
-#       "content": "Hi chatbot"
-#     }
-#   ]
-# }

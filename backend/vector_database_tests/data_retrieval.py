@@ -1,10 +1,10 @@
 # locust -f vector_database_tests/data_retrieval.py
-from vector_database_tests.utils.chromadb_client import ChromadbClient
-from vector_database_tests.utils.milvus_client import MilvusClient 
-from vector_database_tests.utils.pinecone_client import PineconeClient 
-from vector_database_tests.utils.qdrant_client import QdrantClient
-from vector_database_tests.utils.vespa_client import VespaClient 
-from vector_database_tests.utils.weaviate_client import WeaviateClient
+from vector_database_tests.utils.chromadb_client import get_chromadb_client
+from vector_database_tests.utils.milvus_client import get_milvus_client
+from vector_database_tests.utils.pinecone_client import get_pinecone_client
+from vector_database_tests.utils.qdrant_client import get_qdrant_client
+from vector_database_tests.utils.vespa_client import get_vespa_client
+from vector_database_tests.utils.weaviate_client import get_weaviate_client
 
 import os, time, json, random, logging
 from locust import User, task, between, events
@@ -22,18 +22,14 @@ def load_queries(folder_path: str = "vector_database_tests/generated_queries") -
             queries.extend([json.loads(obj) for obj in f])
     return queries
 
-SHARED_CLIENT = None
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 EMBEDDING_DIMENSION = 384
 
 def get_shared_client():
-    global SHARED_CLIENT
-    if SHARED_CLIENT is None:
-        SHARED_CLIENT = WeaviateClient(
-            embedding_model = EMBEDDING_MODEL,
-            embedding_dimension = EMBEDDING_DIMENSION,
-        )
-    return SHARED_CLIENT
+    return get_weaviate_client(
+        embedding_model = EMBEDDING_MODEL,
+        embedding_dimension = EMBEDDING_DIMENSION,
+    )
 
 
 QUERIES = load_queries()

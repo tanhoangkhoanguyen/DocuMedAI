@@ -1,8 +1,6 @@
 import { NextResponse } from "next/server";
-import { LOCAL_COOKIE } from "@/lib/backend-bearer";
+import { setLocalAuthCookie } from "@/lib/auth-cookie";
 import { getInternalApiBase } from "@/lib/internal-api";
-
-const COOKIE_MAX_AGE = 60 * 60 * 24 * 7;
 
 export async function POST(request: Request) {
   const body = await request.json().catch(() => ({}));
@@ -22,13 +20,5 @@ export async function POST(request: Request) {
   if (!data.access_token) {
     return NextResponse.json({ error: "No token" }, { status: 502 });
   }
-  const out = NextResponse.json({ ok: true });
-  out.cookies.set(LOCAL_COOKIE, data.access_token, {
-    httpOnly: true,
-    sameSite: "lax",
-    path: "/",
-    maxAge: COOKIE_MAX_AGE,
-    secure: process.env.NODE_ENV === "production",
-  });
-  return out;
+  return setLocalAuthCookie(NextResponse.json({ ok: true }), data.access_token);
 }

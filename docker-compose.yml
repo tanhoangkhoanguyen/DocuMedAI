@@ -119,6 +119,7 @@ services:
     environment:
       MONGO_URL: mongodb://la-mongo:27017/
       REDIS_URL: redis://la-redis:6379/0
+      QDRANT_URL: http://la-qdrant:6333
     depends_on:
       la-qdrant:
         condition: service_started
@@ -133,18 +134,23 @@ services:
     networks:
       - documedai-net
     volumes:
+      - ./backend:/backend            # live source → uvicorn reload + logs to host ./backend/logs
       - models_cache:/models
     mem_limit: 4g
     healthcheck:
-      test: ["CMD", "true"]
+      test: ["CMD", "curl", "-f", "http://localhost:2010/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
 
   la-frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-      args:
-        NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
-        NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+    volumes:
+      - ./frontend:/app               # live source → Turbopack hot-reload
+      - /app/node_modules             # anonymous vol: keep image's node_modules
     env_file:
       - path: .env
     environment:

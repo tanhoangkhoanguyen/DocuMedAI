@@ -9,6 +9,7 @@ def medical_support_tool(payload: ToolParameter) -> str:
     return f"[medical_support_tool]: {client.run(payload.message)}"
 
 
+_MCP_DICT = {}
 _BUILTIN_MCP_TOOLS: tuple[McpToolDefinition, ...] = (
     McpToolDefinition(
         name = "medical_support_tool",
@@ -33,7 +34,7 @@ class MCPServer:
             embedding_model: str,
             embedding_dimension: int,
             reranking_model: str,
-            rag_threshold: float,
+            reranking_threshold: float,
             extra_tools: Optional[Sequence[McpToolDefinition]] = None
         ):
         self.chat_model = chat_model
@@ -41,7 +42,7 @@ class MCPServer:
         self.embedding_model = embedding_model
         self.embedding_dimension = embedding_dimension
         self.reranking_model = reranking_model
-        self.rag_threshold = rag_threshold
+        self.reranking_threshold = reranking_threshold
 
         self.__registry: Dict[str, McpToolDefinition] = {}
         self._build_mcp_registry(extra_tools or ())
@@ -74,5 +75,32 @@ class MCPServer:
                 embedding_model = self.embedding_model,
                 embedding_dimension = self.embedding_dimension,
                 reranking_model = self.reranking_model,
-                rag_threshold = self.rag_threshold,
+                reranking_threshold = self.reranking_threshold,
             ))
+
+def get_mcp_client(
+        chat_model: str = "gpt-4o-mini",
+        temperature: float = 0,
+        embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2",
+        embedding_dimension: int = 384,
+        reranking_model: str = "BAAI/bge-reranker-v2-m3",
+        reranking_threshold: float = -5,
+    ):
+    key = (
+        chat_model,
+        temperature,
+        embedding_model,
+        embedding_dimension,
+        reranking_model,
+        reranking_threshold,
+    )
+    if key not in _MCP_DICT:
+        _MCP_DICT[key] = MCPServer(
+            chat_model = chat_model,
+            temperature = temperature,
+            embedding_model = embedding_model,
+            embedding_dimension = embedding_dimension,
+            reranking_model = reranking_model,
+            reranking_threshold = reranking_threshold,
+        )
+    return _MCP_DICT[key]

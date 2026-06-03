@@ -7,7 +7,7 @@ from services.chatbot.nodes import (
     TopicChecker,
 )
 
-import os, warnings
+import warnings
 warnings.filterwarnings("ignore")
 
 from langgraph.graph import END, START, StateGraph
@@ -22,10 +22,10 @@ class GraphBuilder:
             embedding_model: str,
             embedding_dimension: int,
             reranking_model: str,
+            reranking_threshold: float,
             max_workers: int,
             topic_threshold: float,
             qdrant_threshold: float,
-            rag_threshold: float,
             shortterm_memory_size: int,
             max_revision_cycles: int,
         ):
@@ -35,10 +35,10 @@ class GraphBuilder:
         self.embedding_model = embedding_model
         self.embedding_dimension = embedding_dimension
         self.reranking_model = reranking_model
+        self.reranking_threshold = reranking_threshold
         self.max_workers = max_workers
         self.topic_threshold = topic_threshold
         self.qdrant_threshold = qdrant_threshold
-        self.rag_threshold = rag_threshold
         self.shortterm_memory_size = shortterm_memory_size
         self.max_revision_cycles = max_revision_cycles
 
@@ -46,8 +46,11 @@ class GraphBuilder:
         self.topic_checker = TopicChecker(
             chat_model = self.chat_model,
             temperature = self.temperature,
-            reranking_model = self.reranking_model,
             topic_threshold = self.topic_threshold,
+            embedding_model = self.embedding_model,
+            embedding_dimension = self.embedding_dimension,
+            reranking_model = self.reranking_model,
+            reranking_threshold = self.reranking_threshold,
         )
         self.message_analysis = MessageAnalysis(
             chat_model = self.chat_model,
@@ -56,17 +59,19 @@ class GraphBuilder:
         self.long_term_memory_retriever = LongTermMemoryRetriever(
             qdrant_threshold = self.qdrant_threshold,
             max_workers = self.max_workers,
+            embedding_model = self.embedding_model,
+            embedding_dimension = self.embedding_dimension,
         )
         self.agents = Agents(
             chat_model = self.chat_model,
             temperature = self.temperature,
-            embedding_model = self.embedding_model,
-            embedding_dimension = self.embedding_dimension,
-            reranking_model = self.reranking_model,
-            rag_threshold = self.rag_threshold,
             max_workers = self.max_workers,
             shortterm_memory_size = self.shortterm_memory_size,
             max_revision_cycles = self.max_revision_cycles,
+            embedding_model = self.embedding_model,
+            embedding_dimension = self.embedding_dimension,
+            reranking_model = self.reranking_model,
+            reranking_threshold = self.reranking_threshold,
         )
         self.schema_updater = SchemaUpdater(
             shortterm_memory_size = self.shortterm_memory_size,
@@ -98,10 +103,10 @@ class Graph:
             embedding_model: str,
             embedding_dimension: int,
             reranking_model: str,
+            reranking_threshold: float,
             max_workers: int,
             topic_threshold: float,
             qdrant_threshold: float,
-            rag_threshold: float,
             shortterm_memory_size: int,
             max_revision_cycles: int,
         ):
@@ -111,10 +116,10 @@ class Graph:
             embedding_model = embedding_model,
             embedding_dimension = embedding_dimension,
             reranking_model = reranking_model,
+            reranking_threshold = reranking_threshold,
             max_workers = max_workers,
             topic_threshold = topic_threshold,
             qdrant_threshold = qdrant_threshold,
-            rag_threshold = rag_threshold,
             shortterm_memory_size = shortterm_memory_size,
             max_revision_cycles = max_revision_cycles,
         )
@@ -128,10 +133,10 @@ def build_graph(
         embedding_model: str,
         embedding_dimension: int,
         reranking_model: str,
+        reranking_threshold: float,
         max_workers: int,
         topic_threshold: float,
         qdrant_threshold: float,
-        rag_threshold: float,
         shortterm_memory_size: int,
         max_revision_cycles: int,
         save_graph: bool = False,
@@ -142,10 +147,10 @@ def build_graph(
         embedding_model = embedding_model,
         embedding_dimension = embedding_dimension,
         reranking_model = reranking_model,
+        reranking_threshold = reranking_threshold,
         max_workers = max_workers,
         topic_threshold = topic_threshold,
         qdrant_threshold = qdrant_threshold,
-        rag_threshold = rag_threshold,
         shortterm_memory_size = shortterm_memory_size,
         max_revision_cycles = max_revision_cycles,
     )

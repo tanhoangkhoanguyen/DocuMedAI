@@ -27,11 +27,7 @@ WORKDIR /backend
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libgomp1 curl \
     && rm -rf /var/lib/apt/lists/* \
-    && groupadd --system --gid 1001 group_1 \
-    && useradd --system --uid 1001 --gid group_1 --home-dir /backend user_1 \
-    && mkdir -p /models \
-    && chown user_1:group_1 /models \
-    && chown user_1:group_1 /backend
+    && mkdir -p /models
 
 # Enable logs
 ENV PATH="/opt/venv/bin:$PATH" \
@@ -43,9 +39,5 @@ ENV PATH="/opt/venv/bin:$PATH" \
     TRANSFORMERS_CACHE=/models
 
 COPY --from=builder /opt/venv /opt/venv
-
-COPY --chown=user_1:group_1 . .
-
-USER user_1
 
 CMD ["python", "-m", "services.app.run_app"]

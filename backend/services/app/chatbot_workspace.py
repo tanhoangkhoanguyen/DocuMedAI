@@ -398,10 +398,10 @@ class ChatbotWorkspace:
         user_info = UserInfo(
             user_id = id,
             username = username,
-            email = "",                                                        # Graph invoke doesnt use
-            password = "",                                                     # Graph invoke doesnt use
-            plain = "Free"
-        ),
+            email = "",
+            password = "",
+            plain = "Free",
+        )
 
         state = GraphState(
             user_info = user_info,

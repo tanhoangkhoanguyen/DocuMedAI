@@ -5,12 +5,13 @@ warnings.filterwarnings("ignore")
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from qdrant_client import QdrantClient as SDKQdrantClient
 from qdrant_client.http.models import VectorParams, Distance, PointStruct, HnswConfigDiff, OptimizersConfigDiff, SearchParams
-from typing import List
+from typing import Any, List
 
 LOGGER = get_logger(
     name = "Qdrant_tool",
     level = "INFO"
 )
+_QDRANT_DICT = {}
 QDRANT_URL = "http://la-qdrant:6333"
 
 class QdrantClient:
@@ -140,5 +141,40 @@ class QdrantClient:
             LOGGER.error(f"Failed to retrieve from collection '{collection_name}'\n\t{str(e)}")
             return []
 
+    @staticmethod
+    def get_top_scored_payload(
+            resp: Any,
+            score_threshold: float,
+        ) -> str:
+        if not resp:
+            return ""
+        points = getattr(resp, "points", None)
+        if points is None and isinstance(resp, dict):
+            points = resp.get("points")
+        if not points:
+            return ""
+        p0 = points[0]
+        score = getattr(p0, "score", None)
+        if score is None and isinstance(p0, dict):
+            score = p0.get("score", 0.0)
+        if score is None or float(score) < score_threshold:
+            return ""
+        payload = getattr(p0, "payload", None) or {}
+        if not isinstance(payload, dict):
+            payload = {}
+        text = payload.get("query") or payload.get("text") or ""
+        return str(text).strip() if text else ""
+
     def close(self):
         self.__client.close()
+
+def get_qdrant_client(
+        embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2",
+        embedding_dimension: int = 384
+    ):
+    if embedding_model not in _QDRANT_DICT:
+        _QDRANT_DICT[embedding_model] = QdrantClient(
+            embedding_model = embedding_model,
+            embedding_dimension = embedding_dimension,
+        )
+    return _QDRANT_DICT[embedding_model]

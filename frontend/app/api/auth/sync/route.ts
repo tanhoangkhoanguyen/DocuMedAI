@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { getInternalApiBase } from "@/lib/internal-api";
 import { createClient } from "@/lib/supabase/server";
+import { syncSupabaseToBackend } from "@/lib/supabase-sync";
 
 export async function POST() {
   const supabase = await createClient();
@@ -11,14 +11,13 @@ export async function POST() {
   if (!token) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  const res = await fetch(`${getInternalApiBase()}/auth/supabase-sync`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${token}` },
-    cache: "no-store",
-  });
-  const text = await res.text();
-  if (!res.ok) {
-    return NextResponse.json({ error: text }, { status: res.status });
+  try {
+    await syncSupabaseToBackend(token);
+    return NextResponse.json({ ok: true });
+  } catch {
+    return NextResponse.json(
+      { error: "Failed to sync user account" },
+      { status: 502 },
+    );
   }
-  return NextResponse.json(JSON.parse(text));
 }

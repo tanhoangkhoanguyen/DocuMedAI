@@ -63,7 +63,7 @@ class ToolParameter(BaseModel):
     embedding_model: str
     embedding_dimension: int
     reranking_model: str
-    rag_threshold: float
+    reranking_threshold: float
 
 
 class TaskState(BaseModel):
