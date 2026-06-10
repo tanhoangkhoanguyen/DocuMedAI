@@ -29,7 +29,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 30s
+      start_period: 180s
 
   la-redis:
     image: redis:7.2-alpine
@@ -142,19 +142,24 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 60s
+      start_period: 180s
 
   la-frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
     volumes:
-      - ./frontend:/app               # live source → Turbopack hot-reload
-      - /app/node_modules             # anonymous vol: keep image's node_modules
+      - ./frontend:/app               # live source → hot-reload
+      - /app/node_modules             # keep image node_modules (Linux binaries)
+      - /app/.next                    # keep dev cache in container (avoids stale host .next)
     env_file:
       - path: .env
     environment:
       INTERNAL_API_BASE: http://la-backend:2010
+      # Docker Desktop on Windows/macOS: inotify events often miss bind-mount writes
+      WATCHPACK_POLLING: "true"
+      CHOKIDAR_USEPOLLING: "true"
+      CHOKIDAR_INTERVAL: "1000"
     depends_on:
       la-backend:
         condition: service_healthy

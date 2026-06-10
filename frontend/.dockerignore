@@ -1,43 +1,8 @@
-# Git
+node_modules/
+.next/
+out/
+
+.env
+.env.*
+
 .git
-.gitignore
-
-# Node
-node_modules
-npm-debug.log
-yarn-error.log
-
-# Next.js
-.next
-out
-
-# Build artifacts
-dist
-build
-coverage
-playwright-report
-test-results
-
-# Python
-__pycache__
-*.pyc
-
-# OS junk
-.DS_Store
-Thumbs.db
-
-# IDE
-.vscode
-.idea
-
-# Docker
-Dockerfile*
-docker-compose*
-
-# Logs
-logs
-*.log
-
-# Docs & env
-*.md
-.env*

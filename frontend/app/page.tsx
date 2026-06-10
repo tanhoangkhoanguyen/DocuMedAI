@@ -4,7 +4,7 @@ import ChatLayout from "@/components/ChatLayout";
 import { LOCAL_COOKIE } from "@/lib/backend-bearer";
 import { getInternalApiBase } from "@/lib/internal-api";
 import { syncSupabaseToBackend } from "@/lib/supabase-sync";
-import { createClient } from "@/lib/supabase/server";
+import { createClient } from "@/lib/utils/server_client";
 
 export default async function Home() {
   const supabase = await createClient();

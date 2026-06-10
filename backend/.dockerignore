@@ -1,45 +1,12 @@
-# Python
-__pycache__
-*.py[cod]
-*$py.class
-.pytest_cache
-.mypy_cache
-.ruff_cache
-*.egg-info
-.eggs
-dist
-build
-venv
+__pycache__/
+venv/
+
 .env
 .env.*
 
-# vector_database_tests — exclude all except qdrant_client.py
-vector_database_tests/**
-!vector_database_tests/utils/qdrant_client.py
-
-# Large local data
-chroma
-chroma/**
-**/*.wt
-**/.qdrant_fs_check
-**/*.json
-**/*.jsonl
-**/*.pdf
-
-# Logs
+chroma/
 logs/
+services/**/data_storage/
+vector_database_tests/
 
-# Tests / CI
-tests
-.github
-htmlcov
-.coverage
-coverage.xml
-
-# Git / IDE
 .git
-.gitignore
-.vscode
-.idea
-*.md
-Dockerfile*

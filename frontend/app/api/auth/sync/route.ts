@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient } from "@/lib/utils/server_client";
 import { syncSupabaseToBackend } from "@/lib/supabase-sync";
 
 export async function POST() {

@@ -9,7 +9,7 @@ export async function proxyToBackend(
   init: ProxyInit = {},
 ): Promise<NextResponse> {
   const { requireAuth = true, ...fetchInit } = init;
-  let headers = new Headers(fetchInit.headers);
+  const headers = new Headers(fetchInit.headers);
   if (requireAuth) {
     const token = await getBackendBearer();
     if (!token) {

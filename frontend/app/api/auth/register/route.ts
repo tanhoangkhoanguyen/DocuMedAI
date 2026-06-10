@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { setLocalAuthCookie } from "@/lib/auth-cookie";
+import { setAuthCookie } from "@/lib/auth-cookie";
 import { getInternalApiBase } from "@/lib/internal-api";
 
 export async function POST(request: Request) {
@@ -20,5 +20,5 @@ export async function POST(request: Request) {
   if (!data.access_token) {
     return NextResponse.json({ error: "No token" }, { status: 502 });
   }
-  return setLocalAuthCookie(NextResponse.json({ ok: true }), data.access_token);
+  return setAuthCookie(NextResponse.json({ ok: true }), data.access_token);
 }
