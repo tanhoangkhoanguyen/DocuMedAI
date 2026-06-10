@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { createClient } from "@/lib/supabase/client";
+import { createClient } from "@/lib/utils/browser_client";
 
 type ChatRow = { chat_id: string; chat_name: string };
 type MsgRow = { role: string; content: string };
@@ -122,7 +122,7 @@ export default function ChatLayout({ userEmail }: { userEmail: string }) {
   }
 
   async function signOut() {
-    await fetch("/api/auth/local-logout", { method: "POST" });
+    await fetch("/api/auth/logout", { method: "POST" });
     const supabase = createClient();
     await supabase.auth.signOut();
     window.location.href = "/login";

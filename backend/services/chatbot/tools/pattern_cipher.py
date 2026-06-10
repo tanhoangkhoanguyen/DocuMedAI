@@ -3,6 +3,7 @@ from dotenv import load_dotenv
 load_dotenv()
 from datetime import datetime
 
+SHARED_PATTERN_CIPHER = None
 
 class PatternCipher:
     def __init__(self):
@@ -31,3 +32,9 @@ class PatternCipher:
 
     def verify_password(self, plain: str, hashed: str) -> bool:
         return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
+
+def get_pattern_cipher():
+    global SHARED_PATTERN_CIPHER
+    if SHARED_PATTERN_CIPHER is None:
+        SHARED_PATTERN_CIPHER = PatternCipher()
+    return SHARED_PATTERN_CIPHER

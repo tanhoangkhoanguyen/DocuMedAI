@@ -1,9 +1,8 @@
 import { cookies } from "next/headers";
-import { createClient } from "@/lib/supabase/server";
+import { createClient } from "@/lib/utils/server_client";
 
-const LOCAL_COOKIE = "documedai_local";
+const LOCAL_COOKIE = "documedai";
 
-/** Bearer token for FastAPI: Supabase session first, else local JWT cookie. */
 export async function getBackendBearer(): Promise<string | null> {
   const supabase = await createClient();
   const {

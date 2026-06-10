@@ -8,8 +8,6 @@ from typing import List
 
 import torch, warnings
 warnings.filterwarnings("ignore")
-from dotenv import load_dotenv
-load_dotenv()
 
 from services.chatbot.constants.prompts import (
     PARAPHRASE_MESSAGE_PROMPT,
@@ -22,6 +20,7 @@ _LOGGER = get_logger(
     name = "rag_class",
     level = "INFO"
 )
+_RAG_DICT = {}
 
 
 class RAG:
@@ -78,18 +77,7 @@ class RAG:
     def _move_to_device(self, batch):
         return {k: v.to(self.__device) for k, v in batch.items()}
 
-    def same_topic(self, user_message: str, compressed_prior: str) -> bool:
-        """
-        Returns True if the new user message continues the same topic as compressed short-term memory.
-        Empty prior always counts as same topic (nothing to compare).
-        """
-        if not compressed_prior.strip():
-            return True
-        score = self.score_query_document(user_message, compressed_prior)
-        return score >= self.__reranking_threshold
-
-    def score_query_document(self, query: str, document: str) -> float:
-        pairs = [[query, document]]
+    def score_documents(self, pairs: List[List[str]]) -> float:
         inputs = self.__tokenizer(
             pairs,
             padding = True,
@@ -100,30 +88,53 @@ class RAG:
         inputs = self._move_to_device(inputs)
         with torch.no_grad():
             logits = self.__model(**inputs).logits.squeeze(-1)
-        return float(logits[0].item())
+        return logits
+
+    def same_topic(self, user_message: str, compressed_prior: str, threshold: float) -> bool:
+        """
+        Returns True if the new user message continues the same topic as compressed short-term memory.
+        Empty prior always counts as same topic (nothing to compare).
+        """
+        if not compressed_prior.strip():
+            return True
+        logit = self.score_documents(pairs = [[user_message, compressed_prior]])
+        score = float(logit[0].item())
+        return score >= threshold
 
     @traceable
     def rerank_queries(self, queries: List[str], original_query: str, top_k: int) -> List[str]:
         if not queries:
             return []
-        pairs = [[original_query, q] for q in queries]
-        inputs = self.__tokenizer(
-            pairs,
-            padding = True,
-            truncation = True,
-            return_tensors = "pt",
-            max_length = 512,
-        )
-        inputs = self._move_to_device(inputs)
-        with torch.no_grad():
-            scores = self.__model(**inputs).logits.squeeze(-1)
-        sorted_indices = torch.argsort(scores, descending = True)
+        logits = self.score_documents(pairs = [[original_query, q] for q in queries])
+        sorted_indices = torch.argsort(logits, descending = True)
         results: List[str] = []
         limit = min(top_k, len(sorted_indices))
         for i in range(limit):
             idx = int(sorted_indices[i].item())
-            sc = float(scores[idx].item())
+            sc = float(logits[idx].item())
             if sc < self.__reranking_threshold:
                 break
             results.append(queries[idx])
         return results
+
+
+def get_rag_client(
+        chat_model: str = "gpt-4o-mini",
+        temperature: float = 0,
+        reranking_model: str = "BAAI/bge-reranker-v2-m3",
+        reranking_threshold: float = -5,
+    ):
+    key = (
+        chat_model,
+        temperature,
+        reranking_model,
+        reranking_threshold,
+    )
+    if key not in _RAG_DICT:
+        _RAG_DICT[key] = RAG(
+            chat_model = chat_model,
+            temperature = temperature,
+            reranking_model = reranking_model,
+            reranking_threshold = reranking_threshold,
+        )
+    return _RAG_DICT[key]

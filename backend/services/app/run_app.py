@@ -1,24 +1,21 @@
 from contextlib import asynccontextmanager
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.responses import PlainTextResponse
 from langchain_core.messages import AIMessage
-from typing import Any, Dict
 
 import uvicorn, warnings
 warnings.filterwarnings("ignore")
-from dotenv import load_dotenv
-load_dotenv()
 
 from logger import get_logger
-from services.chatbot.app.auth_api import auth_router
-from services.chatbot.app.chat_api import chat_router
-from services.chatbot.app.chatbot_workspace import ChatbotWorkspace
+from services.app.auth_api import auth_router
+from services.app.chat_api import chat_router
+from services.app.chatbot_workspace import ChatbotWorkspace
 from services.chatbot.constants.schemas import GraphState
 from services.chatbot.workflow import build_graph
 
 
 _LOGGER = get_logger(
-    name = "chatbot_api", 
+    name = "app", 
     level = "INFO"
 )
 
@@ -33,7 +30,7 @@ def _build_graph():
         max_workers = 4,
         topic_threshold = -5,
         qdrant_threshold = 0.25,
-        rag_threshold = -5,
+        reranking_threshold = -5,
         shortterm_memory_size = 5,
         max_revision_cycles = 3,
     )
@@ -88,18 +85,8 @@ def health() -> PlainTextResponse:
 
 if __name__ == "__main__":
     uvicorn.run(
-        "services.chatbot.run_app:app",
+        "services.app.run_app:app",
         host = "0.0.0.0",
         port = 2010,
-        reload = False,
+        reload = True,
     )
-
-# Example input
-# {
-#   "chat_history": [
-#     {
-#       "type": "human",
-#       "content": "Hi chatbot"
-#     }
-#   ]
-# }

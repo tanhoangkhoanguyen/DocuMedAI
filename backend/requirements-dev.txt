@@ -1,0 +1,13 @@
+# Optional: vector DB benchmark lab only (not used by production API or CI).
+# Install with: pip install -r requirements-dev.txt
+# Vector DB clients (tests only)
+chromadb
+weaviate-client
+pymilvus
+
+# Data processing (tests only)
+datasets
+pyarrow
+
+# Load testing
+locust

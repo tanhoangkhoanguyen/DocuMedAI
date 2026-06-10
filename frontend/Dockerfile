@@ -1,38 +1,24 @@
+# syntax=docker/dockerfile:1
+
+
+# Multi-stage build (different stages, different filesystem)
+# Stage 1: Install pakages
 FROM node:20-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json* ./
-RUN npm ci
 
-FROM node:20-alpine AS builder
+# Docker cache for npm downloads
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci
+
+# Stage 2 (dev): hot-reload server (webpack + polling)
+FROM node:20-alpine AS dev
 WORKDIR /app
+ENV PORT=2011 \
+    HOSTNAME=0.0.0.0 \
+    WATCHPACK_POLLING=true \
+    CHOKIDAR_USEPOLLING=true \
+    CHOKIDAR_INTERVAL=1000
 COPY --from=deps /app/node_modules ./node_modules
-COPY . .
 
-ARG NEXT_PUBLIC_SUPABASE_URL=dummy
-ARG NEXT_PUBLIC_SUPABASE_ANON_KEY=dummy
-ENV NEXT_PUBLIC_SUPABASE_URL=$NEXT_PUBLIC_SUPABASE_URL
-ENV NEXT_PUBLIC_SUPABASE_ANON_KEY=$NEXT_PUBLIC_SUPABASE_ANON_KEY
-ENV NEXT_TELEMETRY_DISABLED=1
-
-RUN npm run build
-
-FROM node:20-alpine AS runner
-WORKDIR /app
-
-ENV NODE_ENV=production
-ENV NEXT_TELEMETRY_DISABLED=1
-
-RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 nextjs
-
-COPY --from=builder /app/public ./public
-COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
-COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
-
-USER nextjs
-
-EXPOSE 3000
-ENV PORT=3000
-ENV HOSTNAME="0.0.0.0"
-
-CMD ["node", "server.js"]
+CMD ["npm", "run", "dev:docker"]

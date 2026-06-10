@@ -1,12 +1,11 @@
 import { NextResponse } from "next/server";
 import { setAuthCookie } from "@/lib/auth-cookie";
-import { getInternalApiBase } from "@/lib/internal-api";
 
 export async function POST(request: Request) {
   const body = await request.json().catch(() => ({}));
   const email = typeof body.email === "string" ? body.email : "";
   const password = typeof body.password === "string" ? body.password : "";
-  const res = await fetch(`${getInternalApiBase()}/auth/register`, {
+  const res = await fetch(`http://localhost:2010/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email, password }),
@@ -16,7 +15,7 @@ export async function POST(request: Request) {
   if (!res.ok) {
     return NextResponse.json({ error: text }, { status: res.status });
   }
-  const data = JSON.parse(text) as { access_token?: string };
+  const data = JSON.parse(text) as { access_token?: string };                   // Parse JSON as object with optional access_token
   if (!data.access_token) {
     return NextResponse.json({ error: "No token" }, { status: 502 });
   }

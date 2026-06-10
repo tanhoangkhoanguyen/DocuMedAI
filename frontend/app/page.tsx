@@ -3,7 +3,8 @@ import { redirect } from "next/navigation";
 import ChatLayout from "@/components/ChatLayout";
 import { LOCAL_COOKIE } from "@/lib/backend-bearer";
 import { getInternalApiBase } from "@/lib/internal-api";
-import { createClient } from "@/lib/supabase/server";
+import { syncSupabaseToBackend } from "@/lib/supabase-sync";
+import { createClient } from "@/lib/utils/server_client";
 
 export default async function Home() {
   const supabase = await createClient();
@@ -16,11 +17,7 @@ export default async function Home() {
     } = await supabase.auth.getSession();
     if (session?.access_token) {
       try {
-        await fetch(`${getInternalApiBase()}/auth/supabase-sync`, {
-          method: "POST",
-          headers: { Authorization: `Bearer ${session.access_token}` },
-          cache: "no-store",
-        });
+        await syncSupabaseToBackend(session.access_token);
       } catch {
         /* backend may be down */
       }
@@ -37,8 +34,8 @@ export default async function Home() {
         cache: "no-store",
       });
       if (res.ok) {
-        const j = (await res.json()) as { display_name?: string };
-        return <ChatLayout userEmail={j.display_name || "User"} />;
+        const j = (await res.json()) as { username?: string };
+        return <ChatLayout userEmail={j.username || "User"} />;
       }
     } catch {
       /* ignore */

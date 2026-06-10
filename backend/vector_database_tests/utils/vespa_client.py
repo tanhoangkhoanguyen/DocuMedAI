@@ -15,6 +15,7 @@ LOGGER = get_logger(
     name = "Vespa_tool",
     level = "INFO"
 )
+_VESPA_DICT = {}
 VESPA_URL = "http://la-vespa:8080"
 
 class VespaClient:
@@ -220,3 +221,15 @@ class VespaClient:
         except Exception as e:
             LOGGER.error(f"Failed to retrieve from collection '{collection_name}'")
             return []
+
+
+def get_vespa_client(
+    embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2",
+    embedding_dimension: int = 384
+):
+    if not embedding_model in _VESPA_DICT:
+        _VESPA_DICT[embedding_model] = VespaClient(
+            embedding_model = embedding_model,
+            embedding_dimension = embedding_dimension
+        )
+    return _VESPA_DICT[embedding_model]

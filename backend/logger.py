@@ -3,7 +3,7 @@ from pathlib import Path
 
 import logging
 
-_logger_dict = {}
+_LOGGER_DICT = {}
 
 class SimpleLogger:
     """
@@ -58,12 +58,12 @@ def get_logger(
         name: str = "app", 
         level: str = "INFO"
     ):
-    if name in _logger_dict:
-        return _logger_dict[name]
+    if name in _LOGGER_DICT:
+        return _LOGGER_DICT[name]
 
     logger = SimpleLogger(
         name=name, 
         level=level
     ).logger
-    _logger_dict[name] = logger
+    _LOGGER_DICT[name] = logger
     return logger

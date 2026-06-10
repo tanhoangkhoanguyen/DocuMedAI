@@ -1,20 +1,16 @@
 from pymongo import MongoClient as PyMongoClient
 from typing import Any, Dict, Optional
 
-from dotenv import load_dotenv
-load_dotenv()
-
 from logger import get_logger
-from services.chatbot.tools.pattern_cipher import PatternCipher
 
 
-MONGO_URL = "mongodb://la-mongodb:27017/"
+MONGO_URL = "mongodb://la-mongo:27017/"
+SHARED_MONGO_CLIENT = None
 _HOST_DB = "host"
 _LOGGER = get_logger(
     name = "Mongo_tool",
     level = "INFO",
 )
-_SHARED_PATTERN_CIPHER = PatternCipher()
 
 
 class MongoClient:
@@ -24,8 +20,7 @@ class MongoClient:
     def __init__(self) -> None:
         self.__client = PyMongoClient(MONGO_URL)
         if not self.ping():
-            raise
-        self.__pattern_cipher = _SHARED_PATTERN_CIPHER
+            raise RuntimeError(f"Cannot connect to Mongo at {MONGO_URL}")
 
     def ping(self) -> bool:
         try:
@@ -188,3 +183,10 @@ class MongoClient:
             self.__client.close()
         except Exception as e:
             _LOGGER.error(f"Failed to close Mongo client\n\t{str(e)}")
+
+
+def get_mongo_client():
+    global SHARED_MONGO_CLIENT
+    if SHARED_MONGO_CLIENT is None:
+        SHARED_MONGO_CLIENT = MongoClient()
+    return SHARED_MONGO_CLIENT

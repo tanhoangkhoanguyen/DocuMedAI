@@ -9,6 +9,7 @@ LOGGER = get_logger(
     name = "Weaviate_tool",
     level = "INFO"
 )
+_WEAVIATE_DICT = {}
 WEAVIATE_URL = "http://la-weaviate:8080"
 
 class WeaviateClient:
@@ -130,3 +131,15 @@ class WeaviateClient:
         except Exception as e:
             LOGGER.error(f"Failed to retrieve from class '{class_name}'\n\t{str(e)}")
             return []
+
+
+def get_weaviate_client(
+        embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2",
+        embedding_dimension: int = 384
+    ):
+    if not embedding_model in _WEAVIATE_DICT:
+        _WEAVIATE_DICT[embedding_model] = WeaviateClient(
+            embedding_model = embedding_model,
+            embedding_dimension = embedding_dimension
+        )
+    return _WEAVIATE_DICT[embedding_model]

@@ -7,9 +7,9 @@ load_dotenv()
 from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from services.chatbot.app.chatbot_workspace import ChatbotWorkspace
+from services.app.chatbot_workspace import ChatbotWorkspace
 from services.chatbot.tools.pattern_cipher import PatternCipher
-from services.chatbot.tools.supabase_client import SupabaseClient
+from services.utils.supabase_client import SupabaseClient
 
 
 security = HTTPBearer(auto_error = False)
@@ -25,14 +25,14 @@ async def require_supabase_claims(
     ):
     if not creds or creds.scheme.lower() != "bearer":
         raise HTTPException(
-            status_code = 401, 
+            status_code = 401,
             detail = "Missing bearer token"
         )
     try:
         return SupabaseClient.decode_access_token(creds.credentials)
     except Exception as exc:
         raise HTTPException(
-            status_code = 401, 
+            status_code = 401,
             detail = f"Invalid token: {exc}"
         ) from exc
 
@@ -40,7 +40,7 @@ def get_workspace(request: Request) -> ChatbotWorkspace:
     ws = getattr(request.app.state, "workspace", None)
     if ws is None:
         raise HTTPException(
-            status_code = 503, 
+            status_code = 503,
             detail = "Workspace store not initialized"
         )
     return ws
@@ -49,7 +49,7 @@ def claims_sub_email(claims: Dict[str, Any]) -> tuple[str, str]:
     sub = claims.get("sub")
     if not sub or not isinstance(sub, str):
         raise HTTPException(
-            status_code = 401, 
+            status_code = 401,
             detail = "Token missing sub"
         )
     email = claims.get("email") or ""
@@ -84,7 +84,7 @@ def decode_bearer_any(token: str) -> Dict[str, Any]:
         pass
     if not _SECRET:
         raise HTTPException(
-            status_code = 401, 
+            status_code = 401,
             detail = "Invalid or expired token"
         )
     try:
@@ -94,7 +94,7 @@ def decode_bearer_any(token: str) -> Dict[str, Any]:
         return {**p, "_auth": "local"}
     except jwt.PyJWTError as exc:
         raise HTTPException(
-            status_code = 401, 
+            status_code = 401,
             detail = "Invalid or expired token"
         ) from exc
 
@@ -103,7 +103,7 @@ async def require_bearer_claims(
     ) -> Dict[str, Any]:
     if not creds or creds.scheme.lower() != "bearer":                  # Supabase sync sends the credentails through frontend
         raise HTTPException(
-            status_code = 401, 
+            status_code = 401,
             detail = "Missing bearer token"
         )
     return decode_bearer_any(creds.credentials)

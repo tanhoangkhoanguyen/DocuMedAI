@@ -1,5 +1,8 @@
-node_modules
-.next
+node_modules/
+.next/
+out/
+
+.env
+.env.*
+
 .git
-*.md
-.env*.local

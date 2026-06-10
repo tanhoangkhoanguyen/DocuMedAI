@@ -10,6 +10,7 @@ LOGGER = get_logger(
     name = "ElasticSearch_tool",
     level = "INFO"
 )
+_ELASTICSEARCH_DICT = {}
 ELASTICSEARCH_URL = "http://la-elasticsearch:9200"
 
 class ElasticsearchClient:
@@ -120,3 +121,14 @@ class ElasticsearchClient:
 
     def close(self):
         self.__client.close()
+
+def get_elasticsearch_client(
+        embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2",
+        embedding_dimension: int = 384
+    ):
+    if not embedding_model in _ELASTICSEARCH_DICT:
+        _ELASTICSEARCH_DICT[embedding_model] = ElasticsearchClient(
+            embedding_model = embedding_model,
+            embedding_dimension = embedding_dimension
+        )
+    return _ELASTICSEARCH_DICT[embedding_model]

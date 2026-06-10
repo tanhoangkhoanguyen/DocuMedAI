@@ -1,7 +1,7 @@
 from redis import Redis
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
-import json, threading, warnings
+import json, threading, time, warnings
 warnings.filterwarnings("ignore")
 
 from logger import get_logger
@@ -11,7 +11,8 @@ _LOGGER = get_logger(
     name = "Redis_tool",
     level = "INFO",
 )
-REDIS_URL = "local://la-redis:6379/0"
+SHARED_REDIS_CLIENT = None
+REDIS_URL = "redis://la-redis:6379/0"
 DEFAULT_KEY_PREFIX = "documedai"
 _COLLECTION_MARKER = "__marker"
 
@@ -20,10 +21,11 @@ class RedisClient:
     def __init__(self) -> None:
         self.__client = Redis.from_url(REDIS_URL, decode_responses = True)
         if not self.ping():
-            raise
+            raise RuntimeError(f"Cannot connect to Redis at {REDIS_URL}")
 
         self.__expire_thread: Optional[threading.Thread] = None
         self.__expire_stop = threading.Event()                                       # Guarantees visibility across threads
+        self.__pubsub_client: Optional[Redis] = None
 
     def ping(self) -> bool:
         try:
@@ -39,17 +41,40 @@ class RedisClient:
         if self.__expire_thread is not None and self.__expire_thread.is_alive():
             return
 
+        if self.__pubsub_client is None:
+            self.__pubsub_client = Redis.from_url(
+                REDIS_URL,
+                decode_responses = True,
+                socket_timeout = None,
+            )
+
         def run() -> None:
-            pubsub = self.__client.pubsub()
-            pubsub.psubscribe("__keyevent@*__:expired")
-            for msg in pubsub.listen():
-                if self.__expire_stop.is_set():
-                    break
-                if msg.get("type") != "pmessage":
-                    continue
-                key = msg.get("data")
-                if isinstance(key, str):
-                    handler(key)
+            while not self.__expire_stop.is_set():
+                pubsub = None
+                try:
+                    pubsub = self.__pubsub_client.pubsub()
+                    pubsub.psubscribe("__keyevent@*__:expired")
+                    for msg in pubsub.listen():
+                        if self.__expire_stop.is_set():
+                            break
+                        if msg.get("type") != "pmessage":
+                            continue
+                        key = msg.get("data")
+                        if isinstance(key, str):
+                            handler(key)
+                except Exception as e:
+                    if not self.__expire_stop.is_set():
+                        _LOGGER.warning(
+                            f"Redis expire listener reconnecting after error: {e}"
+                        )
+                finally:
+                    if pubsub is not None:
+                        try:
+                            pubsub.close()
+                        except Exception:
+                            pass
+                if not self.__expire_stop.is_set():
+                    time.sleep(1)
 
         self.__expire_thread = threading.Thread(target = run, daemon = True)
         self.__expire_thread.start()
@@ -145,7 +170,7 @@ class RedisClient:
             ttl_seconds: Optional[int] = None,
             only_if_not_exists: bool = False,                                    # Normal cache overwrite on every write
         ) -> None:
-        rkey = self.__string_key(collection_name, key)
+        rkey = self._string_key(collection_name, key)
         try:
             payload = self.__normalize_value(value)
             if ttl_seconds is not None:
@@ -166,7 +191,7 @@ class RedisClient:
 
     def get_key(self, collection_name: str, key: str):
         try:
-            return self.__client.get(self.__string_key(collection_name, key))
+            return self.__client.get(self._string_key(collection_name, key))
         except Exception as e:
             _LOGGER.error(f"Failed to get key '{key}' from collection '{collection_name}'\n\t{str(e)}")
             return None
@@ -179,7 +204,7 @@ class RedisClient:
 
     def delete_key(self, collection_name: str, key: str) -> int:
         try:
-            num_keys = self.__client.delete(self.__string_key(collection_name, key))
+            num_keys = self.__client.delete(self._string_key(collection_name, key))
             return num_keys
         except Exception as e:
             _LOGGER.error(f"Failed to delete key '{key}' in collection '{collection_name}'\n\t{str(e)}")
@@ -187,7 +212,7 @@ class RedisClient:
 
     def key_exists(self, collection_name: str, key: str) -> bool:
         try:
-            return self.__client.exists(self.__string_key(collection_name, key))
+            return self.__client.exists(self._string_key(collection_name, key))
         except Exception as e:
             _LOGGER.error(f"Failed exists check for '{key}' in '{collection_name}'\n\t{str(e)}")
             return False
@@ -201,7 +226,7 @@ class RedisClient:
         try:
             return bool(
                 self.__client.expire(
-                    self.__string_key(collection_name, key),
+                    self._string_key(collection_name, key),
                     ttl_seconds,
                 )
             )
@@ -217,7 +242,7 @@ class RedisClient:
         - -2 if missing.
         """
         try:
-            return self.__client.ttl(self.__string_key(collection_name, key))
+            return self.__client.ttl(self._string_key(collection_name, key))
         except Exception as e:
             _LOGGER.error(f"Failed to read TTL for '{key}' in '{collection_name}'\n\t{str(e)}")
             return -2
@@ -311,7 +336,21 @@ class RedisClient:
 
     def close(self) -> None:
         self.stop_expire_listener()
+        if self.__expire_thread is not None:
+            self.__expire_thread.join(timeout = 2)
+        if self.__pubsub_client is not None:
+            try:
+                self.__pubsub_client.close()
+            except Exception as e:
+                _LOGGER.error(f"Failed to close Redis pubsub client\n\t{str(e)}")
         try:
             self.__client.close()
         except Exception as e:
             _LOGGER.error(f"Failed to close Redis client\n\t{str(e)}")
+
+
+def get_redis_client():
+    global SHARED_REDIS_CLIENT
+    if SHARED_REDIS_CLIENT is None:
+        SHARED_REDIS_CLIENT = RedisClient()
+    return SHARED_REDIS_CLIENT

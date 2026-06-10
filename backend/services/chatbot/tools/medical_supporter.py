@@ -1,13 +1,23 @@
-import os
 from typing import List
 
 from services.chatbot.constants.schemas import ToolParameter
-from services.chatbot.tools.rag import RAG
-from vector_database_tests.utils.qdrant_client import QdrantClient
+from vector_database_tests.utils.qdrant_client import get_qdrant_client
+from services.chatbot.tools.rag import get_rag_client
 
 
 _COLLECTION_NAME = "MedicalTerms"
-_SHARED_MEDICAL_SUPPORTER = None
+_MEDICAL_SUPPORTER_DICT: dict = {}
+
+
+def _payload_key(payload: ToolParameter) -> tuple:
+    return (
+        payload.chat_model,
+        payload.temperature,
+        payload.embedding_model,
+        payload.embedding_dimension,
+        payload.reranking_model,
+        payload.reranking_threshold,
+    )
 
 
 def _payload_texts_from_response(resp) -> List[str]:
@@ -31,15 +41,15 @@ def _payload_texts_from_response(resp) -> List[str]:
 
 class MedicalSupporter:
     def __init__(self, payload: ToolParameter):
-        self.__rag_client = RAG(
+        self.__rag_client = get_rag_client(
             chat_model = payload.chat_model,
             temperature = payload.temperature,
             reranking_model = payload.reranking_model,
             reranking_threshold = payload.reranking_threshold,
         )
-        self.qdrant_client = QdrantClient(
+        self.__qdrant_client = get_qdrant_client(
             embedding_model = payload.embedding_model,
-            embedding_dimension = payload.embedding_dimension
+            embedding_dimension = payload.embedding_dimension,
         )
 
     def run(self, message: str, config = None):
@@ -51,10 +61,10 @@ class MedicalSupporter:
         for msg in seeds:
             if not msg or not str(msg).strip():
                 continue
-            vec = self.qdrant_client.embed_query(str(msg))
-            resp = self.qdrant_client.retrieve_query(
+            vec = self.__qdrant_client.embed_query(str(msg))
+            resp = self.__qdrant_client.retrieve_query(
                 collection_name = _COLLECTION_NAME,
-                query = vec,
+                embedded_query = vec,
             )
             queries.extend(_payload_texts_from_response(resp))
 
@@ -72,7 +82,7 @@ class MedicalSupporter:
 
 
 def get_medical_supporter(payload: ToolParameter) -> MedicalSupporter:
-    global _SHARED_MEDICAL_SUPPORTER
-    if _SHARED_MEDICAL_SUPPORTER is None:
-        _SHARED_MEDICAL_SUPPORTER = MedicalSupporter(payload)
-    return _SHARED_MEDICAL_SUPPORTER
+    key = _payload_key(payload)
+    if key not in _MEDICAL_SUPPORTER_DICT:
+        _MEDICAL_SUPPORTER_DICT[key] = MedicalSupporter(payload)
+    return _MEDICAL_SUPPORTER_DICT[key]

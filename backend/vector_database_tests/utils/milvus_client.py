@@ -10,6 +10,7 @@ LOGGER = get_logger(
     name = "Milvus_tool",
     level = "INFO"
 )
+_MILVUS_DICT = {}
 MILVUS_HOST = "la-milvus"
 MILVUS_PORT = "19530"
 
@@ -189,3 +190,15 @@ class MilvusClient:
         except Exception as e:
             LOGGER.error(f"Failed to retrieve from collection '{collection_name}'\n\t{str(e)}")
             return []
+
+
+def get_milvus_client(
+        embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2",
+        embedding_dimension: int = 384
+    ):
+    if not embedding_model in _MILVUS_DICT:
+        _MILVUS_DICT[embedding_model] = MilvusClient(
+            embedding_model = embedding_model,
+            embedding_dimension = embedding_dimension
+        )
+    return _MILVUS_DICT[embedding_model]

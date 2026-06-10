@@ -5,7 +5,7 @@ warnings.filterwarnings("ignore")
 
 from services.chatbot.workflow import build_graph
 from services.chatbot.constants.schemas import GraphState
-from vector_database_tests.utils.qdrant_client import QdrantClient
+from vector_database_tests.utils.qdrant_client import get_qdrant_client
 from logger import get_logger
 
 
@@ -72,14 +72,13 @@ if __name__ == "__main__":
     # be tuned empirically, or if labeled data is unavailable, assumptions based on embedding distributions are acceptable.
     topic_threshold = -5
     qdrant_threshold = 0.25
-    rag_threshold = -5
+    reranking_threshold = -5
 
     chat_id = "session-123"
 
-    # Pipeline setup
-    qdrant_client = QdrantClient(
+    qdrant_client = get_qdrant_client(
         embedding_model = embedding_model,
-        embedding_dimension = embedding_dimension
+        embedding_dimension = embedding_dimension,
     )
     qdrant_client.create_collection("LongtermMemory")
     # Upload medical dataset
@@ -123,7 +122,7 @@ if __name__ == "__main__":
         max_workers = max_workers,
         topic_threshold = topic_threshold,
         qdrant_threshold = qdrant_threshold,
-        rag_threshold = rag_threshold,
+        reranking_threshold = reranking_threshold,
         shortterm_memory_size = shortterm_memory_size,
         max_revision_cycles = max_revision_cycles,
     )
