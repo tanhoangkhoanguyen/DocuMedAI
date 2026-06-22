@@ -5,10 +5,15 @@
 # Cache
 **/__pycache__
 **/data_storage/
-/backend/chroma
-/backend/logs
+**/chroma
+**/logs
 
 # Documents
 **.pdf
 **.json
 **.jsonl
+
+# Keep project manifests that tooling (npm, tsc) requires.
+!**/package.json
+!**/package-lock.json
+!**/tsconfig.json

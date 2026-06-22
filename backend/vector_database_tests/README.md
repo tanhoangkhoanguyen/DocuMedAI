@@ -125,3 +125,13 @@ python -m vector_database_tests.data_processing   # Data preparation
 python -m vector_database_tests.data_uploading    # Indexing benchmark
 locust -f vector_database_tests/data_retrieval.py # Retrieval benchmark
 ```
+
+## Vespa Deployment
+Vespa needs its application package deployed before it can index or serve queries. Deploy `utils/vespa_config` into the running Vespa container once the service is up:
+```
+# Wait until the config server is healthy
+curl -sf http://localhost:19071/state/v1/health
+
+# Deploy the application package from utils/vespa_config
+docker exec -it <vespa-container> vespa deploy --wait 300 /app
+```

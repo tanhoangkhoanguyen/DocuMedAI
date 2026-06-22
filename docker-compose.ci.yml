@@ -1,0 +1,10 @@
+services:
+  la-backend:
+    working_dir: /workspace
+    environment:
+      PYTHONPATH: /workspace/backend:/workspace
+    volumes:
+      - ./:/workspace
+    command: ["sleep", "infinity"]
+    healthcheck:
+      disable: true
