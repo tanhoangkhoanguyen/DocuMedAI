@@ -20,7 +20,7 @@ DocuMedAI is a full-stack AI-powered medical document analysis system. Users upl
 | Memory cache | Redis (TTL 1800s → flush to MongoDB) | `backend/services/utils/redis_client.py` |
 | Persistence | MongoDB | `backend/services/utils/mongo_client.py` |
 | Auth | JWT + Supabase SSR | `backend/services/app/auth_api.py`, `frontend/lib/supabase/` |
-| Vector DB | Qdrant (default); alternatives in `vector_database_tests/` | `backend/services/chatbot/tools/` |
+| Vector DB | Qdrant (default); alternatives benchmarked in `backend/vector_database_tests/` | `backend/services/chatbot/tools/` |
 | MCP tools | Medical support tool registry | `backend/services/chatbot/mcp.py` |
 | Encryption | Pattern cipher for stored messages | `backend/services/chatbot/tools/pattern_cipher.py` |
 
@@ -47,16 +47,40 @@ npm run lint   # ESLint
 
 ### Backend development
 ```bash
-pip install -r backend/requirements-prod.txt
-python backend/services/app/run_app.py        # FastAPI server — http://localhost:2010
+pip install -r backend/requirements-prod.txt   # runtime deps
+pip install -r backend/requirements-dev.txt    # + vector DB lab clients (milvus/weaviate/etc.)
+python backend/services/app/run_app.py          # FastAPI server — http://localhost:2010
 python backend/services/chatbot/run_chatbot.py  # Graph-only test harness (no HTTP)
 ```
 
 ### Tests
+Tests live in `ci_tests/` and run against live services inside the `la-backend` container
+(see `pytest.ini`: `testpaths = ci_tests`, `pythonpath = backend .`). They are integration
+tests, not unit tests — Mongo/Redis/Qdrant must be reachable.
+
 ```bash
-pytest tests/                              # All tests
-pytest tests/test_db_retrieval.py -v      # Single test file
+# CI command (matches .github/workflows/python-ci.yml) — run inside the running stack
+COMPOSE="docker compose -f docker-compose.yml -f docker-compose.ci.yml"
+$COMPOSE up -d --build --wait la-qdrant la-mongo la-redis
+$COMPOSE up -d --build la-backend
+$COMPOSE exec -T la-backend pytest -q \
+  ci_tests/integration/utils \
+  ci_tests/integration/api \
+  ci_tests/integration/vector_db/test_qdrant_client.py
+
+# Single file inside the container
+$COMPOSE exec -T la-backend pytest -q ci_tests/integration/api/test_chat_api.py
+
+$COMPOSE down -v
 ```
+
+Markers (`pytest.ini`): `integration` (live services), `vectordb` (Milvus/Weaviate/Vespa/
+Pinecone/ChromaDB — the `vectordb-lab` CI job; requires `requirements-dev.txt` clients).
+
+`docker-compose.ci.yml` overrides `la-backend` to idle (`sleep infinity`, healthcheck
+disabled) and mounts the repo at `/workspace`, so tests run via `exec` rather than the
+prod entrypoint. The graph is mocked in `ci_tests/conftest.py` (`_build_graph` patched),
+so backend API tests don't call OpenAI.
 
 ## Service Ports
 
@@ -125,10 +149,13 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=
 
 ## Data Flow: Document Upload
 
-1. PDFs processed by `vector_database_tests/data_processing.py`
+1. PDFs processed by `backend/vector_database_tests/data_processing.py`
 2. Uploaded via `data_uploading.py` to Qdrant (and optionally other vector DBs)
 3. Indexed with `all-MiniLM-L6-v2` embeddings (dim 384)
 
-## Rules
+## CI
 
-- Read `.claude/rules/core-behavior.md` before acting
+GitHub Actions (`.github/workflows/`): `python-ci.yml` (backend integration tests +
+`vectordb-lab` job) and `frontend-ci.yml` (`npm run lint` + `npm run build`). Triggered on
+PRs and pushes to `main`/`develop`. CI writes a throwaway `.env` with test secrets; the
+backend graph is mocked, so no LLM API keys are needed.

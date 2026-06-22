@@ -94,7 +94,7 @@ class RedisClient:
         return f"{DEFAULT_KEY_PREFIX}:c:{collection_name}:s:{key}"
 
     @staticmethod
-    def _list_key(collection_name: str, list_name: str) -> str:
+    def __list_key(collection_name: str, list_name: str) -> str:
         return f"{DEFAULT_KEY_PREFIX}:c:{collection_name}:l:{list_name}"
 
     def collection_exists(self, collection_name: str) -> bool:

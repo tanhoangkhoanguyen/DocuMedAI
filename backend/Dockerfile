@@ -40,4 +40,9 @@ ENV PATH="/opt/venv/bin:$PATH" \
 
 COPY --from=builder /opt/venv /opt/venv
 
+# Pre-cache the embedding model into /models (= HF_HOME) at build time so runtime
+# never downloads it. Unauthenticated HF downloads are rate-limited (HTTP 429),
+# which otherwise fails CI on every cold run.
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')"
+
 CMD ["python", "-m", "services.app.run_app"]

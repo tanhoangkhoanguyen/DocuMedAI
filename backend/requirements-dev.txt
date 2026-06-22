@@ -1,11 +1,12 @@
-# Optional: vector DB benchmark lab only (not used by production API or CI).
-# Install with: pip install -r requirements-dev.txt
-# Vector DB clients (tests only)
+# Vector DB benchmark lab only (not used by production API or core CI).
+# Install on top of prod: pip install -r requirements-prod.txt -r requirements-dev.txt
+
+# Vector DB clients (lab tests only)
 chromadb
 weaviate-client
 pymilvus
 
-# Data processing (tests only)
+# Data processing (lab tests only)
 datasets
 pyarrow
 
