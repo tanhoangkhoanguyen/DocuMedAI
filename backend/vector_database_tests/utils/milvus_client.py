@@ -161,7 +161,7 @@ class MilvusClient:
                 queries
             ]
             self._milvus_client.insert(objects)
-            # self._milvus_client.flush()
+            self._milvus_client.flush()
         except Exception as e:
             LOGGER.error(f"Failed to push to collection '{collection_name}'\n\t{str(e)}")
 

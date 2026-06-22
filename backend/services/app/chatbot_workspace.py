@@ -298,9 +298,9 @@ class ChatbotWorkspace:
 
     def verify_login(self, email: str, password: str) -> Tuple[str, str]:
         cache_key = self._user_cache_key(email)
-        cached = self.__redis_client.get_key(_WORKSPACE_COLLECTION, cache_key)
-        if cached is not None:
-            if cached != password:
+        cached = self.__redis_client.get_json_key(_WORKSPACE_COLLECTION, cache_key)
+        if isinstance(cached, dict):
+            if cached.get("password") != password:
                 raise ValueError("bad_credentials")
             return str(cached["user_id"]), str(cached["username"])
 
@@ -316,7 +316,11 @@ class ChatbotWorkspace:
         self.__redis_client.set_key(
             _WORKSPACE_COLLECTION,
             cache_key,
-            doc["password"],
+            {
+                "user_id": doc["user_id"],
+                "username": doc["username"],
+                "password": doc["password"],
+            },
             _TTL_SECONDS,
         )
         return str(doc["user_id"]), str(doc["username"])
@@ -400,7 +404,7 @@ class ChatbotWorkspace:
             username = username,
             email = "",
             password = "",
-            plain = "Free",
+            plan = "Free",
         )
 
         state = GraphState(

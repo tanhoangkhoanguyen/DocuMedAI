@@ -91,6 +91,15 @@ services:
       - ./backend/vector_database_tests/utils/vespa_config:/app
       - ./backend/vector_database_tests/utils/data_storage/vespa_data:/opt/vespa/var
     mem_limit: 8g
+    # Healthcheck so `--wait` blocks until the config server is actually serving,
+    # not merely "started" (Vespa needs ~30-60s; without this the deploy step hits
+    # a container that is still booting / restarting).
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:19071/state/v1/health"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 360s
 
   la-weaviate:
     profiles: ["vectordb-lab"]

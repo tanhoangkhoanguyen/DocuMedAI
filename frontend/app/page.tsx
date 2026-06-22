@@ -9,7 +9,7 @@ import { createClient } from "@/lib/utils/server_client";
 export default async function Home() {
   const supabase = await createClient();
   const {
-    data: { SupabaseUser },
+    data: { user: SupabaseUser },
   } = await supabase.auth.getUser();
   if (SupabaseUser) {
     const {

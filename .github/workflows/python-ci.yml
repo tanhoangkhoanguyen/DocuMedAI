@@ -5,39 +5,110 @@ on:
   push:
     branches:
       - main
-      - master
+      - develop
+      - feature/Setup-CI
+
+env:
+  COMPOSE: docker compose -f docker-compose.yml -f docker-compose.ci.yml
 
 jobs:
-  test:
+  backend:
     runs-on: ubuntu-latest
-    services:
-      qdrant:
-        image: qdrant/qdrant:v1.16.1
-        ports:
-          - 6333:6333
-    env:
-      QDRANT_URL: http://localhost:6333
-
-    defaults:
-      run:
-        working-directory: ./backend
-
+    timeout-minutes: 30
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.10"
-
-      - name: Install dependencies
+      - name: Write CI .env
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements-prod.txt
-          pip install pytest
+          cat > .env <<'EOF'
+          UUID_NAMESPACE="b1343753-a4f3-4be8-94c6-9780ee37ab61"
+          AUTH_JWT_SECRET=test-auth-secret
+          SUPABASE_JWT_SECRET=test-supabase-secret
+          EOF
 
-      - name: Run tests
+      - name: Start core stack
         run: |
-          cd ..
-          pytest -q
+          $COMPOSE up -d --build --wait la-qdrant la-mongo la-redis
+          $COMPOSE up -d --build la-backend
+
+      - name: Run backend CI tests
+        run: |
+          $COMPOSE exec -T la-backend pytest -q \
+            ci_tests/integration/utils \
+            ci_tests/integration/api \
+            ci_tests/integration/vector_db/test_qdrant_client.py
+
+      - name: Dump logs on failure
+        if: failure()
+        run: $COMPOSE logs --no-color
+
+      - name: Tear down
+        if: always()
+        run: $COMPOSE down -v
+
+  vectordb-lab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Write CI .env
+        run: |
+          cat > .env <<'EOF'
+          UUID_NAMESPACE="b1343753-a4f3-4be8-94c6-9780ee37ab61"
+          AUTH_JWT_SECRET=test-auth-secret
+          SUPABASE_JWT_SECRET=test-supabase-secret
+          EOF
+
+      - name: Start full lab stack
+        run: |
+          # la-backend healthcheck is disabled in the CI override (it idles), so it
+          # can't be in the --wait set. Wait on the stores, then start la-backend.
+          $COMPOSE --profile vectordb-lab up -d --build --wait \
+            la-qdrant la-mongo la-redis \
+            la-milvus la-weaviate la-pinecone la-vespa
+          $COMPOSE --profile vectordb-lab up -d --build la-backend
+
+      - name: Install vector DB lab deps into la-backend
+        run: |
+          # Lab clients import chromadb / pymilvus / weaviate-client (requirements-dev.txt).
+          # The prod image omits them; install into the running container for the lab job.
+          $COMPOSE exec -T la-backend pip install -r /workspace/backend/requirements-dev.txt
+
+      - name: Wait for Milvus
+        run: |
+          # Poll from la-backend (has curl) against the compose-internal hostname.
+          for i in $(seq 1 30); do
+            $COMPOSE exec -T la-backend curl -sf http://la-milvus:9091/healthz && exit 0
+            sleep 5
+          done
+          echo "Milvus did not become ready"; exit 1
+
+      - name: Deploy Vespa application package
+        run: |
+          # The config server is already healthy (la-vespa has a CI healthcheck and
+          # was in the --wait set), so deploy straight away against /app (vespa_config).
+          $COMPOSE exec -T la-vespa vespa deploy --wait 300 /app
+          # 3. Deploy returning != app serving; wait until the query endpoint is up.
+          for i in $(seq 1 60); do
+            $COMPOSE exec -T la-backend curl -sf http://la-vespa:8080/ApplicationStatus && exit 0
+            sleep 5
+          done
+          echo "Vespa application did not become ready"; exit 1
+
+      - name: Run vector DB lab CI tests
+        run: |
+          $COMPOSE exec -T la-backend pytest -q \
+            ci_tests/integration/vector_db/test_milvus_client.py \
+            ci_tests/integration/vector_db/test_pinecone_client.py \
+            ci_tests/integration/vector_db/test_weaviate_client.py \
+            ci_tests/integration/vector_db/test_vespa_client.py \
+            ci_tests/integration/vector_db/test_chromadb_client.py
+
+      - name: Dump logs on failure
+        if: failure()
+        run: $COMPOSE --profile vectordb-lab logs --no-color
+
+      - name: Tear down
+        if: always()
+        run: $COMPOSE --profile vectordb-lab down -v

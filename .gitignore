@@ -5,8 +5,8 @@
 # Cache
 **/__pycache__
 **/data_storage/
-/backend/chroma
-/backend/logs
+**/chroma
+**/logs
 
 # Documents
 **.pdf
