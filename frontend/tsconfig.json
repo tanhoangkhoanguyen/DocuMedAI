@@ -1,0 +1,27 @@
+{
+  "compilerOptions": {
+    "target": "ES2017",                                              // JS output version
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "allowJs": true,                                                 // Allows .js files in TS project
+    "skipLibCheck": true,
+    "strict": true,                                                  // Enables strict TypeScript checks
+    "noEmit": true,
+    "esModuleInterop": true,                                         // Enable compatibility with CommonJS imports
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "preserve",
+    "incremental": true,
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ],
+    "paths": {
+      "@/*": ["./*"]
+    }
+  },
+  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
+  "exclude": ["node_modules"]
+}

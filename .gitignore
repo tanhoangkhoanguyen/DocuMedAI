@@ -12,3 +12,8 @@
 **.pdf
 **.json
 **.jsonl
+
+# Keep project manifests that tooling (npm, tsc) requires.
+!**/package.json
+!**/package-lock.json
+!**/tsconfig.json
