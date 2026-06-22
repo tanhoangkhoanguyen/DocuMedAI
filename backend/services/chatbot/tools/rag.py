@@ -1,13 +1,15 @@
 from langsmith import traceable
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_openai import ChatOpenAI
+# from langchain_openai import ChatOpenAI=
 from pydantic import BaseModel
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 from typing import List
 
-import torch, warnings
+import os, torch, warnings
 warnings.filterwarnings("ignore")
+
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 from services.chatbot.constants.prompts import (
     PARAPHRASE_MESSAGE_PROMPT,
@@ -31,9 +33,10 @@ class RAG:
         reranking_model: str,
         reranking_threshold: float,
     ):
-        self.__llm = ChatOpenAI(
+        self.__llm = ChatGoogleGenerativeAI(
             model = chat_model,
             temperature = temperature,
+            google_api_key = GEMINI_API_KEY,
         )
         self.__reranking_threshold = reranking_threshold
         try:
@@ -119,7 +122,7 @@ class RAG:
 
 
 def get_rag_client(
-        chat_model: str = "gpt-4o-mini",
+        chat_model: str = "gemini-2.5-flash",
         temperature: float = 0,
         reranking_model: str = "BAAI/bge-reranker-v2-m3",
         reranking_threshold: float = -5,

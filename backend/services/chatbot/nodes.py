@@ -3,12 +3,14 @@ from concurrent.futures import ThreadPoolExecutor
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langchain_core.runnables import Runnable
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_openai import ChatOpenAI
+# from langchain_openai import ChatOpenAI
 from pydantic import BaseModel
 from typing import Any, List, Optional, Type
 
-import warnings
+import os, warnings
 warnings.filterwarnings("ignore")
+
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 from services.chatbot.constants.schemas import (
     GraphState,
@@ -46,9 +48,10 @@ class TopicChecker(Runnable):
             reranking_model: str,
             reranking_threshold: float,
         ):
-        self.__llm = ChatOpenAI(
+        self.__llm = ChatGoogleGenerativeAI(
                 model = chat_model,
-                temperature = temperature
+                temperature = temperature,
+                google_api_key = GEMINI_API_KEY,
             )
         self.__rag_client = get_rag_client(
             chat_model = chat_model,
@@ -107,9 +110,10 @@ class MessageAnalysis(Runnable):
         user_inputs: List[SubMessageState]
 
     def __init__(self, chat_model: str, temperature: float):
-        self.__llm = ChatOpenAI(
+        self.__llm = ChatGoogleGenerativeAI(
                 model = chat_model,
-                temperature = temperature
+                temperature = temperature,
+                google_api_key = GEMINI_API_KEY,
             )
 
     def invoke(self, state: GraphState, config = None):
@@ -210,13 +214,15 @@ class Agents(Runnable):
             reranking_model: str,
             reranking_threshold: float,
         ):
-        self.__llm = ChatOpenAI(
+        self.__llm = ChatGoogleGenerativeAI(
             model = chat_model,
             temperature = temperature,
+            google_api_key = GEMINI_API_KEY,
         )
         self.__crew_llm = LLM(
             model = self.get_crew_model(chat_model),
             temperature = temperature,
+            api_key = GEMINI_API_KEY,
         )
         self.__max_workers = max_workers
         self.__mcp_client = get_mcp_client(

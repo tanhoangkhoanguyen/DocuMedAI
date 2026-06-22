@@ -2,33 +2,15 @@
 "use client";                                                       // Tell Next.js to run this component in the browser
 
 
-import { useEffect, useId, useRef, useState } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";                        // Navigate between pages
-import { Fraunces, Spline_Sans, Spline_Sans_Mono } from "next/font/google";
 
 import { createClient } from "@/lib/utils/browser_client";
+import BrandPanel from "@/components/utils/BrandPanel";
+import Field from "@/components/utils/Field";
 
 
-// TODO: Config fonts in shared file
-const display = Fraunces({
-  subsets: ["latin"],
-  weight: ["400", "500", "600"],
-  style: ["normal", "italic"],
-  variable: "--font-display",
-});
-const sans = Spline_Sans({
-  subsets: ["latin"],
-  weight: ["300", "400", "500", "600"],
-  variable: "--font-sans",
-});
-const mono = Spline_Sans_Mono({
-  subsets: ["latin"],
-  weight: ["400", "500"],
-  variable: "--font-mono",
-});
-
-
-type Mode = "signin" | "register";                                 // Literal Union Strings
+type Mode = "signin" | "register";                                   // Literal Union Strings
 
 
 export default function LoginPage() {
@@ -79,8 +61,8 @@ export default function LoginPage() {
     setStatus(null);
 
     const supabase = createClient();
-    const origin = window.location.origin;                        // Get current url
-    const { error } = await supabase.auth.signInWithOtp({         // Send magic link to email
+    const origin = window.location.origin;                            // Get current url
+    const { error } = await supabase.auth.signInWithOtp({             // Send magic link to email
       email: email.trim(),
       options: { emailRedirectTo: `${origin}/auth/callback` },
     });
@@ -95,46 +77,13 @@ export default function LoginPage() {
 
   return (
     <main
-        className={`${display.variable} ${sans.variable} ${mono.variable} 
-                    grid min-h-screen grid-cols-1 
-                    bg-[#F2EEE4] text-[#102A26] 
+        className="grid min-h-screen grid-cols-1
+                    bg-[#F2EEE4] text-[#102A26]
                     lg:grid-cols-[1.05fr_0.95fr]
-        `}
-        style={{ fontFamily: "var(--font-sans)" }}
+        "
       >
       {/* ── Brand panel ─────────────────────────────────────────────── */}
-      <section className="relative hidden flex-col justify-between overflow-hidden bg-[#0E221F] p-12 text-[#E9E4D6] lg:flex">
-        <div className="pointer-events-none absolute inset-x-0 top-1/2 -translate-y-1/2">
-          <PulseLine />
-        </div>
-
-        <header className="relative flex items-center gap-3">
-          <Glyph />
-          <span className="font-mono text-[11px] uppercase tracking-[0.32em] text-[#8FB3A6]">
-            DocuMedAI
-          </span>
-        </header>
-
-        <div className="relative max-w-md">
-          <p className="mb-3 font-mono text-[11px] uppercase tracking-[0.3em] text-[#FF5436]">
-            Clinical AI Assistant
-          </p>
-          <h1
-            className="text-balance text-[2.9rem] font-light leading-[1.05] tracking-[-0.02em]"
-            style={{ fontFamily: "var(--font-display)" }}
-          >
-            Ask anything.
-            <br />
-            <span className="italic text-[#9FC4B6]">Get fast, grounded answers.</span>
-          </h1>
-        </div>
-
-        <footer className="relative flex items-center justify-between font-mono text-[10.5px] uppercase tracking-[0.22em] text-[#6E8A82]">
-          <span>tanhoangkhoanguyen</span>
-          <span aria-hidden className="h-px w-10 bg-[#2C453F]" />
-          <span>End-to-end encrypted</span>
-        </footer>
-      </section>
+      <BrandPanel />
 
       {/* ── Form panel ──────────────────────────────────────────────── */}
       <section className="relative flex items-center justify-center px-6 py-12 sm:px-10">
@@ -303,111 +252,6 @@ export default function LoginPage() {
           )}
         </div>
       </section>
-
-      <style>{`
-        @keyframes sweep {
-          to { stroke-dashoffset: -1000; }
-        }
-        @keyframes travel {
-          from { offset-distance: 0%; }
-          to { offset-distance: 100%; }
-        }
-        /* Gentle fade used when the heading text swaps between modes. */
-        @keyframes fadeIn {
-          from { opacity: 0; transform: translateY(4px); }
-          to { opacity: 1; transform: translateY(0); }
-        }
-      `}</style>
     </main>
-  );
-}
-
-
-function Field({
-    label,                // label
-    value,                // current input value
-    onChange,             // function to update value
-    ...rest
-  }: {
-    label: string;
-    value: string;
-    onChange: (v: string) => void;
-  } & Omit<React.InputHTMLAttributes<HTMLInputElement>, "value" | "onChange">) {        // Custom value, onChange
-  return (
-    <label className="block">
-      <span className="mb-1 block font-mono text-[10.5px] uppercase tracking-[0.22em] text-[#102A26]/45">
-        {label}
-      </span>
-      <input
-        {...rest}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="w-full border-0 border-b border-[#102A26]/20 bg-transparent pb-1 text-[15px] text-[#102A26] outline-none transition-colors placeholder:text-[#102A26]/30 focus:border-[#FF5436]"
-      />
-    </label>
-  );
-}
-
-
-function Glyph() {
-  const stroke = "#E9E4D6";
-  return (
-    <svg width="26" height="26" viewBox="0 0 26 26" fill="none" aria-hidden>
-      <rect x="1" y="1" width="24" height="24" rx="6" stroke={stroke} strokeOpacity="0.5" />
-      <path
-        d="M5 13h3l2-5 3 10 2-5h6"
-        stroke="#FF5436"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
-
-function PulseLine() {
-  const ECG_PATH =
-    "M0 100 H650 l30 -60 l34 130 l30 -150 l28 158 l26 -78 H850 l40 -34 l36 68 H1200";
-
-  return (
-    <svg viewBox="0 0 1200 200" className="w-full" aria-hidden>
-      <path
-        d={ECG_PATH}
-        fill="none"
-        stroke="#FF5436"
-        strokeWidth="1.4"
-        strokeOpacity="0.2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      <path
-        className="pulse-beam"
-        d={ECG_PATH}
-        fill="none"
-        stroke="#FF5436"
-        strokeWidth="1.6"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        pathLength={1000}
-        style={{
-          strokeDasharray: "150 850",
-          animation: "sweep 10s linear infinite",
-        }}
-      />
-      <circle
-        className="pulse-blip"
-        r="4"
-        fill="#FF5436"
-        style={{
-          offsetPath: `path("${ECG_PATH}")`,
-          offsetRotate: "0deg",
-          filter: "drop-shadow(0 0 15px #FF5436)",
-          animation:
-            "travel 10s linear infinite, blip 0.5s ease-in-out infinite",
-          animationDelay: "-1.5s, 0s",
-        }}
-      />
-    </svg>
   );
 }

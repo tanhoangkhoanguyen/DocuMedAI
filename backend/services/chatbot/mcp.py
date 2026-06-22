@@ -79,7 +79,7 @@ class MCPServer:
             ))
 
 def get_mcp_client(
-        chat_model: str = "gpt-4o-mini",
+        chat_model: str = "gemini-2.5-flash",                                   # Switched from gpt-4o-mini to Gemini
         temperature: float = 0,
         embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2",
         embedding_dimension: int = 384,

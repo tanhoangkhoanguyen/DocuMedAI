@@ -263,7 +263,7 @@ class RedisClient:
         Redis stores:
             "chat":"room1" -> ["Hello", "How are you?"]
         """
-        rkey = self.__list_key(collection_name, list_name)
+        rkey = self._list_key(collection_name, list_name)
         try:
             payloads = [self.__normalize_value(v) for v in values]
             if not payloads:
@@ -279,7 +279,7 @@ class RedisClient:
 
     def list_delete(self, collection_name: str, list_name: str) -> int:
         try:
-            return int(self.__client.delete(self.__list_key(collection_name, list_name)))
+            return int(self.__client.delete(self._list_key(collection_name, list_name)))
         except Exception as e:
             _LOGGER.error(f"Failed list_delete '{list_name}' in '{collection_name}'\n\t{str(e)}")
             raise
@@ -292,7 +292,7 @@ class RedisClient:
             end: int = -1,
         ):
         try:
-            out = self.__client.lrange(self.__list_key(collection_name, list_name), start, end)
+            out = self.__client.lrange(self._list_key(collection_name, list_name), start, end)
             return list(out) if out else []
         except Exception as e:
             _LOGGER.error(f"Failed list_range '{list_name}' in '{collection_name}'\n\t{str(e)}")
@@ -303,14 +303,14 @@ class RedisClient:
         Removes and returns only the LEFTMOST single element
         """
         try:
-            return self.__client.lpop(self.__list_key(collection_name, list_name))
+            return self.__client.lpop(self._list_key(collection_name, list_name))
         except Exception as e:
             _LOGGER.error(f"Failed list_pop_left '{list_name}' in '{collection_name}'\n\t{str(e)}")
             return None
 
     def list_length(self, collection_name: str, list_name: str):
         try:
-            return int(self.__client.llen(self.__list_key(collection_name, list_name)))
+            return int(self.__client.llen(self._list_key(collection_name, list_name)))
         except Exception as e:
             _LOGGER.error(f"Failed list_length '{list_name}' in '{collection_name}'\n\t{str(e)}")
             return 0

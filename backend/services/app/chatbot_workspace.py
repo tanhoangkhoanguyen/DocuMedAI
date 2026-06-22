@@ -423,7 +423,7 @@ class ChatbotWorkspace:
             chatbot_response = "Sorry, I didn't understand that."
 
         rows = self._lc_messages_to_rows(result["chat_history"])
-        stm_out = result.get["shortterm_memory"]
+        stm_out = result.get("shortterm_memory") or []
 
         self._write_chat_snap(chat_id, rows, stm_out)
         self.__redis_client.set_key(
