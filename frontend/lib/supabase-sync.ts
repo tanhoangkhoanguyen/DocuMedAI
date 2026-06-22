@@ -1,4 +1,4 @@
-import { getInternalApiBase } from "@/lib/internal-api";
+import { getInternalApiBase } from "@/lib/utils/internal-api";
 
 export async function syncSupabaseToBackend(accessToken: string): Promise<void> {
   await fetch(`${getInternalApiBase()}/auth/supabase-sync`, {

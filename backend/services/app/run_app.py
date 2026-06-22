@@ -22,7 +22,8 @@ _LOGGER = get_logger(
 
 def _build_graph():
     return build_graph(
-        chat_model = "gpt-4o-mini",
+        # chat_model = "gpt-4o-mini",                                              # Switched to Gemini (Google GenAI)
+        chat_model = "gemini-2.5-flash",
         temperature = 0,
         embedding_model = "sentence-transformers/all-MiniLM-L6-v2",
         embedding_dimension = 384,
@@ -57,6 +58,22 @@ app.include_router(auth_router)
 app.include_router(chat_router)
 
 
+# {
+#   "user_info": {
+#     "user_id": "2b656bec-983f-571b-88b3-9cea12d3e654",
+#     "username": "Admin",
+#     "email": "admin@gmail.com",
+#     "password": "Admin123",
+#     "plan": "Free"
+#   },
+#   "chat_history": [
+#     {
+#       "type": "human",
+#       "content": "Hi chatbot"
+#     }
+#   ],
+#   "shortterm_memory": []
+# }
 @app.post("/chatbot", response_class = PlainTextResponse)
 def chatbot(payload: GraphState, thread_id: str = "12345") -> PlainTextResponse:
     try:

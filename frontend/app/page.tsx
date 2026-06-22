@@ -2,16 +2,16 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import ChatLayout from "@/components/ChatLayout";
 import { LOCAL_COOKIE } from "@/lib/backend-bearer";
-import { getInternalApiBase } from "@/lib/internal-api";
+import { getInternalApiBase } from "@/lib/utils/internal-api";
 import { syncSupabaseToBackend } from "@/lib/supabase-sync";
 import { createClient } from "@/lib/utils/server_client";
 
 export default async function Home() {
   const supabase = await createClient();
   const {
-    data: { user },
+    data: { SupabaseUser },
   } = await supabase.auth.getUser();
-  if (user) {
+  if (SupabaseUser) {
     const {
       data: { session },
     } = await supabase.auth.getSession();
@@ -19,26 +19,26 @@ export default async function Home() {
       try {
         await syncSupabaseToBackend(session.access_token);
       } catch {
-        /* backend may be down */
+        // backend is down
       }
     }
-    return <ChatLayout userEmail={user.email ?? ""} />;
+    return <ChatLayout userEmail={SupabaseUser.email ?? ""} />;
   }
 
-  const jar = await cookies();
-  const localTok = jar.get(LOCAL_COOKIE)?.value;
-  if (localTok) {
+  const authCookies = await cookies();
+  const authUser = authCookies.get(LOCAL_COOKIE)?.value;
+  if (authUser) {
     try {
       const res = await fetch(`${getInternalApiBase()}/auth/me`, {
-        headers: { Authorization: `Bearer ${localTok}` },
+        headers: { Authorization: `Bearer ${authUser}` },
         cache: "no-store",
       });
       if (res.ok) {
-        const j = (await res.json()) as { username?: string };
-        return <ChatLayout userEmail={j.username || "User"} />;
+        const metadata = (await res.json()) as { username?: string };
+        return <ChatLayout userEmail={metadata.username || "Unknown"} />;
       }
     } catch {
-      /* ignore */
+        // backend is down
     }
   }
 

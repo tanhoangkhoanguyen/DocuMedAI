@@ -2,9 +2,10 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { createClient } from "@/lib/utils/browser_client";
-
-type ChatRow = { chat_id: string; chat_name: string };
-type MsgRow = { role: string; content: string };
+import ChatSidebar from "@/components/utils/ChatSidebar";
+import MessageList from "@/components/utils/MessageList";
+import MessageInput from "@/components/utils/MessageInput";
+import type { ChatRow, MsgRow } from "@/components/utils/chat-types";
 
 export default function ChatLayout({ userEmail }: { userEmail: string }) {
   const [chats, setChats] = useState<ChatRow[]>([]);
@@ -12,7 +13,6 @@ export default function ChatLayout({ userEmail }: { userEmail: string }) {
   const [messages, setMessages] = useState<MsgRow[]>([]);
   const [input, setInput] = useState("");
   const [loadingList, setLoadingList] = useState(true);
-  const [loadingMsgs, setLoadingMsgs] = useState(false);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -36,10 +36,9 @@ export default function ChatLayout({ userEmail }: { userEmail: string }) {
   }, []);
 
   const loadMessages = useCallback(async (chatId: string) => {
-    setLoadingMsgs(true);
     setError(null);
+    setMessages([]);   // Clear stale thread so the bar stays centred while we check.
     const res = await fetch(`/api/chats/${encodeURIComponent(chatId)}/messages`);
-    setLoadingMsgs(false);
     if (!res.ok) {
       const j = await res.json().catch(() => ({}));
       setError(j.error ?? "Could not load messages");
@@ -128,126 +127,48 @@ export default function ChatLayout({ userEmail }: { userEmail: string }) {
     window.location.href = "/login";
   }
 
-  return (
-    <div className="flex h-screen bg-zinc-950 text-zinc-100">
-      <aside className="flex w-64 shrink-0 flex-col border-r border-zinc-800 bg-zinc-900/40">
-        <div className="border-b border-zinc-800 p-3">
-          <button
-            type="button"
-            onClick={() => void newChat()}
-            className="w-full rounded-lg border border-zinc-600 bg-zinc-800 py-2 text-sm hover:bg-zinc-700"
-          >
-            New chat
-          </button>
-        </div>
-        <div className="flex-1 overflow-y-auto p-2 space-y-1">
-          {loadingList ? (
-            <p className="px-2 text-xs text-zinc-500">Loading…</p>
-          ) : chats.length === 0 ? (
-            <p className="px-2 text-xs text-zinc-500">No chats yet.</p>
-          ) : (
-            chats.map((c) => (
-              <div key={c.chat_id} className="group flex gap-1">
-                <button
-                  type="button"
-                  onClick={() => setActiveId(c.chat_id)}
-                  className={`min-w-0 flex-1 truncate rounded-md px-2 py-2 text-left text-sm ${
-                    c.chat_id === activeId
-                      ? "bg-zinc-800 text-white"
-                      : "text-zinc-300 hover:bg-zinc-800/60"
-                  }`}
-                >
-                  {c.chat_name}
-                </button>
-                <button
-                  type="button"
-                  title="Rename"
-                  onClick={() => void renameChat(c.chat_id)}
-                  className="shrink-0 rounded px-1 text-xs text-zinc-500 opacity-0 hover:text-zinc-300 group-hover:opacity-100"
-                >
-                  ✎
-                </button>
-              </div>
-            ))
-          )}
-        </div>
-        <div className="border-t border-zinc-800 p-3 text-xs text-zinc-500">
-          <p className="truncate text-zinc-400" title={userEmail}>
-            {userEmail}
-          </p>
-          <button
-            type="button"
-            onClick={() => void signOut()}
-            className="mt-2 text-zinc-400 underline hover:text-zinc-200"
-          >
-            Sign out
-          </button>
-        </div>
-      </aside>
+  // Centred hero layout whenever there's nothing rendered in the thread —
+  // including while we're still checking the backend for messages. The bar
+  // only drops once actual messages exist to render.
+  const isEmptyChat = messages.length === 0;
 
+  return (
+    <div className="flex h-screen bg-[#F2EEE4] text-[#102A26]">
+      <ChatSidebar
+        userEmail={userEmail}
+        chats={chats}
+        activeId={activeId}
+        loadingList={loadingList}
+        onSelect={setActiveId}
+        onNewChat={() => void newChat()}
+        onRename={(id) => void renameChat(id)}
+        onSignOut={() => void signOut()}
+      />
+
+      {/* ── Conversation ────────────────────────────────────────────── */}
       <main className="relative flex min-w-0 flex-1 flex-col">
-        <header className="border-b border-zinc-800 px-4 py-3 text-sm text-zinc-400">
-          DocuMedAI chat
+        <header className="border-b border-[#102A26]/10 px-8 py-5">
+          <p className="font-mono text-[10.5px] uppercase tracking-[0.3em] text-[#FF5436]">
+            Clinical AI Assistant
+          </p>
+          <h1
+            className="mt-1 text-[1.4rem] font-normal leading-tight tracking-[-0.01em]"
+            style={{ fontFamily: "var(--font-display)" }}
+          >
+            DocuMedAI Chatbot
+          </h1>
         </header>
 
-        <div className="flex-1 overflow-y-auto px-4 py-6 pb-40">
-          {error ? (
-            <p className="mb-4 rounded-md border border-red-900/50 bg-red-950/40 px-3 py-2 text-sm text-red-200">
-              {error}
-            </p>
-          ) : null}
-          {loadingMsgs && activeId ? (
-            <p className="text-sm text-zinc-500">Loading messages…</p>
-          ) : null}
-          <div className="mx-auto max-w-3xl space-y-4">
-            {messages.map((m, i) => {
-              const isUser = m.role === "user";
-              return (
-              <div
-                key={`${i}-${m.content.slice(0, 20)}`}
-                className={`flex ${isUser ? "justify-end" : "justify-start"}`}
-              >
-                <div
-                  className={`max-w-[85%] rounded-2xl px-4 py-2 text-sm leading-relaxed ${
-                    isUser
-                      ? "bg-zinc-700 text-zinc-50"
-                      : "bg-zinc-800 text-zinc-100"
-                  }`}
-                >
-                  {m.content}
-                </div>
-              </div>
-            );
-            })}
-          </div>
-        </div>
+        <MessageList messages={messages} sending={sending} error={error} />
 
-        <div className="pointer-events-none absolute bottom-0 left-0 right-0 flex justify-center p-4">
-          <div className="pointer-events-auto flex w-full max-w-3xl gap-2 rounded-2xl border border-zinc-700 bg-zinc-900/95 p-2 shadow-lg backdrop-blur">
-            <textarea
-              rows={1}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  void sendMessage();
-                }
-              }}
-              placeholder={activeId ? "Message…" : "Select or create a chat"}
-              disabled={!activeId || sending}
-              className="max-h-40 min-h-[44px] flex-1 resize-none bg-transparent px-3 py-2 text-sm text-zinc-100 outline-none placeholder:text-zinc-500"
-            />
-            <button
-              type="button"
-              disabled={!activeId || sending || !input.trim()}
-              onClick={() => void sendMessage()}
-              className="shrink-0 rounded-xl bg-zinc-100 px-4 py-2 text-sm font-medium text-zinc-900 disabled:opacity-40"
-            >
-              Send
-            </button>
-          </div>
-        </div>
+        <MessageInput
+          input={input}
+          setInput={setInput}
+          onSend={() => void sendMessage()}
+          activeId={activeId}
+          sending={sending}
+          isEmptyChat={isEmptyChat}
+        />
       </main>
     </div>
   );

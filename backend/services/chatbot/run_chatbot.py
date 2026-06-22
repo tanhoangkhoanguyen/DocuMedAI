@@ -52,8 +52,8 @@ def test_chatbot():
 if __name__ == "__main__":
     # Fast and low cost, with low intelligence large language model.
     # Reference: https://platform.openai.com/docs/models/compare
-    chat_model = "gpt-4o-mini"
-    # chat_model = "gemini-2.5-flash"
+    # chat_model = "gpt-4o-mini"
+    chat_model = "gemini-2.5-flash"
     temperature = 0
 
     # Fast, medium quality embedding model.
