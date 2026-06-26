@@ -75,7 +75,7 @@ $COMPOSE down -v
 ```
 
 Markers (`pytest.ini`): `integration` (live services), `vectordb` (Milvus/Weaviate/Vespa/
-Pinecone/ChromaDB — the `vectordb-lab` CI job; requires `requirements-dev.txt` clients).
+ChromaDB — the `vectordb-lab` CI job; requires `requirements-dev.txt` clients).
 
 `docker-compose.ci.yml` overrides `la-backend` to idle (`sleep infinity`, healthcheck
 disabled) and mounts the repo at `/workspace`, so tests run via `exec` rather than the
@@ -152,6 +152,36 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=
 1. PDFs processed by `backend/vector_database_tests/data_processing.py`
 2. Uploaded via `data_uploading.py` to Qdrant (and optionally other vector DBs)
 3. Indexed with `all-MiniLM-L6-v2` embeddings (dim 384)
+
+## Vector DB Benchmark Lab (`backend/vector_database_tests/`)
+
+A standalone benchmark to choose which engine to self-host (Qdrant default vs Milvus,
+Weaviate, Vespa, ChromaDB). It is **not** part of the running app — it's a decision tool.
+Methodology follows [ann-benchmarks](https://github.com/erikbern/ann-benchmarks): latency is
+only comparable **at equal recall**, so a fast-looking engine isn't rewarded for silently
+searching fewer candidates.
+
+Pipeline (each step selects the engine via `BENCH_DB` env var / `--db`, dispatched through
+`utils/registry.py`; each writes a per-DB JSON so results record which engine produced them):
+
+| Stage | File | What it does |
+|-------|------|--------------|
+| Ground truth | `ground_truth.py` | Exact-kNN (faiss `IndexFlatIP`, cosine) over the full corpus, **once** — independent of any DB |
+| Index | `data_uploading.py` | Times indexing; Milvus index build is inside the timed region |
+| Recall + serial latency | `recall.py` | One serial pass: recall@k vs ground truth + median/p95 latency |
+| Equal-recall sweep | `sweep.py` | Sweeps each engine's query-effort knob (HNSW `ef` / Vespa `targetHits`), picks lowest-latency config with recall@10 ≥ 0.95 |
+| Throughput | `throughput.py` | **Open-loop fixed-QPS** driver (replaced Locust — closed-loop hides tail latency / coordinated omission). Measures latency from scheduled send time |
+
+Fairness invariants every engine must share: identical build-side HNSW params (`M=64`,
+`efConstruction=200`), equal Docker budgets (`mem_limit: 8g`, `cpus: 4.0`), `TOP_K=50`, and a
+**shuffled query order** with discarded warmup (`registry.shuffled_order`, fixed seed) so no
+result cache can bias latency. The shuffle preserves `query_id`, so recall is unaffected.
+
+Each `utils/*_client.py` exposes `retrieve_ids(collection, vec, top_k, search_param)` returning
+stable ids for recall. **Weaviate is pinned to client v3** (its `ef` is class-level, so it can't
+be swept per-query like the others — a documented limitation; v4 migration would lift it).
+Pinecone was removed (its `pinecone-local` emulator can't be made fair). See the lab's own
+`README.md` for the full runbook.
 
 ## CI
 

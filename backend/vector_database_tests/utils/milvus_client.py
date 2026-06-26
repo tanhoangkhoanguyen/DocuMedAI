@@ -131,6 +131,8 @@ class MilvusClient:
     def create_index(self, collection_name: str):
         try:
             self.bind_collection(collection_name)
+            # Single flush after all inserts seals the segments before the index build.
+            self._milvus_client.flush()
             self._milvus_client.create_index(
                 field_name = "embedded_query",
                 index_params = {
@@ -161,7 +163,6 @@ class MilvusClient:
                 queries
             ]
             self._milvus_client.insert(objects)
-            self._milvus_client.flush()
         except Exception as e:
             LOGGER.error(f"Failed to push to collection '{collection_name}'\n\t{str(e)}")
 
@@ -169,14 +170,15 @@ class MilvusClient:
             self,
             collection_name: str,
             embedded_query,
-            top_k: int = 50
+            top_k: int = 50,
+            search_param: int = 64,
         ):
         try:
             self.bind_collection(collection_name, True)
             search_params = {
                 "metric_type": "COSINE",
                 "params": {
-                    "ef": 64
+                    "ef": search_param
                 }
             }
             resp = self._milvus_client.search(
@@ -184,12 +186,26 @@ class MilvusClient:
                 anns_field = "embedded_query",
                 param = search_params,
                 limit = top_k,
-                output_fields = ["id", "query"]
+                output_fields = ["id"]
             )
             return resp
         except Exception as e:
             LOGGER.error(f"Failed to retrieve from collection '{collection_name}'\n\t{str(e)}")
             return []
+
+    def retrieve_ids(
+            self,
+            collection_name: str,
+            embedded_query,
+            top_k: int = 50,
+            search_param: int = 64,
+        ) -> List[str]:
+        """Return only the ordered list of primary-key ids (for recall@k)."""
+        resp = self.retrieve_query(collection_name, embedded_query, top_k, search_param)
+        if not resp:
+            return []
+        # search() returns one Hits per query vector; we send exactly one.
+        return [str(hit.id) for hit in resp[0]]
 
 
 def get_milvus_client(

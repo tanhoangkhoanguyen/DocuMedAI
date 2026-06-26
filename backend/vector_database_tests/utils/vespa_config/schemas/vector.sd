@@ -9,6 +9,10 @@ schema vector {
             indexing: summary
         }
 
+        field doc_id type string {
+            indexing: attribute | summary
+        }
+
         field embedded_query type tensor<float>(x[384]) {
             indexing: attribute | index
             attribute {

@@ -1,19 +1,27 @@
-from logger import get_logger
-from vector_database_tests.utils.chromadb_client import ChromadbClient
-from vector_database_tests.utils.milvus_client import MilvusClient
-from vector_database_tests.utils.pinecone_client import PineconeClient
-from vector_database_tests.utils.qdrant_client import QdrantClient
-from vector_database_tests.utils.vespa_client import VespaClient
-from vector_database_tests.utils.weaviate_client import WeaviateClient
+"""
+Indexing benchmark: insert the ~1M-vector corpus into the selected DB and record total
+indexing time (insert + index build), excluding dataset loading from disk.
 
-import os, json, time, warnings
+Run per DB:  BENCH_DB=qdrant python -m vector_database_tests.data_uploading
+         or  python -m vector_database_tests.data_uploading --db qdrant
+"""
+from logger import get_logger
+from vector_database_tests.utils import registry
+
+import os, json, time, argparse, warnings
 warnings.filterwarnings("ignore")
 
-LOGGER = get_logger(__name__)
+LOGGER = get_logger(
+    name = "data_uploading",
+    level = "INFO",
+)
+
+RESULTS_DIR = "vector_database_tests/upload_results"
+
 
 class DataUploading:
     def __init__(
-            self, 
+            self,
             client,
             collection_name: str = "latency_test"
         ):
@@ -23,57 +31,81 @@ class DataUploading:
     def upload_dataset(
             self,
             folder_path: str = "vector_database_tests/dataset"
-        ):
+        ) -> dict:
         try:
             self.client.create_collection(self.collection_name)
 
             batch_size = 1000
             ids, queries, embedded_queries = [], [], []
-            total_indexing_time = 0
+            total_indexing_time = 0.0
+            n_vectors = 0
 
             def indexing():
-                nonlocal total_indexing_time, ids, queries, embedded_queries
+                nonlocal total_indexing_time, ids, queries, embedded_queries, n_vectors
                 start_time = time.perf_counter()
                 self.client.push_documents(
                     self.collection_name, ids, queries, embedded_queries
                 )
                 end_time = time.perf_counter()
                 total_indexing_time += end_time - start_time
+                n_vectors += len(ids)
                 ids, queries, embedded_queries = [], [], []
 
-            for filename in os.listdir(folder_path):
+            for filename in sorted(os.listdir(folder_path)):
                 if not filename.endswith(".jsonl"):
                     continue
 
                 file_path = os.path.join(folder_path, filename)
-                print (file_path)
+                LOGGER.info(f"Reading {file_path}")
                 with open(file_path, 'r', encoding = "utf-8") as f:
                     for obj in f:
-                        object = json.loads(obj)
-                        ids.append(object["id"])
-                        queries.append(object["split_text"])
-                        embedded_queries.append(object["embedded_test"])
+                        record = json.loads(obj)
+                        ids.append(record["id"])
+                        queries.append(record["split_text"])
+                        embedded_queries.append(record["embedded_test"])
 
                         if len(ids) == batch_size:
                             indexing()
             if ids:
                 indexing()
-            start_time = time.perf_counter()
-            # self.client._milvus_client.flush()
-            # self.client.create_index(self.collection_name)
-            end_time = time.perf_counter()
-            total_indexing_time += end_time - start_time
-            LOGGER.info(f"Uploaded dataset for vector db test\n\t- Total indexing time: {total_indexing_time}s")
+
+            # Only Milvus needs an explicit build; the others index on insert.
+            if hasattr(self.client, "create_index"):
+                start_time = time.perf_counter()
+                self.client.create_index(self.collection_name)
+                total_indexing_time += time.perf_counter() - start_time
+
+            LOGGER.info(
+                f"Uploaded {n_vectors} vectors\n\t- Total indexing time: {total_indexing_time:.2f}s"
+            )
+            return {
+                "collection": self.collection_name,
+                "total_indexing_time_s": round(total_indexing_time, 3),
+                "n_vectors": n_vectors,
+            }
         except Exception as e:
             LOGGER.error(f"Failed to upload dataset for vector db test\n\t{str(e)}")
             raise
 
+
+def _parse_args():
+    p = argparse.ArgumentParser(description = "Vector DB indexing benchmark")
+    p.add_argument("--db", default = None, help = f"One of {registry.SUPPORTED} (or set BENCH_DB)")
+    p.add_argument("--collection", default = registry.DEFAULT_COLLECTION)
+    return p.parse_args()
+
+
 if __name__ == "__main__":
-    client = WeaviateClient(
-            embedding_model = "sentence-transformers/all-MiniLM-L6-v2",
-            embedding_dimension = 384
-        )
-    collection_name = "LatencyTest" # "latencytest"
-    data_uploading_test = DataUploading(client, collection_name)
-    data_uploading_test.upload_dataset()
-    print (data_uploading_test.client.list_collections())
+    args = _parse_args()
+    db = registry.resolve_db(args.db)
+    collection = registry.normalize_collection(db, args.collection)
+
+    client = registry.get_client(db)
+    result = DataUploading(client, collection).upload_dataset()
+    result["db"] = db
+
+    os.makedirs(RESULTS_DIR, exist_ok = True)
+    out_path = os.path.join(RESULTS_DIR, f"{db}.json")
+    with open(out_path, "w", encoding = "utf-8") as f:
+        json.dump(result, f, indent = 2)
+    LOGGER.info(f"Wrote indexing result -> {out_path}\n\t{result}")

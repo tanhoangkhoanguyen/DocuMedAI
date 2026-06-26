@@ -71,17 +71,18 @@ class WeaviateClient:
 
     def create_collection(
             self,
-            class_name: str
+            class_name: str,
+            ef: int = 64,
         ):
         try:
             self.delete_collection(class_name)
             self.__weaviate_client.schema.create_class({
                 "class": class_name,
-                "vectorizer": "none", 
+                "vectorizer": "none",
                 "vectorIndexType": "hnsw",
                 "vectorIndexConfig": {
-                    "ef": 64,
-                    "efConstruction": 200, 
+                    "ef": ef,
+                    "efConstruction": 200,
                     "M": 64
                 },
                 "properties": [
@@ -117,13 +118,17 @@ class WeaviateClient:
             LOGGER.error(f"Failed to push to class '{class_name}'\n\t{str(e)}")
 
     def retrieve_query(
-            self, 
+            self,
             class_name: str,
             embedded_query: List[float],
-            top_k: int = 50
+            top_k: int = 50,
+            search_param: int = None,
         ):
+        # NOTE: Weaviate v3 sets `ef` at the class level (create_collection), so query-time
+        # `search_param` cannot change it here. The sweep recreates the class per ef value.
         try:
-            resp = self.__weaviate_client.query.get(class_name, ["*"]) \
+            resp = self.__weaviate_client.query.get(class_name, ["query"]) \
+                .with_additional(["id"]) \
                 .with_near_vector({"vector": embedded_query}) \
                 .with_limit(top_k) \
                 .do()
@@ -131,6 +136,20 @@ class WeaviateClient:
         except Exception as e:
             LOGGER.error(f"Failed to retrieve from class '{class_name}'\n\t{str(e)}")
             return []
+
+    def retrieve_ids(
+            self,
+            class_name: str,
+            embedded_query: List[float],
+            top_k: int = 50,
+            search_param: int = None,
+        ) -> List[str]:
+        """Return only the ordered list of object UUIDs (for recall@k)."""
+        resp = self.retrieve_query(class_name, embedded_query, top_k, search_param)
+        if not resp:
+            return []
+        objects = resp.get("data", {}).get("Get", {}).get(class_name, []) or []
+        return [obj["_additional"]["id"] for obj in objects if obj.get("_additional")]
 
 
 def get_weaviate_client(
