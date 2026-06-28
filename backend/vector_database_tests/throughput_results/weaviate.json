@@ -1,0 +1,59 @@
+{
+  "db": "weaviate",
+  "collection": "LatencyTest",
+  "search_param": null,
+  "workers": 64,
+  "duration_s": 30.0,
+  "levels": [
+    {
+      "target_qps": 50.0,
+      "achieved_rps": 50.01,
+      "sent": 1501,
+      "completed": 1501,
+      "errors": 0,
+      "median_ms": 5.534,
+      "p95_ms": 7.787,
+      "p99_ms": 11.83
+    },
+    {
+      "target_qps": 100.0,
+      "achieved_rps": 100.0,
+      "sent": 3001,
+      "completed": 3001,
+      "errors": 0,
+      "median_ms": 6.575,
+      "p95_ms": 15.242,
+      "p99_ms": 24.68
+    },
+    {
+      "target_qps": 200.0,
+      "achieved_rps": 199.8,
+      "sent": 6001,
+      "completed": 6001,
+      "errors": 0,
+      "median_ms": 7.468,
+      "p95_ms": 339.906,
+      "p99_ms": 406.034
+    },
+    {
+      "target_qps": 400.0,
+      "achieved_rps": 268.17,
+      "sent": 8318,
+      "completed": 8318,
+      "errors": 0,
+      "median_ms": 5216.622,
+      "p95_ms": 9882.472,
+      "p99_ms": 10250.795
+    },
+    {
+      "target_qps": 800.0,
+      "achieved_rps": 285.4,
+      "sent": 8857,
+      "completed": 8857,
+      "errors": 0,
+      "median_ms": 10255.964,
+      "p95_ms": 19047.406,
+      "p99_ms": 19850.992
+    }
+  ]
+}

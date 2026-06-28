@@ -6,7 +6,7 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 from typing import List
 
 LOGGER = get_logger(
-    name = "Weaviate_tool",
+    name = "Weaviate_client",
     level = "INFO"
 )
 _WEAVIATE_DICT = {}

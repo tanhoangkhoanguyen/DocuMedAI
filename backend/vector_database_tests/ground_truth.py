@@ -1,7 +1,7 @@
 """
 Build exact-kNN ground truth for recall@k.
 
-Brute-forces cosine nearest neighbors for every query against the full ~1M corpus, once,
+Brute-forces cosine nearest neighbors for every query against the full 1M corpus, once,
 and caches the result. recall.py / sweep.py compare each DB's approximate (HNSW) results
 against this to measure how much accuracy the ANN index trades away for speed — the missing
 piece that makes the latency comparison meaningful.
@@ -17,7 +17,10 @@ import os, json, argparse, warnings, faiss
 import numpy as np
 warnings.filterwarnings("ignore")
 
-LOGGER = get_logger(__name__)
+LOGGER = get_logger(
+    name = "vectordb_lab_ground_truth",
+    level = "INFO",
+)
 
 DATASET_DIR = "vector_database_tests/dataset"
 QUERIES_DIR = "vector_database_tests/generated_queries"
@@ -29,15 +32,30 @@ def _jsonl_files(folder: str):
 
 
 def load_corpus(folder: str = DATASET_DIR):
-    """Return (ids: list[str], vectors: float32 N x D)."""
-    ids, vecs = [], []
+    """Return (ids: list[str], vectors: float32 N x D).
+
+    Loads file-by-file and converts each file's vectors to a compact float32 array
+    immediately to avoid OOM.
+    """
+    ids = []
+    blocks = []                      # list of small per-file float32 arrays
+    log_iterate = 0
     for path in _jsonl_files(folder):
+        file_vecs = []
         with open(path, "r", encoding = "utf-8") as f:
             for line in f:
                 rec = json.loads(line)
                 ids.append(rec["id"])
-                vecs.append(rec["embedded_test"])
-    return ids, np.asarray(vecs, dtype = np.float32)
+                file_vecs.append(rec["embedded_test"])
+                log_iterate += 1
+                if log_iterate % 10000 == 0:
+                    LOGGER.info(f"Loaded {log_iterate} corpus vectors...")
+        # compact this file's vectors and drop the Python list before reading the next
+        blocks.append(np.asarray(file_vecs, dtype = np.float32))
+        del file_vecs
+    vecs = np.concatenate(blocks, axis = 0) if blocks else np.empty((0, 0), dtype = np.float32)
+    del blocks
+    return ids, vecs
 
 
 def load_queries(folder: str = QUERIES_DIR):
@@ -53,24 +71,28 @@ def load_queries(folder: str = QUERIES_DIR):
 
 
 def _l2_normalize(mat: np.ndarray) -> np.ndarray:
+    """L2-normalize rows in place (mutates and returns mat) to avoid a full copy."""
     norms = np.linalg.norm(mat, axis = 1, keepdims = True)
     norms[norms == 0] = 1.0
-    return mat / norms
+    mat /= norms
+    return mat
 
 
 def _knn_faiss(corpus: np.ndarray, queries: np.ndarray, top_k: int):
-    c = _l2_normalize(corpus.copy())
-    q = _l2_normalize(queries.copy())
-    index = faiss.IndexFlatIP(c.shape[1])   # inner product on normalized vectors == cosine
-    index.add(c)
-    _, idx = index.search(q, top_k)
+    # Normalize in place (faiss.normalize_L2 mutates) — no full-corpus .copy().
+    # IndexFlatIP on L2-normalized vectors == cosine similarity.
+    faiss.normalize_L2(corpus)
+    faiss.normalize_L2(queries)
+    index = faiss.IndexFlatIP(corpus.shape[1])
+    index.add(corpus)
+    _, idx = index.search(queries, top_k)
     return idx
 
 
 def _knn_numpy(corpus: np.ndarray, queries: np.ndarray, top_k: int, chunk: int = 100_000):
     """Chunked fallback if faiss is unavailable. Cosine via normalized dot product."""
-    c = _l2_normalize(corpus.copy())
-    q = _l2_normalize(queries.copy())
+    c = _l2_normalize(corpus)     # in place — corpus is not reused after kNN
+    q = _l2_normalize(queries)
     Q = q.shape[0]
     best_idx = np.zeros((Q, top_k), dtype = np.int64)
     best_sim = np.full((Q, top_k), -np.inf, dtype = np.float32)
@@ -126,7 +148,7 @@ def build_ground_truth(top_k: int = 100, out_path: str = OUT_PATH, force: bool =
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser(description = "Build exact-kNN ground truth for recall@k")
-    p.add_argument("--top-k", type = int, default = 100)
+    p.add_argument("--top-k", type = int, default = 100)                                     # Nearest neighbors stored per query
     p.add_argument("--out", default = OUT_PATH)
     p.add_argument("--force", action = "store_true")
     args = p.parse_args()

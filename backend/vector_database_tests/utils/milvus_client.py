@@ -7,7 +7,7 @@ from pymilvus import connections, FieldSchema, CollectionSchema, DataType, Colle
 from typing import List
 
 LOGGER = get_logger(
-    name = "Milvus_tool",
+    name = "Milvus_client",
     level = "INFO"
 )
 _MILVUS_DICT = {}

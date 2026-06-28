@@ -1,0 +1,59 @@
+{
+  "db": "vespa",
+  "collection": "latency_test",
+  "search_param": 64,
+  "workers": 64,
+  "duration_s": 30.0,
+  "levels": [
+    {
+      "target_qps": 50.0,
+      "achieved_rps": 50.0,
+      "sent": 1501,
+      "completed": 1501,
+      "errors": 0,
+      "median_ms": 7.058,
+      "p95_ms": 10.748,
+      "p99_ms": 14.224
+    },
+    {
+      "target_qps": 100.0,
+      "achieved_rps": 99.95,
+      "sent": 3001,
+      "completed": 3001,
+      "errors": 0,
+      "median_ms": 7.73,
+      "p95_ms": 14.367,
+      "p99_ms": 17.656
+    },
+    {
+      "target_qps": 200.0,
+      "achieved_rps": 199.85,
+      "sent": 6001,
+      "completed": 6001,
+      "errors": 0,
+      "median_ms": 8.826,
+      "p95_ms": 21.039,
+      "p99_ms": 70.127
+    },
+    {
+      "target_qps": 400.0,
+      "achieved_rps": 297.12,
+      "sent": 9233,
+      "completed": 9233,
+      "errors": 0,
+      "median_ms": 3659.131,
+      "p95_ms": 7504.798,
+      "p99_ms": 7972.215
+    },
+    {
+      "target_qps": 800.0,
+      "achieved_rps": 300.56,
+      "sent": 9274,
+      "completed": 9274,
+      "errors": 0,
+      "median_ms": 9393.821,
+      "p95_ms": 18511.573,
+      "p99_ms": 19237.722
+    }
+  ]
+}

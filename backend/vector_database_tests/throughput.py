@@ -12,7 +12,7 @@ offered load slows with it, the queue never builds, and tail latency is hidden. 
   * A bounded worker pool executes the (synchronous) client calls. If the engine can't keep up,
     the backlog grows and latency climbs — backpressure, not a hung harness.
   * A QPS ladder is swept; the engine's sustainable throughput is the highest rung where it
-    keeps up (achieved_rps ~= target and tail latency stays bounded).
+    keeps up (achieved_rps = target and tail latency stays bounded).
 
 Queries are issued in a SHUFFLED order (fixed seed, via registry.shuffled_order) and a warmup
 window is discarded, so no engine's query-result cache can bias the numbers. The query path is
@@ -26,8 +26,10 @@ from vector_database_tests.utils import registry
 
 import os, json, time, argparse, threading, queue, statistics
 
-LOGGER = get_logger(__name__)
-
+LOGGER = get_logger(
+    name = "vectordb_lab_throughput",
+    level = "INFO"
+)
 SWEEP_DIR = "vector_database_tests/sweep_results"
 RESULTS_DIR = "vector_database_tests/throughput_results"
 QUERIES_DIR = "vector_database_tests/generated_queries"

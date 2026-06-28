@@ -62,7 +62,12 @@ services:
       - "9091:9091"
     environment:
       ETCD_USE_EMBED: "true"
+      ETCD_DATA_DIR: /var/lib/milvus/etcd
+      ETCD_CONFIG_PATH: /milvus/configs/advanced/etcd.yaml
       COMMON_STORAGETYPE: local
+      DEPLOY_MODE: STANDALONE
+      MILVUS_STREAMING_SERVICE_ENABLED: "false"
+      COMMON_STORAGE_ENABLEV2: "false"
     networks:
       - documedai-net
     volumes:
@@ -153,7 +158,7 @@ services:
     volumes:
       - ./backend:/backend            # live source → uvicorn reload + logs to host ./backend/logs
       - models_cache:/models
-    mem_limit: 4g
+    mem_limit: 8g                    # ground_truth (faiss exact-kNN over 1M vectors)
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:2010/health"]
       interval: 10s

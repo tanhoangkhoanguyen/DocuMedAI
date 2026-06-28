@@ -12,7 +12,7 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 from typing import List
 
 LOGGER = get_logger(
-    name = "Vespa_tool",
+    name = "Vespa_client",
     level = "INFO"
 )
 _VESPA_DICT = {}

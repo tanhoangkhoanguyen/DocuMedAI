@@ -8,7 +8,7 @@ from logger import get_logger
 
 
 _LOGGER = get_logger(
-    name = "Redis_tool",
+    name = "Redis_client",
     level = "INFO",
 )
 SHARED_REDIS_CLIENT = None

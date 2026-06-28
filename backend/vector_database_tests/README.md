@@ -73,27 +73,30 @@ All commands run **inside the `la-backend` container** (it has the clients, the 
 
 ```bash
 # 0. Bring up the lab stack with equal resource limits
-docker compose --profile vectordb-lab up -d --build --wait \
-  la-qdrant la-mongo la-redis la-chroma la-weaviate la-milvus la-vespa
+docker compose --profile vectordb-lab up -d --build --wait la-qdrant la-chroma la-weaviate la-milvus la-vespa
 docker compose --profile vectordb-lab up -d la-backend
-docker compose exec la-backend pip install -r /workspace/backend/requirements-dev.txt
+docker compose exec la-backend pip install -r /backend/requirements-dev.txt
 
 # Vespa only: deploy the application package once (adds the doc_id field)
 docker compose exec la-vespa vespa deploy --wait 300 /app
 
 # 1. Exact-kNN ground truth — ONCE (depends only on corpus+queries+cosine)
-docker compose exec -w /workspace/backend la-backend \
-  python -m vector_database_tests.ground_truth --top-k 100
+docker compose exec -d la-backend sh -c "cd /backend && python -m vector_database_tests.ground_truth --top-k 100 2>> /backend/logs/gt_stderr.log"
+
+docker compose exec la-backend tail -f /backend/logs/vectordb_lab_ground_truth_20260626.log
 
 # 2. Per engine: upload → sweep (equal-recall config) → open-loop throughput
-for DB in qdrant milvus weaviate chromadb vespa; do
-  docker compose exec -e BENCH_DB=$DB -w /workspace/backend la-backend \
+#    If upload exceeds its 1h budget, it exits non-zero and writes {"timed_out": true}; the `|| continue` then skips sweep + throughput for that engine and moves to the next.
+$databases = "qdrant", "milvus", "weaviate", "chromadb", "vespa"
+foreach ($db in $databases) {
+  docker compose exec -e BENCH_DB=$db -w /backend la-backend `
     python -m vector_database_tests.data_uploading
-  docker compose exec -e BENCH_DB=$DB -w /workspace/backend la-backend \
+  if (-not $?) { continue }
+  docker compose exec -e BENCH_DB=$db -w /backend la-backend `
     python -m vector_database_tests.sweep --k 10 --recall-target 0.95
-  docker compose exec -e BENCH_DB=$DB -w /workspace/backend la-backend \
+  docker compose exec -e BENCH_DB=$db -w /backend la-backend `
     python -m vector_database_tests.throughput --qps 50 100 200 400 800 --duration 30
-done
+}
 ```
 
 Results are written to:
@@ -119,35 +122,51 @@ is unchanged — only the latency is de-biased. The fixed seed keeps runs reprod
 
 ## Results
 
-### Indexing time (1M vectors) — to be re-measured
+Full run over the 1M-vector corpus (999,559 vectors indexed; 10,000 queries). All numbers are transcribed from the per-DB JSON in `upload_results/`, `sweep_results/`, `throughput_results/`.
+
+> **ChromaDB - DNF.** Its upload hit the 1-hour indexing budget at 145k/1M vectors
+> (`upload_results/chromadb.json` → `"timed_out": true`) and was skipped, so it has no sweep or
+> throughput data and is excluded from the comparison.
+
+### Indexing time (1M vectors)
 | Database | Indexing time | Notes |
 | -------- | ------------------- | ----- |
-| Qdrant   | _TBD_ | |
-| Milvus   | _TBD_ | |
-| Weaviate | _TBD_ | |
-| Vespa    | _TBD_ | |
-| ChromaDB | _TBD_ | |
+| Qdrant   | 315.6s | fastest |
+| Milvus   | 615.2s | includes explicit index build |
+| Vespa    | 2130.7s | |
+| Weaviate | 2355.5s | |
+| ChromaDB | DNF | timed out at 1h (145k/1M indexed) |
 
-### Serial latency at recall@10 ≥ 0.95 (from sweep) — to be re-measured
+### Serial latency at recall@10 ≥ 0.95 (from sweep)
+Each row is the **lowest-median-latency config that still reaches recall@10 ≥ 0.95** — the
+ann-benchmarks selection rule (`sweep.py` `chosen`).
+
 | Database | recall@10 | search_param | median (ms) | p95 (ms) |
 | -------- | --------- | ------------ | ----------- | -------- |
-| Qdrant   | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
-| Milvus   | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
-| Weaviate | _TBD_ | (class-level ef) | _TBD_ | _TBD_ |
-| Vespa    | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
-| ChromaDB | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
+| Qdrant   | 0.9608 | ef=32 | 4.383 | 6.201 |
+| Milvus   | 0.9769 | ef=64 | 6.316 | 10.194 |
+| Vespa    | 0.9737 | targetHits=64 | 7.749 | 10.659 |
+| Weaviate | 0.9626 | (class-level ef) | 7.205 | 24.321 |
+| ChromaDB | DNF | — | — | — |
 
-### Open-loop throughput at the equal-recall config — to be re-measured
-Per engine, the highest sustained QPS rung (achieved_rps ≈ target, bounded tail) and its
-latency. Full per-rung data in `throughput_results/{db}.json`.
+> **Methodology note - `ef` ≥ `top_k`.** We retrieve `TOP_K = 50` per query. **Milvus and Vespa reject** a query-effort value below `top_k`
+
+### Open-loop throughput at the equal-recall config
+Open-loop fixed-QPS driver (`throughput.py`), 30s per rung. Every engine **holds the target rate through 200 QPS** (achieved ≈ target, bounded tail), then **collapses at 400 QPS**
+(achieved_rps falls to 250–330 and latency rises into seconds - correct open-loop backpressure,
+not a hung loop). The 200-QPS rung below is therefore each engine's highest sustained rate.
+Full per-rung ladders in `throughput_results/{db}.json`.
 
 | Database | sustained QPS | median (ms) | p95 (ms) | p99 (ms) |
 | -------- | ------------- | ----------- | -------- | -------- |
-| Qdrant   | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
-| Milvus   | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
-| Weaviate | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
-| Vespa    | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
-| ChromaDB | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
+| Qdrant   | 200 | 4.109 | 8.344 | 10.109 |
+| Milvus   | 200 | 8.305 | 55.535 | 93.035 |
+| Vespa    | 200 | 8.826 | 21.039 | 70.127 |
+| Weaviate | 200 | 7.468 | 339.906 | 406.034 |
+| ChromaDB | DNF | — | — | — |
+
+### Conclusion
+**Qdrant wins on all three axes** - fastest to index, lowest serial latency at equal recall, and the tightest tail at 200 QPS.
 
 ## Limitations
 1. Single-machine, single-node; no distributed/sharded scaling tested.

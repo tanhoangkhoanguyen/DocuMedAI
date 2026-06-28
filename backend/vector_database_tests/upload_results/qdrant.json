@@ -1,0 +1,7 @@
+{
+  "collection": "latency_test",
+  "total_indexing_time_s": 315.594,
+  "n_vectors": 999559,
+  "db": "qdrant",
+  "timed_out": false
+}

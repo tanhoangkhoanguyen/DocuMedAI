@@ -15,7 +15,10 @@ from vector_database_tests.ground_truth import load_queries, OUT_PATH
 import time, json, statistics
 import numpy as np
 
-LOGGER = get_logger(__name__)
+LOGGER = get_logger(
+    name = "vectordb_lab_recall",
+    level = "INFO"
+)
 
 
 def load_ground_truth(path: str = OUT_PATH) -> dict:
@@ -38,7 +41,7 @@ def recall_at_k(retrieved_ids, truth_ids, k: int) -> float:
     return hit / len(truth_set)
 
 
-def warmup(client, collection: str, query_vecs, n: int = 50, search_param = None):
+def warmup(client, collection: str, query_vecs, n: int = 1000, search_param = None):
     for i in range(min(n, len(query_vecs))):
         try:
             client.retrieve_ids(collection, query_vecs[i].tolist(), registry.TOP_K, search_param)
@@ -63,10 +66,8 @@ def evaluate_db(
     if do_warmup:
         warmup(client, collection, query_vecs, search_param = search_param)
 
-    # Issue queries in a SHUFFLED order (fixed seed) so any per-engine query-result cache can't
-    # make this engine look fast by replaying an identical sequence. qid is preserved for the
-    # ground-truth lookup; only the order of issue changes, so recall is unaffected and only the
-    # latency is de-biased. See registry.shuffled_order.
+    # Issue queries in a fixed shuffled order to reduce cache-related latency bias.
+    # Query IDs remain unchanged, so recall uses the same ground truth and is unaffected.
     order = registry.shuffled_order(len(query_vecs))
     recalls, latencies_ms = [], []
     for qid in order:

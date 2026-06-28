@@ -6,7 +6,7 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 from typing import List
 
 LOGGER = get_logger(
-    name = "Chromadb_tool",
+    name = "Chromadb_client",
     level = "INFO"
 )
 _CHROMADB_DICT = {}

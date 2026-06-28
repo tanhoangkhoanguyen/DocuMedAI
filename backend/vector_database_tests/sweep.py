@@ -14,7 +14,10 @@ from vector_database_tests.recall import evaluate_db
 
 import os, json, argparse
 
-LOGGER = get_logger(__name__)
+LOGGER = get_logger(
+    name = "vectordb_lab_sweep",
+    level = "INFO",
+)
 RESULTS_DIR = "vector_database_tests/sweep_results"
 
 # Query-time effort grids. ef-style DBs share a grid; Vespa's targetHits is the candidate
@@ -22,9 +25,9 @@ RESULTS_DIR = "vector_database_tests/sweep_results"
 _EF_GRID = [16, 32, 64, 128, 256]
 GRIDS = {
     "qdrant":   _EF_GRID,
-    "milvus":   _EF_GRID,
     "chromadb": _EF_GRID,
-    "vespa":    [10, 20, 50, 100, 200, 500],
+    "milvus":   [64, 128, 256],
+    "vespa":    [64, 128, 256],   # targetHits must be >= TOP_K (50)
     # Weaviate ef is class-level (set at create time) -> cannot be swept without recreating
     # the class and re-uploading 1M vectors. Measured at its build-time ef only (single point).
     "weaviate": [None],

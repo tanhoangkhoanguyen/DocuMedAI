@@ -8,7 +8,7 @@ from qdrant_client.http.models import VectorParams, Distance, PointStruct, HnswC
 from typing import Any, List
 
 LOGGER = get_logger(
-    name = "Qdrant_tool",
+    name = "Qdrant_client",
     level = "INFO"
 )
 _QDRANT_DICT = {}

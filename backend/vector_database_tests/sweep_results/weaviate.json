@@ -1,0 +1,26 @@
+{
+  "db": "weaviate",
+  "k": 10,
+  "recall_target": 0.95,
+  "recall_target_met": true,
+  "chosen": {
+    "db": "weaviate",
+    "k": 10,
+    "search_param": null,
+    "recall_at_k": 0.9626,
+    "median_ms": 7.205,
+    "p95_ms": 24.321,
+    "n_queries": 10000
+  },
+  "trials": [
+    {
+      "db": "weaviate",
+      "k": 10,
+      "search_param": null,
+      "recall_at_k": 0.9626,
+      "median_ms": 7.205,
+      "p95_ms": 24.321,
+      "n_queries": 10000
+    }
+  ]
+}
