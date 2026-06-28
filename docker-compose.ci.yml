@@ -1,4 +1,9 @@
 services:
+  # GitHub-hosted runners have 2 CPUs; the base compose pins cpus: 4.0 (local benchmark
+  # fairness). The backend CI job starts la-qdrant, so cap it to a runner-legal budget.
+  la-qdrant:
+    cpus: 2.0
+
   la-backend:
     working_dir: /workspace
     environment:
