@@ -6,10 +6,12 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 from typing import List
 
 LOGGER = get_logger(
-    name = "Chromadb_tool",
+    name = "Chromadb_client",
     level = "INFO"
 )
 _CHROMADB_DICT = {}
+CHROMA_HOST = "la-chroma"
+CHROMA_PORT = 8000
 
 class ChromadbClient:
     def __init__(
@@ -23,10 +25,9 @@ class ChromadbClient:
                 model_kwargs = {"device": device}
             )
         self.__embedding_dimension = embedding_dimension
-        self.__chromadb_client = chromadb.PersistentClient(
-                settings = chromadb.Settings(
-                    persist_directory = "/backend/"
-                )
+        self.__chromadb_client = chromadb.HttpClient(
+                host = CHROMA_HOST,
+                port = CHROMA_PORT,
             )
         self.__current_collection = None
         self._chroma_client = None
@@ -75,7 +76,8 @@ class ChromadbClient:
 
     def create_collection(
             self,
-            collection_name: str
+            collection_name: str,
+            search_ef: int = 64,
         ):
         try:
             self.delete_collection(collection_name)
@@ -84,12 +86,23 @@ class ChromadbClient:
                 metadata = {
                     "hnsw:space": "cosine",
                     "hnsw:construction_ef": 200,
-                    "hnsw:M": 64
+                    "hnsw:M": 64,
+                    "hnsw:search_ef": search_ef,
                 }
             )
             LOGGER.info(f"Created collection '{collection_name}'")
         except Exception as e:
             LOGGER.error(f"Failed to create collection '{collection_name}'\n\t{str(e)}")
+            raise
+
+    def set_search_ef(self, collection_name: str, search_ef: int):
+        """Adjust query-time HNSW ef without re-uploading (used by the sweep)."""
+        try:
+            self.bind_collection(collection_name)
+            self._chroma_client.modify(metadata = {"hnsw:search_ef": search_ef})
+            self.__current_collection = None  # force re-bind so the new ef takes effect
+        except Exception as e:
+            LOGGER.error(f"Failed to set search_ef on '{collection_name}'\n\t{str(e)}")
             raise
     
     def bind_collection(
@@ -124,18 +137,36 @@ class ChromadbClient:
             self,
             collection_name: str,
             embedded_query: List[float],
-            top_k: int = 50
+            top_k: int = 50,
+            search_param: int = None,
         ):
+        # Chroma's query-time ef is a collection property (hnsw:search_ef); use
+        # set_search_ef() to change it. `search_param` is accepted for a uniform signature.
         try:
             self.bind_collection(collection_name)
             resp = self._chroma_client.query(
                 query_embeddings = [embedded_query],
-                n_results = top_k
+                n_results = top_k,
+                include = []  # ids are always returned; skip documents/distances/embeddings
             )
             return resp
         except Exception as e:
             LOGGER.error(f"Failed to retrieve from collection '{collection_name}'\n\t{str(e)}")
             return []
+
+    def retrieve_ids(
+            self,
+            collection_name: str,
+            embedded_query: List[float],
+            top_k: int = 50,
+            search_param: int = None,
+        ) -> List[str]:
+        """Return only the ordered list of ids (for recall@k)."""
+        resp = self.retrieve_query(collection_name, embedded_query, top_k, search_param)
+        if not resp:
+            return []
+        ids = resp.get("ids") or [[]]
+        return list(ids[0])
 
 
 def get_chromadb_client(

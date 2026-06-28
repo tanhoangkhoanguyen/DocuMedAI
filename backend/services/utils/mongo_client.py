@@ -8,7 +8,7 @@ MONGO_URL = "mongodb://la-mongo:27017/"
 SHARED_MONGO_CLIENT = None
 _HOST_DB = "host"
 _LOGGER = get_logger(
-    name = "Mongo_tool",
+    name = "Mongo_client",
     level = "INFO",
 )
 

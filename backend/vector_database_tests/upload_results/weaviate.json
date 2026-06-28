@@ -1,0 +1,7 @@
+{
+  "collection": "LatencyTest",
+  "total_indexing_time_s": 2355.459,
+  "n_vectors": 999559,
+  "db": "weaviate",
+  "timed_out": false
+}

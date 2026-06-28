@@ -1,17 +1,24 @@
 # Environment
 **/.env
-/venv
+**/venv
+**/.venv
 
 # Cache
 **/__pycache__
 **/data_storage/
 **/chroma
 **/logs
+/.pytest_cache
 
 # Documents
 **.pdf
 **.json
 **.jsonl
+
+# Vector database benchmark results files
+!/backend/vector_database_tests/sweep_results/**
+!/backend/vector_database_tests/throughput_results/**
+!/backend/vector_database_tests/upload_results/**
 
 # Keep project manifests that tooling (npm, tsc) requires.
 !**/package.json

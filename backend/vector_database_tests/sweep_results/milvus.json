@@ -1,0 +1,44 @@
+{
+  "db": "milvus",
+  "k": 10,
+  "recall_target": 0.95,
+  "recall_target_met": true,
+  "chosen": {
+    "db": "milvus",
+    "k": 10,
+    "search_param": 64,
+    "recall_at_k": 0.9769,
+    "median_ms": 6.316,
+    "p95_ms": 10.194,
+    "n_queries": 10000
+  },
+  "trials": [
+    {
+      "db": "milvus",
+      "k": 10,
+      "search_param": 64,
+      "recall_at_k": 0.9769,
+      "median_ms": 6.316,
+      "p95_ms": 10.194,
+      "n_queries": 10000
+    },
+    {
+      "db": "milvus",
+      "k": 10,
+      "search_param": 128,
+      "recall_at_k": 0.9904,
+      "median_ms": 7.331,
+      "p95_ms": 9.322,
+      "n_queries": 10000
+    },
+    {
+      "db": "milvus",
+      "k": 10,
+      "search_param": 256,
+      "recall_at_k": 0.9962,
+      "median_ms": 10.66,
+      "p95_ms": 17.159,
+      "n_queries": 10000
+    }
+  ]
+}

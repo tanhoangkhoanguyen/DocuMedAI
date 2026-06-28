@@ -3,8 +3,7 @@ load_dotenv()
 import os, pytz, uuid, json, warnings
 warnings.filterwarnings("ignore")
 from datasets import load_dataset
-from itertools import islice
-from langchain.text_splitter import TokenTextSplitter
+from langchain_text_splitters import TokenTextSplitter
 from datetime import datetime
 from langchain_community.embeddings import HuggingFaceEmbeddings
 
@@ -41,19 +40,19 @@ class DataProcessing:
 
     def generated_queries(
             self,
+            num_queries: int,
             output_path: str = "vector_database_tests/generated_queries"
         ):
         try:
-            num_queries = 550
             output_path = os.path.join(output_path, self.dataset_name.replace("/", "-") + ".jsonl")
             with open(output_path, 'w', encoding = "utf-8") as f:
                 for data in self.raw_dataset:
-                    query = f"{data['page_title']} definition"
+                    query = f"{data['title']} definition"
                     embedded_query = self.embed_query(query)
                     record = {
                         "query": query,
                         "embedded_query": embedded_query,
-                        "answer": data["page_text"]
+                        "answer": data["text"]
                     }
                     f.write(json.dumps(record, ensure_ascii = False) + '\n')
                     num_queries -= 1
@@ -181,9 +180,9 @@ class DataProcessing:
                 \t{str(e)}
             """)
 
-    def data_processing(self):
+    def data_processing(self, num_queries):
         self.load_dataset()
-        self.generated_queries()
+        self.generated_queries(num_queries = num_queries)
 
         chunks = self.__split_dataset()
         embedded_chunks = self.__embed_dataset(chunks)
@@ -199,12 +198,12 @@ class DataProcessing:
         )
 
 if __name__ == "__main__":
-    dataset_name = "gamino/wiki_medical_terms"
-    # dataset_name = "Qdrant/dbpedia-entities-openai3-text-embedding-3-large-3072-1M"
+    # dataset_name = "gamino/wiki_medical_terms"
+    dataset_name = "Qdrant/dbpedia-entities-openai3-text-embedding-3-large-3072-1M"
     embedding_model = "sentence-transformers/all-MiniLM-L6-v2"
 
     data_processing = DataProcessing(
             dataset_name = dataset_name,
             embedding_model = embedding_model
         )
-    data_processing.data_processing()
+    data_processing.data_processing(num_queries = 100000)

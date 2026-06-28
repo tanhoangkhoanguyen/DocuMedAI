@@ -66,7 +66,7 @@ jobs:
           # can't be in the --wait set. Wait on the stores, then start la-backend.
           $COMPOSE --profile vectordb-lab up -d --build --wait \
             la-qdrant la-mongo la-redis \
-            la-milvus la-weaviate la-pinecone la-vespa
+            la-milvus la-weaviate la-vespa
           $COMPOSE --profile vectordb-lab up -d --build la-backend
 
       - name: Install vector DB lab deps into la-backend
@@ -100,7 +100,6 @@ jobs:
         run: |
           $COMPOSE exec -T la-backend pytest -q \
             ci_tests/integration/vector_db/test_milvus_client.py \
-            ci_tests/integration/vector_db/test_pinecone_client.py \
             ci_tests/integration/vector_db/test_weaviate_client.py \
             ci_tests/integration/vector_db/test_vespa_client.py \
             ci_tests/integration/vector_db/test_chromadb_client.py

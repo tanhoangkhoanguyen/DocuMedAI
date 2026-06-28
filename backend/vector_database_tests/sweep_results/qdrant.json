@@ -1,0 +1,62 @@
+{
+  "db": "qdrant",
+  "k": 10,
+  "recall_target": 0.95,
+  "recall_target_met": true,
+  "chosen": {
+    "db": "qdrant",
+    "k": 10,
+    "search_param": 32,
+    "recall_at_k": 0.9608,
+    "median_ms": 4.383,
+    "p95_ms": 6.201,
+    "n_queries": 10000
+  },
+  "trials": [
+    {
+      "db": "qdrant",
+      "k": 10,
+      "search_param": 16,
+      "recall_at_k": 0.9657,
+      "median_ms": 25.39,
+      "p95_ms": 47.0,
+      "n_queries": 10000
+    },
+    {
+      "db": "qdrant",
+      "k": 10,
+      "search_param": 32,
+      "recall_at_k": 0.9608,
+      "median_ms": 4.383,
+      "p95_ms": 6.201,
+      "n_queries": 10000
+    },
+    {
+      "db": "qdrant",
+      "k": 10,
+      "search_param": 64,
+      "recall_at_k": 0.9761,
+      "median_ms": 4.893,
+      "p95_ms": 7.164,
+      "n_queries": 10000
+    },
+    {
+      "db": "qdrant",
+      "k": 10,
+      "search_param": 128,
+      "recall_at_k": 0.9895,
+      "median_ms": 10.642,
+      "p95_ms": 22.441,
+      "n_queries": 10000
+    },
+    {
+      "db": "qdrant",
+      "k": 10,
+      "search_param": 256,
+      "recall_at_k": 0.9947,
+      "median_ms": 6.907,
+      "p95_ms": 12.831,
+      "n_queries": 10000
+    }
+  ]
+}

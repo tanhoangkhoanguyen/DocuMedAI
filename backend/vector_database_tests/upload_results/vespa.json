@@ -1,0 +1,7 @@
+{
+  "collection": "latency_test",
+  "total_indexing_time_s": 2130.72,
+  "n_vectors": 999559,
+  "db": "vespa",
+  "timed_out": false
+}

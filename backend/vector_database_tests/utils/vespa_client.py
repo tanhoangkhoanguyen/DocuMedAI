@@ -12,7 +12,7 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 from typing import List
 
 LOGGER = get_logger(
-    name = "Vespa_tool",
+    name = "Vespa_client",
     level = "INFO"
 )
 _VESPA_DICT = {}
@@ -144,6 +144,7 @@ class VespaClient:
                 "fields": {
                     "collection": collection_name,
                     "query": query,
+                    "doc_id": id,
                     "embedded_query": embedded_query
                 }
             }
@@ -199,13 +200,14 @@ class VespaClient:
             self,
             collection_name: str,
             embedded_query: List[float],
-            top_k: int = 50
+            top_k: int = 50,
+            search_param: int = 64,
         ):
         try:
             body = {
                 "yql": (
-                    f"select query from vector where "
-                    f"{{targetHits:5000}}nearestNeighbor(embedded_query,query_embedding) "
+                    f"select doc_id from vector where "
+                    f"{{targetHits:{int(search_param)}}}nearestNeighbor(embedded_query,query_embedding) "
                     f"and collection contains '{collection_name}'"
                 ),
                 "input.query(query_embedding)": embedded_query,
@@ -221,6 +223,25 @@ class VespaClient:
         except Exception as e:
             LOGGER.error(f"Failed to retrieve from collection '{collection_name}'")
             return []
+
+    def retrieve_ids(
+            self,
+            collection_name: str,
+            embedded_query: List[float],
+            top_k: int = 50,
+            search_param: int = 64,
+        ) -> List[str]:
+        """Return only the ordered list of doc_ids (for recall@k)."""
+        resp = self.retrieve_query(collection_name, embedded_query, top_k, search_param)
+        if not resp:
+            return []
+        hits = resp.get("root", {}).get("children", []) or []
+        ids = []
+        for hit in hits:
+            doc_id = hit.get("fields", {}).get("doc_id")
+            if doc_id is not None:
+                ids.append(str(doc_id))
+        return ids
 
 
 def get_vespa_client(

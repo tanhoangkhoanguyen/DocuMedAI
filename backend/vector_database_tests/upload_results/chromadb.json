@@ -1,0 +1,6 @@
+{
+  "db": "chromadb",
+  "timed_out": true,
+  "reason": "Upload exceeded 3600s (elapsed 3625s, 145000 vectors indexed so far)",
+  "max_seconds": 3600
+}

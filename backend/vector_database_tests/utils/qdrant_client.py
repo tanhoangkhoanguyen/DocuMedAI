@@ -8,7 +8,7 @@ from qdrant_client.http.models import VectorParams, Distance, PointStruct, HnswC
 from typing import Any, List
 
 LOGGER = get_logger(
-    name = "Qdrant_tool",
+    name = "Qdrant_client",
     level = "INFO"
 )
 _QDRANT_DICT = {}
@@ -125,21 +125,34 @@ class QdrantClient:
             self,
             collection_name: str,
             embedded_query,
-            top_k: int = 50
+            top_k: int = 50,
+            search_param: int = 64,
         ):
         try:
             resp = self.__client.query_points(
                 collection_name = collection_name,
                 query = embedded_query,
                 limit = top_k,
-                search_params = SearchParams(hnsw_ef = 64),
-                with_payload = True,
+                search_params = SearchParams(hnsw_ef = search_param),
+                with_payload = False,
                 with_vectors = False
             )
             return resp
         except Exception as e:
             LOGGER.error(f"Failed to retrieve from collection '{collection_name}'\n\t{str(e)}")
             return []
+
+    def retrieve_ids(
+            self,
+            collection_name: str,
+            embedded_query,
+            top_k: int = 50,
+            search_param: int = 64,
+        ) -> List[str]:
+        """Return only the ordered list of point ids (for recall@k)."""
+        resp = self.retrieve_query(collection_name, embedded_query, top_k, search_param)
+        points = getattr(resp, "points", None) or []
+        return [str(p.id) for p in points]
 
     @staticmethod
     def get_top_scored_payload(

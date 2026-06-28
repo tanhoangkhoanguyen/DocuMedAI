@@ -1,0 +1,59 @@
+{
+  "db": "milvus",
+  "collection": "latency_test",
+  "search_param": 64,
+  "workers": 64,
+  "duration_s": 30.0,
+  "levels": [
+    {
+      "target_qps": 50.0,
+      "achieved_rps": 50.01,
+      "sent": 1501,
+      "completed": 1501,
+      "errors": 0,
+      "median_ms": 6.681,
+      "p95_ms": 8.65,
+      "p99_ms": 10.08
+    },
+    {
+      "target_qps": 100.0,
+      "achieved_rps": 99.96,
+      "sent": 3001,
+      "completed": 3001,
+      "errors": 0,
+      "median_ms": 6.658,
+      "p95_ms": 11.545,
+      "p99_ms": 14.71
+    },
+    {
+      "target_qps": 200.0,
+      "achieved_rps": 199.88,
+      "sent": 6001,
+      "completed": 6001,
+      "errors": 0,
+      "median_ms": 8.305,
+      "p95_ms": 55.535,
+      "p99_ms": 93.035
+    },
+    {
+      "target_qps": 400.0,
+      "achieved_rps": 297.02,
+      "sent": 9349,
+      "completed": 9349,
+      "errors": 0,
+      "median_ms": 2635.086,
+      "p95_ms": 7283.909,
+      "p99_ms": 8061.519
+    },
+    {
+      "target_qps": 800.0,
+      "achieved_rps": 333.87,
+      "sent": 10282,
+      "completed": 10282,
+      "errors": 0,
+      "median_ms": 10691.877,
+      "p95_ms": 17269.272,
+      "p99_ms": 17823.021
+    }
+  ]
+}

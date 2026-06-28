@@ -15,7 +15,7 @@ scipy
 scikit-learn
 
 # Vector DB clients
-qdrant-client
+qdrant-client==1.18.0
 pymongo
 redis
 

@@ -4,7 +4,7 @@
 
 services:
   la-qdrant:
-    image: qdrant/qdrant:v1.16.1
+    image: qdrant/qdrant:v1.18.2
     restart: unless-stopped
     container_name: la-qdrant-service
     ports:
@@ -13,6 +13,9 @@ services:
       - documedai-net
     volumes:
       - ./backend/vector_database_tests/utils/data_storage/qdrant_data:/qdrant/storage
+    # Equal resource budget across all perf DBs (see la-milvus/weaviate/vespa).
+    mem_limit: 8g
+    cpus: 4.0
 
   la-mongo:
     image: mongo:8.0.13-noble
@@ -51,7 +54,7 @@ services:
 
   la-milvus:
     profiles: ["vectordb-lab"]
-    image: milvusdb/milvus:v2.3.5
+    image: milvusdb/milvus:v2.6.18
     container_name: la-milvus-service
     command: milvus run standalone
     ports:
@@ -59,26 +62,22 @@ services:
       - "9091:9091"
     environment:
       ETCD_USE_EMBED: "true"
+      ETCD_DATA_DIR: /var/lib/milvus/etcd
+      ETCD_CONFIG_PATH: /milvus/configs/advanced/etcd.yaml
       COMMON_STORAGETYPE: local
+      DEPLOY_MODE: STANDALONE
+      MILVUS_STREAMING_SERVICE_ENABLED: "false"
+      COMMON_STORAGE_ENABLEV2: "false"
     networks:
       - documedai-net
     volumes:
       - ./backend/vector_database_tests/utils/data_storage/milvus_data:/var/lib/milvus
-
-  la-pinecone:
-    profiles: ["vectordb-lab"]
-    image: ghcr.io/pinecone-io/pinecone-local:latest
-    container_name: la-pinecone-service
-    restart: unless-stopped
-    ports:
-      - "5080:5080"
-      - "5081:5081"
-    networks:
-      - documedai-net
+    mem_limit: 8g
+    cpus: 4.0
 
   la-vespa:
     profiles: ["vectordb-lab"]
-    image: vespaengine/vespa:8.629.20
+    image: vespaengine/vespa:8.709.19
     restart: unless-stopped
     container_name: la-vespa-service
     hostname: vespa-container
@@ -91,9 +90,7 @@ services:
       - ./backend/vector_database_tests/utils/vespa_config:/app
       - ./backend/vector_database_tests/utils/data_storage/vespa_data:/opt/vespa/var
     mem_limit: 8g
-    # Healthcheck so `--wait` blocks until the config server is actually serving,
-    # not merely "started" (Vespa needs ~30-60s; without this the deploy step hits
-    # a container that is still booting / restarting).
+    cpus: 4.0
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:19071/state/v1/health"]
       interval: 10s
@@ -103,7 +100,7 @@ services:
 
   la-weaviate:
     profiles: ["vectordb-lab"]
-    image: semitechnologies/weaviate:1.34.8
+    image: semitechnologies/weaviate:1.37.9
     container_name: la-weaviate-service
     restart: unless-stopped
     ports:
@@ -118,6 +115,22 @@ services:
       - documedai-net
     volumes:
       - ./backend/vector_database_tests/utils/data_storage/weaviate_data:/var/lib/weaviate
+    mem_limit: 8g
+    cpus: 4.0
+
+  la-chroma:
+    profiles: ["vectordb-lab"]
+    image: chromadb/chroma:1.5.9
+    container_name: la-chroma-service
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    networks:
+      - documedai-net
+    volumes:
+      - ./backend/vector_database_tests/utils/data_storage/chroma_data:/data
+    mem_limit: 8g
+    cpus: 4.0
 
   la-backend:
     build:
@@ -145,7 +158,7 @@ services:
     volumes:
       - ./backend:/backend            # live source → uvicorn reload + logs to host ./backend/logs
       - models_cache:/models
-    mem_limit: 4g
+    mem_limit: 8g                    # ground_truth (faiss exact-kNN over 1M vectors)
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:2010/health"]
       interval: 10s

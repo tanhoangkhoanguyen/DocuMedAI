@@ -12,5 +12,10 @@
     <nodes>
       <node distribution-key="0" hostalias="node1"/>
     </nodes>
+    <tuning>
+      <resource-limits>
+        <disk>0.92</disk>
+      </resource-limits>
+    </tuning>
   </content>
 </services>
