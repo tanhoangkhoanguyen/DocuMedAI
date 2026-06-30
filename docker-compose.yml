@@ -52,6 +52,40 @@ services:
       retries: 5
       start_period: 5s
 
+  la-llm-proxy:
+    # OpenAI-compatible gateway in front of Gemini's OpenAI-compat endpoint: rate
+    # limit, retry/backoff, circuit breaker, in-flight dedup, Prometheus metrics.
+    # The backend points its LLM base_url here instead of at Google directly.
+    # See backend/llm-proxy/.
+    build:
+      context: ./backend/llm-proxy
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    container_name: la-llm-proxy-service
+    env_file:
+      - path: .env                       # provides the REAL GEMINI_API_KEY
+    environment:
+      # Google's OpenAI-compatible Gemini endpoint. The proxy strips the leading
+      # /v1 from inbound paths, so this base must NOT end in /v1.
+      OPENAI_UPSTREAM_BASE: https://generativelanguage.googleapis.com/v1beta/openai
+      UPSTREAM_API_KEY: ${GEMINI_API_KEY}  # injected as the upstream Bearer token
+      PROXY_PORT: "8081"
+      REDIS_URL: redis://la-redis:6379/1 # DB 1 — separate from the app cache on DB 0
+    depends_on:
+      la-redis:
+        condition: service_healthy
+    ports:
+      - "8081:8081"                      # expose for local /metrics + smoke tests
+    networks:
+      - documedai-net
+    healthcheck:
+      # distroless image has no shell/curl; use the Go binary's own probe.
+      test: ["CMD", "/llm-proxy", "-healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
   la-milvus:
     profiles: ["vectordb-lab"]
     image: milvusdb/milvus:v2.6.18
@@ -142,12 +176,19 @@ services:
       MONGO_URL: mongodb://la-mongo:27017/
       REDIS_URL: redis://la-redis:6379/0
       QDRANT_URL: http://la-qdrant:6333
+      # Route all OpenAI chat-completion calls through the Go LLM proxy.
+      # Read explicitly by services.chatbot.llm_config.get_llm_base_url(); also
+      # set OPENAI_BASE_URL as a belt-and-suspenders default for langchain.
+      LLM_PROXY_BASE_URL: http://la-llm-proxy:8081/v1
+      OPENAI_BASE_URL: http://la-llm-proxy:8081/v1
     depends_on:
       la-qdrant:
         condition: service_started
       la-mongo:
         condition: service_healthy
       la-redis:
+        condition: service_healthy
+      la-llm-proxy:
         condition: service_healthy
     restart: unless-stopped
     container_name: la-backend-service

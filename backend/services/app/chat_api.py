@@ -1,5 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import StreamingResponse
 from typing import Any, Dict, List
+
+import json
 
 from services.app.auth_deps import (
     get_workspace,
@@ -96,3 +100,46 @@ def post_message( # receive human message
             detail = str(exc)
         ) from exc
     return {"chat_id": chat_id, "reply": reply}
+
+@chat_router.post("/chats/{chat_id}/messages/stream")
+async def post_message_stream(  # receive human message, stream the reply via SSE
+        request: Request,
+        chat_id: str,
+        body: ChatMessageState,
+        claims: Dict[str, Any] = Depends(require_bearer_claims),
+        workspace: ChatbotWorkspace = Depends(get_workspace),
+    ) -> StreamingResponse:
+    graph = getattr(request.app.state, "graph", None)
+    if graph is None:
+        raise HTTPException(
+            status_code = 503,
+            detail = "Graph not initialized"
+        )
+
+    try:
+        reply = await run_in_threadpool(
+            workspace.stream_reply,
+            claims["id"],
+            claims["username"],
+            chat_id,
+            body.message.strip(),
+            graph,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code = 404, detail = str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code = 500, detail = str(exc)) from exc
+
+    async def event_stream():
+        for chunk in workspace.chunk_reply(reply):
+            yield f"data: {json.dumps({'type': 'token', 'text': chunk})}\n\n"
+        yield f"data: {json.dumps({'type': 'done', 'chat_id': chat_id})}\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type = "text/event-stream",
+        headers = {
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",  # disable proxy buffering (nginx)
+        },
+    )

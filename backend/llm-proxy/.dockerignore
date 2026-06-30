@@ -1,0 +1,4 @@
+# Nothing host-specific to copy; keep the build context minimal.
+*.md
+Dockerfile
+.dockerignore

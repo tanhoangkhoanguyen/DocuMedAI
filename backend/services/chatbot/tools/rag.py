@@ -1,7 +1,7 @@
 from langsmith import traceable
 from langchain_core.messages import SystemMessage, HumanMessage
-from langchain_google_genai import ChatGoogleGenerativeAI
-# from langchain_openai import ChatOpenAI=
+# Gemini is reached through the Go LLM proxy via its OpenAI-compatible endpoint
+from langchain_openai import ChatOpenAI
 from pydantic import BaseModel
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 from typing import List
@@ -15,6 +15,7 @@ from services.chatbot.constants.prompts import (
     PARAPHRASE_MESSAGE_PROMPT,
     GENERALIZE_USER_MESSAGE_PROMPT,
 )
+from services.chatbot.tools.llm_config import get_llm_base_url  # route LLM calls via the Go proxy
 from logger import get_logger
 
 
@@ -33,10 +34,11 @@ class RAG:
         reranking_model: str,
         reranking_threshold: float,
     ):
-        self.__llm = ChatGoogleGenerativeAI(
+        self.__llm = ChatOpenAI(
             model = chat_model,
             temperature = temperature,
-            google_api_key = GEMINI_API_KEY,
+            base_url = get_llm_base_url(),  # → Go LLM proxy → Gemini (OpenAI-compat)
+            api_key = GEMINI_API_KEY,
         )
         self.__reranking_threshold = reranking_threshold
         try:

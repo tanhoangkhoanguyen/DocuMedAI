@@ -387,6 +387,27 @@ class ChatbotWorkspace:
             message: str,
             graph,
         ) -> str:
+        state = self._build_reply_state(id, username, chat_id, message)
+        result = graph.invoke(
+            input = state,
+            config = {"configurable": {"thread_id": chat_id}},
+        )
+
+        chatbot_response = self._extract_reply(result)
+        self._persist_reply(chat_id, result)
+        return chatbot_response
+
+    def _build_reply_state(
+            self,
+            id: str,
+            username: str,
+            chat_id: str,
+            message: str,
+        ) -> GraphState:
+        """
+        Validate ownership and build the GraphState fed to the graph.
+        Shared by the blocking and streaming reply paths.
+        """
         if not self._user_owns_chat_cached(id, chat_id):
             raise PermissionError("User does not own this chat")
 
@@ -397,7 +418,6 @@ class ChatbotWorkspace:
         chat_history: List[Dict[str, Any]] = list(doc.get("chat_history") or [])
         chat_history.append({"role": "user", "content": message})
         chat_history_lc = self._rows_to_lc_messages(chat_history)
-        stm_in = doc["shortterm_memory"]
 
         user_info = UserInfo(
             user_id = id,
@@ -407,25 +427,23 @@ class ChatbotWorkspace:
             plan = "Free",
         )
 
-        state = GraphState(
+        return GraphState(
             user_info = user_info,
             chat_history = chat_history_lc,
-            shortterm_memory = stm_in,
-        )
-        result = graph.invoke(
-            input = state,
-            config = {"configurable": {"thread_id": chat_id}},
+            shortterm_memory = doc["shortterm_memory"],
         )
 
+    @staticmethod
+    def _extract_reply(result) -> str:
         if not result.get("chat_history"):
             raise ValueError("Empty chat history")
 
         ai_response = result["chat_history"][-1]
         if isinstance(ai_response, AIMessage):
-            chatbot_response = ai_response.content
-        else:
-            chatbot_response = "Sorry, I didn't understand that."
+            return ai_response.content
+        return "Sorry, I didn't understand that."
 
+    def _persist_reply(self, chat_id: str, result) -> None:
         rows = self._lc_messages_to_rows(result["chat_history"])
         stm_out = result.get("shortterm_memory") or []
 
@@ -436,4 +454,23 @@ class ChatbotWorkspace:
             "1",
             _TTL_SECONDS,
         )
-        return chatbot_response
+
+    def stream_reply(
+            self,
+            id: str,
+            username: str,
+            chat_id: str,
+            message: str,
+            graph,
+        ) -> str:
+        return self.append_user_and_reply(id, username, chat_id, message, graph)
+
+    @staticmethod
+    def chunk_reply(reply: str):
+        """
+        Split a completed reply into word-ish chunks for token streaming.
+
+        Trailing whitespace stays with each token so a client can naively
+        concatenate chunks and reproduce the original text.
+        """
+        return re.findall(r"\S+\s*|\s+", reply)

@@ -17,6 +17,7 @@ DocuMedAI is a full-stack AI-powered medical document analysis system. Users upl
 | Agent workflow | LangGraph StateGraph | `backend/services/chatbot/` |
 | Multi-agent | CrewAI | `nodes.py` — Agents node |
 | RAG pipeline | Qdrant retrieval + BAAI reranker | `backend/services/chatbot/tools/rag.py` |
+| LLM proxy | Go gateway (rate limit, retry, circuit breaker, dedup) in front of Gemini's OpenAI-compat endpoint | `backend/llm-proxy/` |
 | Memory cache | Redis (TTL 1800s → flush to MongoDB) | `backend/services/utils/redis_client.py` |
 | Persistence | MongoDB | `backend/services/utils/mongo_client.py` |
 | Auth | JWT + Supabase SSR | `backend/services/app/auth_api.py`, `frontend/lib/supabase/` |
@@ -25,6 +26,8 @@ DocuMedAI is a full-stack AI-powered medical document analysis system. Users upl
 | Encryption | Pattern cipher for stored messages | `backend/services/chatbot/tools/pattern_cipher.py` |
 
 **Important**: `backend/services/app/` holds the FastAPI routes and workspace layer. `backend/services/chatbot/` holds the LangGraph graph, nodes, and tools. `backend/services/utils/` holds shared DB clients (MongoDB, Redis, Supabase).
+
+**LLM proxy**: All chat-completion calls route through the Go `la-llm-proxy` service (port 8081), which forwards to Gemini's OpenAI-compatible endpoint, not to the provider directly. Embeddings and the reranker run locally and bypass it. Each `ChatOpenAI`/`crewai.LLM` is constructed with `base_url=get_llm_base_url()` (`backend/services/chatbot/llm_config.py`), driven by the `LLM_PROXY_BASE_URL` env var. Set `LLM_PROXY_BASE_URL=""` to bypass the proxy. See `backend/llm-proxy/README.md`.
 
 ## Common Commands
 
@@ -91,8 +94,10 @@ so backend API tests don't call OpenAI.
 | Qdrant | 6333 |
 | MongoDB | 27017 |
 | Redis | 6379 |
+| LLM proxy (Go) | 8081 |
 
 Swagger UI: `http://localhost:2010/docs`
+LLM proxy metrics: `http://localhost:8081/metrics`
 
 ## Key Files
 

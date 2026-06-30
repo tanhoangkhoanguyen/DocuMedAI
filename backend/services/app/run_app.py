@@ -1,6 +1,6 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from langchain_core.messages import AIMessage
 
 import uvicorn, warnings
@@ -74,8 +74,8 @@ app.include_router(chat_router)
 #   ],
 #   "shortterm_memory": []
 # }
-@app.post("/chatbot", response_class = PlainTextResponse)
-def chatbot(payload: GraphState, thread_id: str = "12345") -> PlainTextResponse:
+@app.post("/chatbot")
+def chatbot(payload: GraphState, thread_id: str = "12345") -> JSONResponse:
     try:
         result = app.state.graph.invoke(
             input = payload,
@@ -83,17 +83,17 @@ def chatbot(payload: GraphState, thread_id: str = "12345") -> PlainTextResponse:
         )
     except Exception as e:
         _LOGGER.exception("Graph invoke failed: %s", e)
-        return PlainTextResponse(f"Error: {e}", status_code = 500)
+        return JSONResponse({"error": str(e)}, status_code = 500)
 
     if not result.get("chat_history"):
-        raise ValueError("Empty chat history")
+        return JSONResponse({"error": "Empty chat history"}, status_code = 500)
 
     ai_response = result["chat_history"][-1]
     if isinstance(ai_response, AIMessage):
         chatbot_response = ai_response.content
     else:
         chatbot_response = "Sorry, I didn't understand that."
-    return PlainTextResponse(chatbot_response, status_code = 200)
+    return JSONResponse({"reply": chatbot_response}, status_code = 200)
 
 @app.get("/health", response_class = PlainTextResponse)
 def health() -> PlainTextResponse:

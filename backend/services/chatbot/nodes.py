@@ -2,8 +2,8 @@ from crewai import Agent, Crew, LLM, Process, Task
 from concurrent.futures import ThreadPoolExecutor
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langchain_core.runnables import Runnable
-from langchain_google_genai import ChatGoogleGenerativeAI
-# from langchain_openai import ChatOpenAI
+# Gemini is reached through the Go LLM proxy via its OpenAI-compatible endpoint
+from langchain_openai import ChatOpenAI
 from pydantic import BaseModel
 from typing import Any, List, Optional, Type
 
@@ -32,6 +32,7 @@ from vector_database_tests.utils.qdrant_client import get_qdrant_client
 from services.chatbot.mcp import get_mcp_client
 from services.chatbot.tools.rag import get_rag_client
 from services.chatbot.tools.pattern_cipher import get_pattern_cipher
+from services.chatbot.tools.llm_config import get_llm_base_url  # route LLM calls via the Go proxy
 
 
 LONGTERM_COLLECTION = "LongtermMemory"
@@ -48,10 +49,11 @@ class TopicChecker(Runnable):
             reranking_model: str,
             reranking_threshold: float,
         ):
-        self.__llm = ChatGoogleGenerativeAI(
+        self.__llm = ChatOpenAI(
                 model = chat_model,
                 temperature = temperature,
-                google_api_key = GEMINI_API_KEY,
+                base_url = get_llm_base_url(),  # → Go LLM proxy → Gemini (OpenAI-compat)
+                api_key = GEMINI_API_KEY,
             )
         self.__rag_client = get_rag_client(
             chat_model = chat_model,
@@ -110,10 +112,11 @@ class MessageAnalysis(Runnable):
         user_inputs: List[SubMessageState]
 
     def __init__(self, chat_model: str, temperature: float):
-        self.__llm = ChatGoogleGenerativeAI(
+        self.__llm = ChatOpenAI(
                 model = chat_model,
                 temperature = temperature,
-                google_api_key = GEMINI_API_KEY,
+                base_url = get_llm_base_url(),  # → Go LLM proxy → Gemini (OpenAI-compat)
+                api_key = GEMINI_API_KEY,
             )
 
     def invoke(self, state: GraphState, config = None):
@@ -197,7 +200,7 @@ class Agents(Runnable):
     def get_crew_model(chat_model: str):
         if "/" in chat_model:
             return chat_model
-        if chat_model.startswith(("gpt")):
+        if get_llm_base_url() or chat_model.startswith(("gpt")):
             return f"openai/{chat_model}"
         if chat_model.startswith(("gemini")):
             return f"gemini/{chat_model}"
@@ -214,15 +217,19 @@ class Agents(Runnable):
             reranking_model: str,
             reranking_threshold: float,
         ):
-        self.__llm = ChatGoogleGenerativeAI(
+        self.__llm = ChatOpenAI(
             model = chat_model,
             temperature = temperature,
-            google_api_key = GEMINI_API_KEY,
+            base_url = get_llm_base_url(),  # → Go LLM proxy → Gemini (OpenAI-compat)
+            api_key = GEMINI_API_KEY,
         )
+        _crew_base_url = get_llm_base_url()
+        _crew_kwargs = {"base_url": _crew_base_url} if _crew_base_url else {}
         self.__crew_llm = LLM(
             model = self.get_crew_model(chat_model),
             temperature = temperature,
             api_key = GEMINI_API_KEY,
+            **_crew_kwargs,
         )
         self.__max_workers = max_workers
         self.__mcp_client = get_mcp_client(

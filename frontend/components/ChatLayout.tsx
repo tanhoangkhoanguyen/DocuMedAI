@@ -103,21 +103,78 @@ export default function ChatLayout({ userEmail }: { userEmail: string }) {
     setSending(true);
     setError(null);
     setMessages((m) => [...m, { role: "user", content: text }]);
-    const res = await fetch(`/api/chats/${encodeURIComponent(activeId)}/messages`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: text }),
-    });
-    setSending(false);
-    if (!res.ok) {
+
+    const res = await fetch(
+      `/api/chats/${encodeURIComponent(activeId)}/messages/stream`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: text }),
+      },
+    );
+
+    if (!res.ok || !res.body) {
+      setSending(false);
       const j = await res.json().catch(() => ({}));
       setError(j.error ?? "Send failed");
       await loadMessages(activeId);
       return;
     }
-    const data = await res.json();
-    const reply = String(data.reply ?? "");
-    setMessages((m) => [...m, { role: "assistant", content: reply }]);
+
+    // The reply is fully computed server-side; it arrives as "token" chunks for
+    // progressive display, then a final "done". Append an empty assistant
+    // message and fill it as chunks arrive.
+    setMessages((m) => [...m, { role: "assistant", content: "" }]);
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let streamError: string | null = null;
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        // SSE frames are separated by a blank line.
+        const frames = buffer.split("\n\n");
+        buffer = frames.pop() ?? "";
+        for (const frame of frames) {
+          const line = frame.trim();
+          if (!line.startsWith("data:")) continue;
+          let evt: { type?: string; text?: string; message?: string };
+          try {
+            evt = JSON.parse(line.slice(5).trim());
+          } catch {
+            continue;
+          }
+          if (evt.type === "token" && evt.text) {
+            setMessages((m) => {
+              const next = [...m];
+              const last = next[next.length - 1];
+              if (last && last.role === "assistant") {
+                next[next.length - 1] = {
+                  ...last,
+                  content: last.content + evt.text,
+                };
+              }
+              return next;
+            });
+          } else if (evt.type === "error") {
+            streamError = evt.message ?? "Stream error";
+          }
+        }
+      }
+    } catch {
+      streamError = "Stream interrupted";
+    } finally {
+      setSending(false);
+    }
+
+    if (streamError) {
+      setError(streamError);
+      await loadMessages(activeId);
+    }
   }
 
   async function signOut() {
