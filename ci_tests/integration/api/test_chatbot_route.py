@@ -23,4 +23,4 @@ def test_chatbot_route(api_client):
     )
     res = api_client.post("/chatbot", json=payload.model_dump(mode="json"))
     assert res.status_code == 200
-    assert res.text == "AI reply"
+    assert res.json() == {"reply": "AI reply"}

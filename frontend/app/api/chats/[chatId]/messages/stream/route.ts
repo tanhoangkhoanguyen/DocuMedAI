@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getBackendBearer } from "@/lib/backend-bearer";
-import { getInternalApiBase } from "@/lib/internal-api";
+import { getInternalApiBase } from "@/lib/utils/internal-api";
 
 // Stream-through proxy: pipes the backend SSE body straight to the client
 // without buffering (unlike proxyToBackend, which awaits res.text()).

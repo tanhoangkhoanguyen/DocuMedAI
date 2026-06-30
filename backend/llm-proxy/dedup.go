@@ -25,13 +25,7 @@ func dedupKey(body []byte) string {
 // Execute fn once per concurrent key.
 // Later callers wait for and reuse the first result.
 // shared=true means the result came from another caller.
-func (d *Deduper) Do(
-		key string, 
-		fn func() (*upstreamResult, error)
-	) (
-		res *upstreamResult, 
-		shared bool, err error
-	) {
+func (d *Deduper) Do(key string, fn func() (*upstreamResult, error)) (res *upstreamResult, shared bool, err error) {
 	v, e, sharedFlight := d.group.Do(key, func() (interface{}, error) {
 		return fn()
 	})
