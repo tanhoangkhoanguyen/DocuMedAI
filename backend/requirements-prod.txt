@@ -49,6 +49,12 @@ tiktoken
 
 # Multi-agent orchestration
 crewai
+# CrewAI's native providers only accept known OpenAI/Gemini/etc. model names.
+# We route a Gemini model through the OpenAI-compatible LLM proxy as
+# "openai/gemini-2.5-flash", which fails native validation, so CrewAI falls back
+# to LiteLLM (its OpenAI-compatible custom-endpoint path). That fallback is an
+# optional dependency — install it explicitly or startup raises ImportError.
+litellm
 mcp
 
 # Database / ORM
