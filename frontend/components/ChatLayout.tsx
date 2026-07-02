@@ -96,6 +96,25 @@ export default function ChatLayout({ userEmail }: { userEmail: string }) {
     await loadChats();
   }
 
+  async function deleteChat(chatId: string) {
+    if (!window.confirm("Delete this chat? This cannot be undone.")) return;
+    const res = await fetch(`/api/chats/${encodeURIComponent(chatId)}`, {
+      method: "DELETE",
+    });
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      setError(j.error ?? "Delete failed");
+      return;
+    }
+    const remaining = chats.filter((x) => x.chat_id !== chatId);
+    setChats(remaining);
+    if (activeId === chatId) {
+      const next = remaining[0]?.chat_id ?? null;
+      setActiveId(next);
+      if (next === null) setMessages([]); // no chat left → clear the thread
+    }
+  }
+
   async function sendMessage() {
     if (!activeId || !input.trim() || sending) return;
     const text = input.trim();
@@ -199,6 +218,7 @@ export default function ChatLayout({ userEmail }: { userEmail: string }) {
         onSelect={setActiveId}
         onNewChat={() => void newChat()}
         onRename={(id) => void renameChat(id)}
+        onDelete={(id) => void deleteChat(id)}
         onSignOut={() => void signOut()}
       />
 

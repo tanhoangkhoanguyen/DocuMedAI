@@ -9,6 +9,7 @@ export default function ChatSidebar({
   onSelect,
   onNewChat,
   onRename,
+  onDelete,
   onSignOut,
 }: {
   userEmail: string;
@@ -18,6 +19,7 @@ export default function ChatSidebar({
   onSelect: (chatId: string) => void;
   onNewChat: () => void;
   onRename: (chatId: string) => void;
+  onDelete: (chatId: string) => void;
   onSignOut: () => void;
 }) {
   return (
@@ -106,6 +108,14 @@ export default function ChatSidebar({
                   className="shrink-0 rounded px-1 text-xs text-[#6E8A82] opacity-0 transition hover:text-[#FF5436] group-hover:opacity-100"
                 >
                   ✎
+                </button>
+                <button
+                  type="button"
+                  title="Delete"
+                  onClick={() => onDelete(c.chat_id)}
+                  className="shrink-0 rounded px-1 text-xs text-[#6E8A82] opacity-0 transition hover:text-[#FF5436] group-hover:opacity-100"
+                >
+                  ✕
                 </button>
               </div>
             );
