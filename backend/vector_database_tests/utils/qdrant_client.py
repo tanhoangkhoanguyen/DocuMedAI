@@ -47,6 +47,19 @@ class QdrantClient:
             LOGGER.error(f"Failed to check collection '{collection_name}'\n\t{str(e)}")
             return False
     
+    def count_points(
+            self,
+            collection_name: str
+        ) -> int:
+        """Return the number of points in a collection (0 if it doesnt exist)."""
+        try:
+            if not self.collection_exists(collection_name):
+                return 0
+            return self.__client.count(collection_name = collection_name, exact = True).count
+        except Exception as e:
+            LOGGER.error(f"Failed to count points in '{collection_name}'\n\t{str(e)}")
+            return 0
+
     def delete_collection(
             self,
             collection_name: str
