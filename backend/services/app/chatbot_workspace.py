@@ -4,15 +4,18 @@ from typing import Any, Dict, List, Optional, Tuple
 import json, re
 
 from logger import get_logger
-from services.chatbot.constants.schemas import GraphState, UserInfo
+from services.chatbot.constants.schemas import GraphState, UserInfo, UserDocumentRef
 from services.chatbot.tools.pattern_cipher import PatternCipher
-from services.utils.mongo_client import MongoClient
-from services.utils.redis_client import RedisClient
+from services.utils.mongo_client import get_mongo_client
+from services.utils.redis_client import get_redis_client
+from vector_database_tests.utils.qdrant_client import get_qdrant_client
+from services.documents_upload.constants import (
+    USER_DOCUMENTS_COLLECTION, 
+    EMBEDDING_MODEL, 
+    EMBEDDING_DIMENSION,
+)
+from services.chatbot.tools.pattern_cipher import get_pattern_cipher
 
-
-_SHARED_MONGO_CLIENT = MongoClient()
-_SHARED_REDIS_CLIENT = RedisClient()
-_SHARED_PATTERN_CIPHER = PatternCipher()
 _LOGGER = get_logger(
     name = "chatbot_workspace",
     level = "INFO"
@@ -27,9 +30,10 @@ _TTL_SECONDS = 1800
 class ChatbotWorkspace:
     def __init__(self, graph) -> None:
         # Initialize objects
-        self.__mongo_client = _SHARED_MONGO_CLIENT
-        self.__redis_client = _SHARED_REDIS_CLIENT
-        self.__pattern_cipher = _SHARED_PATTERN_CIPHER
+        self.__mongo_client = get_mongo_client()
+        self.__redis_client = get_redis_client()
+        self.__qdrant_client = get_qdrant_client(EMBEDDING_MODEL, EMBEDDING_DIMENSION)
+        self.__pattern_cipher = get_pattern_cipher()
         self.__graph = graph
 
         # Start the service
@@ -38,6 +42,37 @@ class ChatbotWorkspace:
     def close(self) -> None:
         self.__mongo_client.close()
         self.__redis_client.close()
+
+    # ========== DOCUMENT UPLOAD (1 doc per user) ==========
+    # Ownership is enforced by the user_id key inside each Mongo query. The worker
+    # updates status directly; the API goes through these. Vector chunks live in
+    # Qdrant (UserDocuments). Uploads use replace semantics — see prepare_replace.
+    def get_user_document(self, user_id: str) -> Optional[Dict[str, Any]]:
+        return self.__mongo_client.get_user_document(user_id)
+
+    def prepare_new_document(
+            self,
+            user_id: str,
+            doc_id: str,
+            filename: str,
+            mime: str,
+            size: int,
+            description: str,
+        ) -> None:
+        """
+        Atomic replace: purge the user's existing document (Qdrant chunks + Mongo
+        metadata) before inserting the new one, upholding the 1-doc-per-user rule.
+        The unique index on user_id is the last-resort guard.
+        """
+        existing = self.__mongo_client.get_user_document(user_id)
+        if existing:
+            self.delete_user_document(user_id, existing["doc_id"])
+        self.__mongo_client.create_document(user_id, doc_id, filename, mime, size, description)
+
+    def delete_user_document(self, user_id: str, doc_id: str) -> None:
+        """Purge the doc's Qdrant chunks (user_id-scoped) then its Mongo metadata."""
+        self.__qdrant_client.delete_by_doc(USER_DOCUMENTS_COLLECTION, user_id, doc_id)
+        self.__mongo_client.delete_document(user_id, doc_id)
 
     # ========== DATA CACHING KEYS ==========
     @staticmethod
@@ -466,10 +501,21 @@ class ChatbotWorkspace:
             plan = "Free",
         )
 
+        # Attach the user's uploaded doc. Only a fully-ingested ('ready') doc is 
+        # advertised, so a doc mid-ingestion isn't offered as answerable.
+        user_document = None
+        user_doc = self.__mongo_client.get_user_document(id)
+        if user_doc and user_doc.get("status") == "ready":
+            user_document = UserDocumentRef(
+                doc_id = user_doc.get("doc_id", ""),
+                description = user_doc.get("description", ""),
+            )
+
         return GraphState(
             user_info = user_info,
             chat_history = chat_history_lc,
             shortterm_memory = doc["shortterm_memory"],
+            user_document = user_document,
         )
 
     @staticmethod

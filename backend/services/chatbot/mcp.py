@@ -2,11 +2,17 @@ from typing import Dict, Optional, Sequence
 
 from services.chatbot.constants.schemas import McpToolDefinition, ToolParameter
 from services.chatbot.tools.medical_supporter import get_medical_supporter
+from services.chatbot.tools.user_document_supporter import get_user_document_supporter
 
 
 def medical_support_tool(payload: ToolParameter) -> str:
     client = get_medical_supporter(payload)
     return f"[medical_support_tool]: {client.run(payload.message)}"
+
+
+def user_document_tool(payload: ToolParameter) -> str:
+    client = get_user_document_supporter(payload)
+    return f"[user_document_tool]: {client.run(payload.message, payload.user_id)}"
 
 
 _ABOUT_DOCUMEDAI = (
@@ -52,6 +58,17 @@ _BUILTIN_MCP_TOOLS: tuple[McpToolDefinition, ...] = (
         ),
         handler = project_info_tool,
     ),
+    McpToolDefinition(
+        name = "user_document_tool",
+        description = (
+            "Retrieve passages from the CURRENT USER's own uploaded documents (their PDFs, "
+            "DOCX, or text files) to answer questions grounded in those files. Use this whenever "
+            "the user refers to 'my document', 'the file I uploaded', 'my report/record', or "
+            "asks something that should be answered from their uploaded content. "
+            "Pass a short natural-language query describing what to find."
+        ),
+        handler = user_document_tool,
+    ),
 )
 
 
@@ -96,7 +113,9 @@ class MCPServer:
     def has_tool(self, name: str) -> bool:
         return name in self.__registry
 
-    def execute_tool_call(self, name: str, message: str) -> str:
+    def execute_tool_call(self, name: str, message: str, user_id: str = "") -> str:
+        # user_id is threaded per-call (NOT bound to this cached-singleton server)
+        # so concurrent users never see each other's documents.
         spec = self.__registry.get(name)
         if spec is None:
             return ""
@@ -109,6 +128,7 @@ class MCPServer:
                 embedding_dimension = self.embedding_dimension,
                 reranking_model = self.reranking_model,
                 reranking_threshold = self.reranking_threshold,
+                user_id = user_id,
             ))
 
 def get_mcp_client(

@@ -243,21 +243,26 @@ class Agents(Runnable):
         self.__shortterm_memory_size = shortterm_memory_size
         self.__max_revision_cycles = max_revision_cycles
 
-    def __run_planner(self, task: TaskState):
+    def __run_planner(self, task: TaskState, doc_hint: str = ""):
         catalog = self.__mcp_client.format_registry()
+        # doc_hint is per-request (the current user's uploaded-doc description) and
+        # is prepended to the planner context so the LLM router can decide whether
+        # user_document_tool is relevant. It's a local arg — never stored on self —
+        # so concurrent users can't see each other's document.
+        context = f"{doc_hint}\n{task.context}" if doc_hint else task.context
         prompt = [
             SystemMessage(
                 content = AGENT_PLANNER_PROMPT.format(
                     tool_catalog = catalog,
-                    context = task.context,
+                    context = context,
                 )
             ),
             HumanMessage(content = f"USER MESSAGE:\n{task.message}")
         ]
         return self.__llm.with_structured_output(self.planner_output_schema).invoke(prompt)
 
-    def __process_task(self, task: TaskState):
-        plan = self.__run_planner(task)
+    def __process_task(self, task: TaskState, user_id: str = "", doc_hint: str = ""):
+        plan = self.__run_planner(task, doc_hint)
         tool_calls = [tool_call for tool_call in plan.tool_calls if self.__mcp_client.has_tool(tool_call.tool)]
         if not tool_calls:
             return ""
@@ -267,6 +272,7 @@ class Agents(Runnable):
                     self.__mcp_client.execute_tool_call,
                     tool_call.tool,
                     tool_call.message,
+                    user_id,
                 )
                 for tool_call in tool_calls
             ]
@@ -325,6 +331,18 @@ class Agents(Runnable):
         shortterm_memories = state.shortterm_memory or []
         shortterm_memory = "\n".join(shortterm_memories[-1 * self.__shortterm_memory_size:])
         user_message = state.chat_history[-1].content
+        user_id = state.user_info.user_id if state.user_info else ""
+
+        # Per-request routing hint: tell the planner what the user's uploaded doc is
+        # about so it can choose user_document_tool when relevant. Empty if no ready
+        # doc. Read off GraphState (populated by the workspace layer) — no DB call here.
+        doc_hint = ""
+        if state.user_document and state.user_document.description:
+            doc_hint = (
+                f"The user has uploaded a document described as: "
+                f"\"{state.user_document.description}\". Use user_document_tool to "
+                f"retrieve from it when the question relates to that document."
+            )
 
         draft_agent = Agent(
             role = "Draft Writer",
@@ -352,7 +370,7 @@ class Agents(Runnable):
                 # Update mcp_outputs
                 for idx, tasks in enumerate(state.task_list):
                     with ThreadPoolExecutor(max_workers = self.__max_workers) as pool:
-                        futures = [pool.submit(self.__process_task, task) for task in tasks]
+                        futures = [pool.submit(self.__process_task, task, user_id, doc_hint) for task in tasks]
                         for task, future in zip(state.task_list[idx], futures):
                             task.result = future.result()
                             mcp_outputs += f"\n{task.result or ''}"

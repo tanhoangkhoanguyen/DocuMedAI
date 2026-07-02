@@ -9,9 +9,11 @@ warnings.filterwarnings("ignore")
 from logger import get_logger
 from services.app.auth_api import auth_router
 from services.app.chat_api import chat_router
+from services.app.documents_api import documents_router
 from services.app.chatbot_workspace import ChatbotWorkspace
 from services.chatbot.constants.schemas import GraphState
 from services.chatbot.workflow import build_graph
+from services.documents_upload.worker import REDIS_SETTINGS
 
 
 _LOGGER = get_logger(
@@ -44,6 +46,10 @@ async def lifespan(app: FastAPI):
     app.state.graph = _build_graph()
     workspace = ChatbotWorkspace(app.state.graph)
     app.state.workspace = workspace                                                # Reference
+
+    # arq pool for enqueuing async document-ingestion jobs (la-doc-worker).
+    from arq import create_pool
+    app.state.arq_pool = await create_pool(REDIS_SETTINGS)
     _LOGGER.info("Chatbot FastAPI on.")
 
     # Start serving requests
@@ -51,11 +57,16 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     workspace.close()
+    try:
+        await app.state.arq_pool.close()
+    except Exception:
+        pass
 
 
 app = FastAPI(title = "DocuMedAI Chatbot", lifespan = lifespan)
 app.include_router(auth_router)
 app.include_router(chat_router)
+app.include_router(documents_router)
 
 
 # {

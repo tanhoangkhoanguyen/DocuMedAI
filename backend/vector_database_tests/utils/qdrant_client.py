@@ -4,8 +4,8 @@ import torch, warnings
 warnings.filterwarnings("ignore")
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from qdrant_client import QdrantClient as SDKQdrantClient
-from qdrant_client.http.models import VectorParams, Distance, PointStruct, HnswConfigDiff, OptimizersConfigDiff, SearchParams
-from typing import Any, List
+from qdrant_client.http.models import VectorParams, Distance, PointStruct, HnswConfigDiff, OptimizersConfigDiff, SearchParams, Filter, FieldCondition, MatchValue, PayloadSchemaType
+from typing import Any, Dict, List, Optional
 
 LOGGER = get_logger(
     name = "Qdrant_client",
@@ -77,7 +77,8 @@ class QdrantClient:
 
     def create_collection(
             self, 
-            collection_name: str
+            collection_name: str,
+            payload_indexes: Optional[List[str]] = None,
         ):
         try:
             self.delete_collection(collection_name)
@@ -95,9 +96,43 @@ class QdrantClient:
                     indexing_threshold = 20000
                 )
             )
+            for field in (payload_indexes or []):
+                self.__client.create_payload_index(
+                    collection_name = collection_name,
+                    field_name = field,
+                    field_schema = PayloadSchemaType.KEYWORD,
+                )
             LOGGER.info(f"Created collection '{collection_name}'")
         except Exception as e:
             LOGGER.error(f"Failed to create collection '{collection_name}'\n\t{str(e)}")
+            raise
+
+    @staticmethod
+    def __user_doc_filter(user_id: str, doc_id: Optional[str] = None) -> Filter:
+        must = [FieldCondition(key = "user_id", match = MatchValue(value = user_id))]
+        if doc_id:
+            must.append(FieldCondition(key = "doc_id", match = MatchValue(value = doc_id)))
+        return Filter(must = must)
+
+    def delete_by_doc(
+            self,
+            collection_name: str,
+            user_id: str,
+            doc_id: str,
+        ):
+        """
+        Delete all points for one (user_id, doc_id). user_id in the selector prevents
+        a cross-user purge. Used for idempotent re-ingestion and document deletion.
+        """
+        try:
+            if not self.collection_exists(collection_name):
+                return
+            self.__client.delete(
+                collection_name = collection_name,
+                points_selector = self.__user_doc_filter(user_id, doc_id),
+            )
+        except Exception as e:
+            LOGGER.error(f"Failed to delete doc '{doc_id}' from '{collection_name}'\n\t{str(e)}")
             raise
 
     def embed_query(
@@ -111,20 +146,21 @@ class QdrantClient:
             self,
             collection_name: str,
             ids: List[str],
-            queries: List[str],
-            embedded_queries: List[List[float]]
+            queries: Optional[List[str]],
+            embedded_queries: List[List[float]],
+            payloads: Optional[List[Dict[str, Any]]] = None,
         ):
         try:
             points = []
             for idx in range(len(ids)):
                 id = ids[idx]
-                query = queries[idx]
                 embedded_query = embedded_queries[idx]
+                payload = payloads[idx] if payloads is not None else {"query": queries[idx]}
                 points.append(
                     PointStruct(
                         id = id,
                         vector = embedded_query,
-                        payload = {"query": query}
+                        payload = payload,
                 ))
 
             self.__client.upload_points(
@@ -140,14 +176,19 @@ class QdrantClient:
             embedded_query,
             top_k: int = 50,
             search_param: int = 64,
+            user_id: Optional[str] = None,
+            doc_id: Optional[str] = None,
+            with_payload: bool = False,
         ):
         try:
+            query_filter = self.__user_doc_filter(user_id, doc_id) if user_id else None
             resp = self.__client.query_points(
                 collection_name = collection_name,
                 query = embedded_query,
+                query_filter = query_filter,
                 limit = top_k,
                 search_params = SearchParams(hnsw_ef = search_param),
-                with_payload = False,
+                with_payload = with_payload,
                 with_vectors = False
             )
             return resp

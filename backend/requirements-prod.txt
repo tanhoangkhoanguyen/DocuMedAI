@@ -21,6 +21,7 @@ redis
 
 # Web / API
 fastapi
+python-multipart            # multipart/form-data parsing for document upload (UploadFile + Form)
 uvicorn
 httpx
 aiohttp
@@ -65,6 +66,8 @@ python-dotenv
 pydantic
 pydantic-settings
 pypdf
+python-docx                # .docx text extraction for user document upload
+arq                        # asyncio Redis job queue for async document ingestion
 PyYAML
 tavily-python
 bcrypt

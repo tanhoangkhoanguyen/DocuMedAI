@@ -24,5 +24,13 @@ done
 echo "[entrypoint] seeding MedicalTerms from prod_dataset/ ..."
 python -m services.chatbot.seed_prod_data
 
+# Async document-ingestion worker (arq) runs in-process alongside the API. If it
+# dies, take the whole container down so Docker restarts a clean pair.
+echo "[entrypoint] starting document-ingestion worker ..."
+arq services.documents_upload.worker.WorkerSettings &
+WORKER_PID=$!
+trap 'kill "$WORKER_PID" 2>/dev/null' EXIT
+( wait "$WORKER_PID"; echo "[entrypoint] worker exited — stopping container" >&2; kill 1 ) &
+
 echo "[entrypoint] starting API ..."
 exec python -m services.app.run_app

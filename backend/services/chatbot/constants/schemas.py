@@ -64,6 +64,7 @@ class ToolParameter(BaseModel):
     embedding_dimension: int
     reranking_model: str
     reranking_threshold: float
+    user_id: str = ""
 
 
 class TaskState(BaseModel):
@@ -87,12 +88,18 @@ class SubMessageState(BaseModel):
     instruction: Optional[str] = None
 
 
+class UserDocumentRef(BaseModel):
+    doc_id: str = ""
+    description: str = ""
+
+
 class GraphState(BaseModel):
     user_info: UserInfo = Field(default_factory = lambda: UserInfo())
     chat_history: Annotated[List[AnyMessage], add_messages] = Field(default_factory = list)
     user_inputs: Optional[List[SubMessageState]] = None
     task_list: Optional[List[List[TaskState]]] = Field(default_factory = list)
     shortterm_memory: List[str] = Field(default_factory = list)
+    user_document: Optional[UserDocumentRef] = None
 
     @field_validator("shortterm_memory", mode = "before")
     @classmethod
