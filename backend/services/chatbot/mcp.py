@@ -9,6 +9,29 @@ def medical_support_tool(payload: ToolParameter) -> str:
     return f"[medical_support_tool]: {client.run(payload.message)}"
 
 
+_ABOUT_DOCUMEDAI = (
+    "What I am: I am the DocuMedAI chatbot, an AI assistant for analyzing medical documents. "
+    "Users upload medical documents and ask me questions about them through a chat interface.\n"
+    "Why I exist / what this project is for: DocuMedAI is a full-stack AI-powered medical "
+    "document analysis system. It helps users understand their medical documents by answering "
+    "questions grounded in the uploaded content, using a multi-agent workflow with RAG "
+    "(retrieval-augmented generation) over a vector database, persistent conversation memory, "
+    "and caching for fast, context-aware responses.\n"
+    "How I work (high level): each message is routed through a LangGraph workflow "
+    "(topic checking, message analysis, long-term memory retrieval, multi-agent answering, "
+    "and schema updating). Answers are retrieved from documents via Qdrant vector search with "
+    "cross-encoder reranking.\n"
+    "Who created me: My creator is tanhoangkhoanguyen (Khoa Nguyen), together with his "
+    "collaborators.\n"
+    "Where to learn more: You can find more information about the codebase at "
+    "https://github.com/tanhoangkhoanguyen/DocuMedAI"
+)
+
+
+def project_info_tool(payload: ToolParameter) -> str:
+    return f"[project_info_tool]: {_ABOUT_DOCUMEDAI}"
+
+
 _MCP_DICT = {}
 _BUILTIN_MCP_TOOLS: tuple[McpToolDefinition, ...] = (
     McpToolDefinition(
@@ -18,6 +41,16 @@ _BUILTIN_MCP_TOOLS: tuple[McpToolDefinition, ...] = (
             "Pass a short natural-language query (e.g. 'The cause for X' or 'Definition of X')."
         ),
         handler = medical_support_tool,
+    ),
+    McpToolDefinition(
+        name = "project_info_tool",
+        description = (
+            "Provides general information about this chatbot and project. Use it to answer "
+            "meta questions such as 'What are you?', 'Why do you exist / what is this project "
+            "for?', 'Who created you?', or any question about DocuMedAI itself, its purpose, or "
+            "its creator. Takes no meaningful input."
+        ),
+        handler = project_info_tool,
     ),
 )
 
