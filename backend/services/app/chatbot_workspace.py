@@ -39,29 +39,36 @@ class ChatbotWorkspace:
         self.__mongo_client.close()
         self.__redis_client.close()
 
+    # ========== DATA CACHING KEYS ==========
     @staticmethod
     def _sidebar_cache_key(id: str) -> str:
+        """Cached sidebar chat list (id/name rows) for one user; TTL-refreshed from Mongo."""
         return f"sidebar:{id}"
 
     @staticmethod
     def _pending_rename_key(user_id: str) -> str:
+        """Map of chat_id -> new name awaiting flush to Mongo; merged into the sidebar on read."""
         return f"pending_rename:{user_id}"
 
     @staticmethod
-    def _messages_cache_key(chat_id: str) -> str:
-        return f"messages:{chat_id}"
-
-    @staticmethod
     def _user_cache_key(email: str) -> str:
+        """Cached user_info (id/username/password) keyed by email; speeds up login."""
         return f"userinfo:{email}"
 
     @staticmethod
+    def _messages_cache_key(chat_id: str) -> str:
+        """Legacy per-chat messages cache key (superseded by _messages_snap_list_key)."""
+        return f"messages:{chat_id}"
+
+    @staticmethod
     def _messages_snap_list_key(chat_id: str) -> str:
-        """
-        Redis list of two JSON blobs: [chat_history rows], [shortterm_memory].
-        """
+        """Redis list of two JSON blobs: [chat_history rows], [shortterm_memory]."""
         return f"msgsnap:{chat_id}"
 
+    # ========== DUMMY FLUSHING KEYS ==========
+    # Empty (value "1") TTL trigger, never read. When it expires Redis fires an
+    # 'expired' event that tells us to write the cached chat snapshot (msgsnap)
+    # back to Mongo. Write-behind: many edits in the TTL window = one Mongo write.
     @staticmethod
     def _flush_chat_key(chat_id: str) -> str:
         return f"{_FLUSH_CHAT_PREFIX}{chat_id}"
@@ -118,6 +125,11 @@ class ChatbotWorkspace:
         self.__redis_client.list_delete(_WORKSPACE_COLLECTION, self._messages_snap_list_key(chat_id))
 
     def _on_redis_expired(self, redis_key: str) -> None:
+        """
+        Called by the Redis expire listener whenever any key expires. If the expired
+        key is a flush trigger, write the matching cached data back to Mongo — this is
+        how Redis "notifies" us to persist the cache. Non-flush keys are ignored.
+        """
         marker = f":s:{_FLUSH_SIDEBAR_PREFIX}"
         if marker in redis_key:
             user_id = redis_key.split(marker, 1)[-1]
@@ -369,6 +381,33 @@ class ChatbotWorkspace:
             "1",
             _TTL_SECONDS,
         )
+
+    def delete_chat(self, id: str, chat_id: str) -> None:
+        if not self._user_owns_chat_cached(id, chat_id):
+            raise PermissionError("Chat not found for user")
+
+        self.__mongo_client.delete_chat(chat_id, id)
+
+        # Drop cached chat state + sidebar so it disappears immediately
+        self.__redis_client.list_delete(
+            _WORKSPACE_COLLECTION, self._messages_snap_list_key(chat_id)
+        )
+        self.__redis_client.delete_key(
+            _WORKSPACE_COLLECTION, self._flush_chat_key(chat_id)
+        )
+        self.__redis_client.delete_key(
+            _WORKSPACE_COLLECTION, self._sidebar_cache_key(id)
+        )
+
+        # Drop any pending rename for this chat so it can't resurrect the deleted
+        # chat's name in the sidebar or get flushed to a now-missing Mongo doc.
+        pending = self._load_pending_renames(id)
+        if pending.pop(str(chat_id), None) is not None:
+            self.__redis_client.set_key(
+                _WORKSPACE_COLLECTION,
+                self._pending_rename_key(id),
+                pending,
+            )
 
     def get_messages(self, id: str, chat_id: str) -> List[Dict[str, Any]]:
         if not self._user_owns_chat_cached(id, chat_id):

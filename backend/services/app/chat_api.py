@@ -52,6 +52,21 @@ def rename_chat(
         "chat_name": body.chat_name.strip() or "Untitled",
     }
 
+@chat_router.delete("/chats/{chat_id}")
+def delete_chat(
+        chat_id: str,
+        claims: Dict[str, Any] = Depends(require_bearer_claims),
+        workspace: ChatbotWorkspace = Depends(get_workspace),
+    ) -> Dict[str, str]:
+    try:
+        workspace.delete_chat(claims["id"], chat_id)
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code = 404,
+            detail = str(exc)
+        ) from exc
+    return {"chat_id": chat_id}
+
 @chat_router.get("/chats/{chat_id}/messages")
 def get_messages(
         chat_id: str,

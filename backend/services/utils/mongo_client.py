@@ -6,7 +6,7 @@ from logger import get_logger
 
 MONGO_URL = "mongodb://la-mongo:27017/"
 SHARED_MONGO_CLIENT = None
-_HOST_DB = "host"
+_HOST_DB = "documedai_prod"
 _LOGGER = get_logger(
     name = "Mongo_client",
     level = "INFO",
@@ -134,6 +134,17 @@ class MongoClient:
             )
         except Exception as e:
             _LOGGER.error(f"rename_chat failed chat_id={chat_id}\n\t{str(e)}")
+            raise
+
+    def delete_chat(self, chat_id: str, user_id: str) -> None:
+        try:
+            self._db()["user_chat"].delete_one({"chat_id": chat_id})
+            self._db()["user_data"].update_one(
+                {"user_id": user_id},
+                {"$pull": {"chat_ids": chat_id}},
+            )
+        except Exception as e:
+            _LOGGER.error(f"delete_chat failed chat_id={chat_id}\n\t{str(e)}")
             raise
 
     def get_one(self, collection_name: str, key: str, value: str) -> Optional[Dict[str, Any]]:
