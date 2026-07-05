@@ -11,7 +11,7 @@ from requests.adapters import HTTPAdapter
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from typing import List
 
-LOGGER = get_logger(
+_LOGGER = get_logger(
     name = "Vespa_client",
     level = "INFO"
 )
@@ -47,7 +47,7 @@ class VespaClient:
 
     def __debug_session(self, resp):
         if not resp.ok:
-            LOGGER.error(f"response body: {resp.text}")
+            _LOGGER.error(f"response body: {resp.text}")
         resp.raise_for_status()
 
     def list_collections(self) -> List[str]:
@@ -76,7 +76,7 @@ class VespaClient:
             collections = [hit for hit in hits if hit != "__dummy__"]
             return collections
         except Exception as e:
-            LOGGER.error(f"Failed to list collections\n\t{e}")
+            _LOGGER.error(f"Failed to list collections\n\t{e}")
             return []
     
     def collection_exists(
@@ -88,7 +88,7 @@ class VespaClient:
                 return True
             return False
         except Exception as e:
-            LOGGER.error(f"Failed to check '{collection_name}' existence\n\t{e}")
+            _LOGGER.error(f"Failed to check '{collection_name}' existence\n\t{e}")
             return False
 
     def delete_collection(
@@ -97,7 +97,7 @@ class VespaClient:
         ):
         try:
             if not self.collection_exists(collection_name):
-                LOGGER.info(f"Collection '{collection_name}' does not exist")
+                _LOGGER.info(f"Collection '{collection_name}' does not exist")
                 return
  
             resp = self.__session.delete(
@@ -108,9 +108,9 @@ class VespaClient:
                 }
             )
             self.__debug_session(resp)
-            LOGGER.info(f"Deleted collection '{collection_name}'")
+            _LOGGER.info(f"Deleted collection '{collection_name}'")
         except Exception as e:
-            LOGGER.error(f"Failed to delete collection '{collection_name}'\n\t{str(e)}")
+            _LOGGER.error(f"Failed to delete collection '{collection_name}'\n\t{str(e)}")
             raise
 
     def create_collection(self, collection_name: str):
@@ -126,9 +126,9 @@ class VespaClient:
             url = f"{VESPA_URL}/document/v1/mynamespace/vector/docid/{collection_name}-dummy"
             resp = self.__session.post(url, json = doc)
             self.__debug_session(resp)
-            LOGGER.info(f"Created collection '{collection_name}'")
+            _LOGGER.info(f"Created collection '{collection_name}'")
         except Exception as e:
-            LOGGER.info(f"Failed to create collection '{collection_name}'\n\t{str(e)}")
+            _LOGGER.info(f"Failed to create collection '{collection_name}'\n\t{str(e)}")
             raise
 
     async def __push_document(
@@ -152,10 +152,10 @@ class VespaClient:
             async with session.post(url, json = doc) as resp:
                 if not resp.ok:
                     text = await resp.text()
-                    LOGGER.error(text)
+                    _LOGGER.error(text)
                     resp.raise_for_status()
         except Exception as e:
-            LOGGER.error(f"Failed to push document\n\t{str(e)}")
+            _LOGGER.error(f"Failed to push document\n\t{str(e)}")
 
     async def __push_documents(
             self,
@@ -180,7 +180,7 @@ class VespaClient:
                 ]
                 await asyncio.gather(*tasks)
         except Exception as e:
-            LOGGER.error(f"Failed to push documents\n\t{str(e)}")
+            _LOGGER.error(f"Failed to push documents\n\t{str(e)}")
         
     def push_documents(
             self,
@@ -221,7 +221,7 @@ class VespaClient:
             self.__debug_session(resp)
             return resp.json()
         except Exception as e:
-            LOGGER.error(f"Failed to retrieve from collection '{collection_name}'")
+            _LOGGER.error(f"Failed to retrieve from collection '{collection_name}'")
             return []
 
     def retrieve_ids(

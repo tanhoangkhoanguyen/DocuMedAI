@@ -14,7 +14,7 @@ from vector_database_tests.recall import evaluate_db
 
 import os, json, argparse
 
-LOGGER = get_logger(
+_LOGGER = get_logger(
     name = "vectordb_lab_sweep",
     level = "INFO",
 )
@@ -48,7 +48,7 @@ def run_sweep(db: str, k: int = 10, recall_target: float = 0.95) -> dict:
     for ef in grid:
         _apply_chroma_ef(db, collection, ef)
         res = evaluate_db(db, collection = collection, k = k, search_param = ef)
-        LOGGER.info(
+        _LOGGER.info(
             f"[{db}] ef/targetHits={ef}: recall@{k}={res['recall_at_k']} "
             f"median={res['median_ms']}ms p95={res['p95_ms']}ms"
         )
@@ -63,7 +63,7 @@ def run_sweep(db: str, k: int = 10, recall_target: float = 0.95) -> dict:
         # Nobody hit the target: report the highest-recall config and FLAG it.
         flagged = True
         chosen = max(trials, key = lambda t: t["recall_at_k"])
-        LOGGER.warning(
+        _LOGGER.warning(
             f"[{db}] No config reached recall@{k} >= {recall_target}. "
             f"Reporting best-recall config (recall={chosen['recall_at_k']}) and flagging."
         )
@@ -89,8 +89,8 @@ if __name__ == "__main__":
     result = run_sweep(db, k = args.k, recall_target = args.recall_target)
 
     os.makedirs(RESULTS_DIR, exist_ok = True)
-    out_path = os.path.join(RESULTS_DIR, f"{db}.json")
+    out_path = f"{RESULTS_DIR}/{db}.json"
     with open(out_path, "w", encoding = "utf-8") as f:
         json.dump(result, f, indent = 2)
-    LOGGER.info(f"Wrote sweep result -> {out_path}")
+    _LOGGER.info(f"Wrote sweep result -> {out_path}")
     print(json.dumps(result["chosen"], indent = 2))

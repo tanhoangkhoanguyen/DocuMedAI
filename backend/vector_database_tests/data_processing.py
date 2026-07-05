@@ -1,11 +1,11 @@
 from dotenv import load_dotenv
 load_dotenv()
-import os, pytz, uuid, json, warnings
+import os, json, warnings
 warnings.filterwarnings("ignore")
 from datasets import load_dataset
 from langchain_text_splitters import TokenTextSplitter
-from datetime import datetime
 from langchain_community.embeddings import HuggingFaceEmbeddings
+from services.utils.pattern_cipher import get_pattern_cipher
 
 class DataProcessing:
     def __init__(
@@ -16,7 +16,7 @@ class DataProcessing:
         self.dataset_name = dataset_name
         self.raw_dataset = None
         self.__embedding_model = HuggingFaceEmbeddings(model_name = embedding_model)
-        self.__uuid_namespace = uuid.UUID(os.getenv("UUID_NAMESPACE"))
+        self.__pattern_cipher = get_pattern_cipher()
 
     def load_dataset(self):
         try:
@@ -44,7 +44,7 @@ class DataProcessing:
             output_path: str = "vector_database_tests/generated_queries"
         ):
         try:
-            output_path = os.path.join(output_path, self.dataset_name.replace("/", "-") + ".jsonl")
+            output_path = f"{output_path}/{self.dataset_name.replace('/', '-')}.jsonl"
             with open(output_path, 'w', encoding = "utf-8") as f:
                 for data in self.raw_dataset:
                     query = f"{data['title']} definition"
@@ -82,8 +82,8 @@ class DataProcessing:
                     else:
                         seen.add(chunk)
 
-                    id = str(datetime.now(pytz.utc))
-                    hashed_id = str(uuid.uuid5(self.__uuid_namespace, id))
+                    # hash_user_id folds in a timestamp => a fresh unique id per chunk.
+                    hashed_id = self.__pattern_cipher.hash_user_id(chunk)
                     yield {
                         "id": hashed_id,
                         "title": data["page_title"],
@@ -122,7 +122,7 @@ class DataProcessing:
             output_path: str = "vector_database_tests/dataset"
         ):
         try:
-            base_path = os.path.join(output_path, self.dataset_name.replace("/", "-"))
+            base_path = f"{output_path}/{self.dataset_name.replace('/', '-')}"
 
             file_count = 1
             count = 0
@@ -159,7 +159,7 @@ class DataProcessing:
                 if not filename.endswith(".jsonl"):
                     continue
                 
-                file_path = os.path.join(folder_path, filename)
+                file_path = f"{folder_path}/{filename}"
                 with open(file_path, "r", encoding = "utf-8") as f:
                     for line in f:
                         record = json.loads(line)

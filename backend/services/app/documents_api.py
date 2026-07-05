@@ -11,7 +11,6 @@ bytes to a shared bind mount, records metadata, and enqueues the job. The user's
 `description` drives tool routing in the graph (see Agents node), so it is required.
 """
 import os
-import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Form
 from typing import Any, Dict
@@ -22,22 +21,25 @@ from services.app.chatbot_workspace import ChatbotWorkspace
 from services.documents_upload.constants import (
     ALLOWED_MIME,
     MAX_BYTES,
-    UPLOAD_STORAGE_DIR,
+    MAX_DESCRIPTION,
+    USER_DOCUMENTS_STORAGE_DIR,
 )
 
-_LOGGER = get_logger(name = "documents_api", level = "INFO")
+_LOGGER = get_logger(
+    name = "documents_api", 
+    level = "INFO"
+)
 
-_MAX_DESCRIPTION = 500
 
-documents_router = APIRouter(tags = ["documents"])
+upload_documents_router = APIRouter(tags = ["documents"])
 
 
 def _storage_path(doc_id: str) -> str:
-    os.makedirs(UPLOAD_STORAGE_DIR, exist_ok = True)
-    return os.path.join(UPLOAD_STORAGE_DIR, doc_id)
+    os.makedirs(USER_DOCUMENTS_STORAGE_DIR, exist_ok = True)
+    return f"{USER_DOCUMENTS_STORAGE_DIR}/{doc_id}"
 
 
-@documents_router.post("/documents", status_code = 202)
+@upload_documents_router.post("/documents", status_code = 202)
 async def upload_document(
         request: Request,
         file: UploadFile = File(...),
@@ -48,10 +50,10 @@ async def upload_document(
     description = (description or "").strip()
     if not description:
         raise HTTPException(status_code = 400, detail = "A document description is required.")
-    if len(description) > _MAX_DESCRIPTION:
+    if len(description) > MAX_DESCRIPTION:
         raise HTTPException(
             status_code = 400,
-            detail = f"Description too long (max {_MAX_DESCRIPTION} chars).",
+            detail = f"Description too long (max {MAX_DESCRIPTION} chars).",
         )
 
     mime = file.content_type or ""
@@ -76,7 +78,7 @@ async def upload_document(
     if pool is None:
         raise HTTPException(status_code = 503, detail = "Ingestion queue unavailable")
 
-    doc_id = uuid.uuid4().hex
+    doc_id = workspace.new_document_id(claims["id"])
     filename = file.filename or f"{doc_id}.{ALLOWED_MIME[mime]}"
 
     # Persist bytes for the worker (both share ./backend:/backend).
@@ -99,7 +101,7 @@ async def upload_document(
     return {"doc_id": doc_id, "status": "queued", "filename": filename}
 
 
-@documents_router.get("/documents")
+@upload_documents_router.get("/documents")
 def get_document(
         claims: Dict[str, Any] = Depends(require_bearer_claims),
         workspace: ChatbotWorkspace = Depends(get_workspace),
@@ -110,7 +112,7 @@ def get_document(
     return doc
 
 
-@documents_router.delete("/documents")
+@upload_documents_router.delete("/documents")
 def delete_document(
         claims: Dict[str, Any] = Depends(require_bearer_claims),
         workspace: ChatbotWorkspace = Depends(get_workspace),

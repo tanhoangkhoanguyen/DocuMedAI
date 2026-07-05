@@ -17,7 +17,7 @@ import os, json, argparse, warnings, faiss
 import numpy as np
 warnings.filterwarnings("ignore")
 
-LOGGER = get_logger(
+_LOGGER = get_logger(
     name = "vectordb_lab_ground_truth",
     level = "INFO",
 )
@@ -28,7 +28,7 @@ OUT_PATH = "vector_database_tests/ground_truth/ground_truth.jsonl"
 
 
 def _jsonl_files(folder: str):
-    return [os.path.join(folder, f) for f in sorted(os.listdir(folder)) if f.endswith(".jsonl")]
+    return [f"{folder}/{f}" for f in sorted(os.listdir(folder)) if f.endswith(".jsonl")]
 
 
 def load_corpus(folder: str = DATASET_DIR):
@@ -49,7 +49,7 @@ def load_corpus(folder: str = DATASET_DIR):
                 file_vecs.append(rec["embedded_test"])
                 log_iterate += 1
                 if log_iterate % 10000 == 0:
-                    LOGGER.info(f"Loaded {log_iterate} corpus vectors...")
+                    _LOGGER.info(f"Loaded {log_iterate} corpus vectors...")
         # compact this file's vectors and drop the Python list before reading the next
         blocks.append(np.asarray(file_vecs, dtype = np.float32))
         del file_vecs
@@ -115,22 +115,22 @@ def _knn_numpy(corpus: np.ndarray, queries: np.ndarray, top_k: int, chunk: int =
 
 def build_ground_truth(top_k: int = 100, out_path: str = OUT_PATH, force: bool = False) -> str:
     if os.path.exists(out_path) and not force:
-        LOGGER.info(f"Ground truth already exists at {out_path} (use --force to rebuild).")
+        _LOGGER.info(f"Ground truth already exists at {out_path} (use --force to rebuild).")
         return out_path
 
-    LOGGER.info("Loading corpus...")
+    _LOGGER.info("Loading corpus...")
     corpus_ids, corpus_vecs = load_corpus()
-    LOGGER.info(f"Corpus: {corpus_vecs.shape[0]} vectors x {corpus_vecs.shape[1]} dims")
+    _LOGGER.info(f"Corpus: {corpus_vecs.shape[0]} vectors x {corpus_vecs.shape[1]} dims")
 
-    LOGGER.info("Loading queries...")
+    _LOGGER.info("Loading queries...")
     query_texts, query_vecs = load_queries()
-    LOGGER.info(f"Queries: {query_vecs.shape[0]}")
+    _LOGGER.info(f"Queries: {query_vecs.shape[0]}")
 
     try:
-        LOGGER.info("Computing exact kNN with faiss (IndexFlatIP)...")
+        _LOGGER.info("Computing exact kNN with faiss (IndexFlatIP)...")
         nn_idx = _knn_faiss(corpus_vecs, query_vecs, top_k)
     except ImportError:
-        LOGGER.warning("faiss not available; falling back to chunked numpy (slower).")
+        _LOGGER.warning("faiss not available; falling back to chunked numpy (slower).")
         nn_idx = _knn_numpy(corpus_vecs, query_vecs, top_k)
 
     os.makedirs(os.path.dirname(out_path), exist_ok = True)
@@ -142,7 +142,7 @@ def build_ground_truth(top_k: int = 100, out_path: str = OUT_PATH, force: bool =
                 "query_text": query_texts[qid],
                 "neighbor_ids": neighbor_ids,
             }, ensure_ascii = False) + "\n")
-    LOGGER.info(f"Wrote {nn_idx.shape[0]} ground-truth rows (top-{top_k}) -> {out_path}")
+    _LOGGER.info(f"Wrote {nn_idx.shape[0]} ground-truth rows (top-{top_k}) -> {out_path}")
     return out_path
 
 

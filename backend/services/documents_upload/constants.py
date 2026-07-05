@@ -14,17 +14,16 @@ EMBEDDING_DIMENSION = 384
 CHUNK_SIZE = 512
 CHUNK_OVERLAP = 64
 
-UUID_NAMESPACE = os.getenv("UUID_NAMESPACE")
-
-# Upload validation.
+# Upload validation
 ALLOWED_MIME = {
     "application/pdf": "pdf",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
     "text/plain": "txt",
 }
+MAX_DESCRIPTION = 500
 MAX_BYTES = 20 * 1024 * 1024        # 20 MB per file
 MAX_CHUNKS = 2000                   # cap chunks per document (guards huge files)
 EMBED_BATCH_SIZE = 256              # points per Qdrant upload batch
 
 # Shared bind-mounted dir where the API drops uploaded bytes for the worker to read
-UPLOAD_STORAGE_DIR = "services/utils/data_storage/uploads"
+USER_DOCUMENTS_STORAGE_DIR = "services/utils/data_storage/user_documents_storage"

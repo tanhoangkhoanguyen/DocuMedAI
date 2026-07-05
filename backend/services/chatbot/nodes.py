@@ -31,7 +31,7 @@ from services.chatbot.constants.prompts import (
 from vector_database_tests.utils.qdrant_client import get_qdrant_client
 from services.chatbot.mcp import get_mcp_client
 from services.chatbot.tools.rag import get_rag_client
-from services.chatbot.tools.pattern_cipher import get_pattern_cipher
+from services.utils.pattern_cipher import get_pattern_cipher
 from services.chatbot.tools.llm_config import get_llm_base_url  # route LLM calls via the Go proxy
 
 

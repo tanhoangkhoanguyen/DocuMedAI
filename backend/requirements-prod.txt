@@ -10,9 +10,8 @@ safetensors
 
 # Math & Data
 numpy
-pandas
-scipy
-scikit-learn
+scipy           # transitive: sentence-transformers
+scikit-learn    # transitive: sentence-transformers
 
 # Vector DB clients
 qdrant-client==1.18.0
@@ -69,7 +68,6 @@ pypdf
 python-docx                # .docx text extraction for user document upload
 arq                        # asyncio Redis job queue for async document ingestion
 PyYAML
-tavily-python
 bcrypt
 cryptography
 pytz

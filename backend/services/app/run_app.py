@@ -9,7 +9,7 @@ warnings.filterwarnings("ignore")
 from logger import get_logger
 from services.app.auth_api import auth_router
 from services.app.chat_api import chat_router
-from services.app.documents_api import documents_router
+from services.app.documents_api import upload_documents_router
 from services.app.chatbot_workspace import ChatbotWorkspace
 from services.chatbot.constants.schemas import GraphState
 from services.chatbot.workflow import build_graph
@@ -66,7 +66,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title = "DocuMedAI Chatbot", lifespan = lifespan)
 app.include_router(auth_router)
 app.include_router(chat_router)
-app.include_router(documents_router)
+app.include_router(upload_documents_router)
 
 
 # {

@@ -23,7 +23,7 @@ DocuMedAI is a full-stack AI-powered medical document analysis system. Users upl
 | Auth | JWT + Supabase SSR | `backend/services/app/auth_api.py`, `frontend/lib/supabase/` |
 | Vector DB | Qdrant (default); alternatives benchmarked in `backend/vector_database_tests/` | `backend/services/chatbot/tools/` |
 | MCP tools | Medical support tool registry | `backend/services/chatbot/mcp.py` |
-| Encryption | Pattern cipher for stored messages | `backend/services/chatbot/tools/pattern_cipher.py` |
+| Encryption | Pattern cipher for stored messages | `backend/services/utils/pattern_cipher.py` |
 
 **Important**: `backend/services/app/` holds the FastAPI routes and workspace layer. `backend/services/chatbot/` holds the LangGraph graph, nodes, and tools. `backend/services/utils/` holds shared DB clients (MongoDB, Redis, Supabase).
 

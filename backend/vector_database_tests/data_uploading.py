@@ -11,7 +11,7 @@ from vector_database_tests.utils import registry
 import os, sys, json, time, argparse, warnings
 warnings.filterwarnings("ignore")
 
-LOGGER = get_logger(
+_LOGGER = get_logger(
     name = "vectordb_lab_data_uploading",
     level = "INFO",
 )
@@ -68,8 +68,8 @@ class DataUploading:
                 if not filename.endswith(".jsonl"):
                     continue
 
-                file_path = os.path.join(folder_path, filename)
-                LOGGER.info(f"Reading {file_path}")
+                file_path = f"{folder_path}/{filename}"
+                _LOGGER.info(f"Reading {file_path}")
                 with open(file_path, 'r', encoding = "utf-8") as f:
                     for obj in f:
                         record = json.loads(obj)
@@ -88,7 +88,7 @@ class DataUploading:
                 self.client.create_index(self.collection_name)
                 total_indexing_time += time.perf_counter() - start_time
 
-            LOGGER.info(
+            _LOGGER.info(
                 f"Uploaded {n_vectors} vectors\n\t- Total indexing time: {total_indexing_time:.2f}s"
             )
             return {
@@ -97,7 +97,7 @@ class DataUploading:
                 "n_vectors": n_vectors,
             }
         except Exception as e:
-            LOGGER.error(f"Failed to upload dataset for vector db test\n\t{str(e)}")
+            _LOGGER.error(f"Failed to upload dataset for vector db test\n\t{str(e)}")
             raise
 
 
@@ -118,7 +118,7 @@ if __name__ == "__main__":
     client = registry.get_client(db)
 
     os.makedirs(RESULTS_DIR, exist_ok = True)
-    out_path = os.path.join(RESULTS_DIR, f"{db}.json")
+    out_path = f"{RESULTS_DIR}/{db}.json"
 
     try:
         result = DataUploading(client, collection).upload_dataset(max_seconds = args.max_seconds)
@@ -126,7 +126,7 @@ if __name__ == "__main__":
         result["timed_out"] = False
     except UploadTimeout as e:
         # Mark this DB as skipped and exit non-zero so the caller knows; the loop moves on.
-        LOGGER.error(f"[{db}] upload timed out — skipping remaining tests for this DB\n\t{e}")
+        _LOGGER.error(f"[{db}] upload timed out — skipping remaining tests for this DB\n\t{e}")
         result = {"db": db, "timed_out": True, "reason": str(e), "max_seconds": args.max_seconds}
         with open(out_path, "w", encoding = "utf-8") as f:
             json.dump(result, f, indent = 2)
@@ -134,4 +134,4 @@ if __name__ == "__main__":
 
     with open(out_path, "w", encoding = "utf-8") as f:
         json.dump(result, f, indent = 2)
-    LOGGER.info(f"Wrote indexing result -> {out_path}\n\t{result}")
+    _LOGGER.info(f"Wrote indexing result -> {out_path}\n\t{result}")

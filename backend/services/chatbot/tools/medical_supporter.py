@@ -5,7 +5,7 @@ from vector_database_tests.utils.qdrant_client import get_qdrant_client
 from services.chatbot.tools.rag import get_rag_client
 
 
-_COLLECTION_NAME = "MedicalTerms"
+_MEDICAL_COLLECTION = "MedicalTerms"
 _MEDICAL_SUPPORTER_DICT: dict = {}
 
 
@@ -18,25 +18,6 @@ def _payload_key(payload: ToolParameter) -> tuple:
         payload.reranking_model,
         payload.reranking_threshold,
     )
-
-
-def _payload_texts_from_response(resp) -> List[str]:
-    if not resp:
-        return []
-    points = getattr(resp, "points", None)
-    if points is None and isinstance(resp, dict):
-        points = resp.get("points")
-    if not points:
-        return []
-    out: List[str] = []
-    for p in points:
-        payload = getattr(p, "payload", None) or {}
-        if not isinstance(payload, dict):
-            payload = {}
-        text = payload.get("query") or payload.get("text") or ""
-        if text:
-            out.append(str(text))
-    return out
 
 
 class MedicalSupporter:
@@ -58,15 +39,19 @@ class MedicalSupporter:
         seeds = list(paraphrased_msgs) + [generalized_msg]
 
         queries: List[str] = []
+        seen = set()
         for msg in seeds:
             if not msg or not str(msg).strip():
                 continue
             vec = self.__qdrant_client.embed_query(str(msg))
             resp = self.__qdrant_client.retrieve_query(
-                collection_name = _COLLECTION_NAME,
+                collection_name = _MEDICAL_COLLECTION,
                 embedded_query = vec,
             )
-            queries.extend(_payload_texts_from_response(resp))
+            for text in self.__qdrant_client._payload_texts_from_response(resp):
+                if text not in seen:
+                    seen.add(text)
+                    queries.append(text)
 
         if not queries:
             return ""

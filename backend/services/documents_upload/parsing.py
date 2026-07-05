@@ -1,5 +1,6 @@
-"""Extract plain text from an uploaded document (pdf / docx / txt)."""
+import docx
 from io import BytesIO
+from pypdf import PdfReader
 
 from logger import get_logger
 
@@ -21,7 +22,6 @@ def extract_text(raw: bytes, mime: str, filename: str = "") -> str:
 
 
 def _extract_pdf(raw: bytes) -> str:
-    from pypdf import PdfReader
     try:
         reader = PdfReader(BytesIO(raw))
         pages = [page.extract_text() or "" for page in reader.pages]
@@ -35,7 +35,6 @@ def _extract_pdf(raw: bytes) -> str:
 
 
 def _extract_docx(raw: bytes) -> str:
-    import docx
     try:
         document = docx.Document(BytesIO(raw))
         text = "\n".join(p.text for p in document.paragraphs).strip()

@@ -24,13 +24,13 @@ from logger import get_logger
 from vector_database_tests.utils.qdrant_client import get_qdrant_client
 
 
-LOGGER = get_logger(
+_LOGGER = get_logger(
     name = "prod_data_seeder", 
     level = "INFO"
 )
 
-COLLECTION_NAME = "MedicalTerms"
-PROD_DATASET_DIR = os.path.join(os.path.dirname(__file__), "prod_dataset")
+_MEDICAL_COLLECTION = "MedicalTerms"
+PROD_DATASET_DIR = "services/chatbot/prod_dataset"
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 EMBEDDING_DIMENSION = 384
 BATCH_SIZE = 1000
@@ -42,7 +42,7 @@ def _dataset_files(folder_path: str) -> list[str]:
     if not os.path.isdir(folder_path):
         return []
     return [
-        os.path.join(folder_path, name)
+        f"{folder_path}/{name}"
         for name in sorted(os.listdir(folder_path))
         if name.endswith(".jsonl")
     ]
@@ -78,22 +78,22 @@ def seed(force: bool = False) -> dict:
         embedding_dimension = EMBEDDING_DIMENSION,
     )
 
-    existing = qdrant_client.count_points(COLLECTION_NAME)
+    existing = qdrant_client.count_points(_MEDICAL_COLLECTION)
     if existing > 0 and not force:
-        LOGGER.info(
-            f"'{COLLECTION_NAME}' already populated ({existing} points) — skipping seed."
+        _LOGGER.info(
+            f"'{_MEDICAL_COLLECTION}' already populated ({existing} points) — skipping seed."
         )
-        return {"collection": COLLECTION_NAME, "seeded": False, "n_vectors": existing}
+        return {"collection": _MEDICAL_COLLECTION, "seeded": False, "n_vectors": existing}
 
     files = _dataset_files(PROD_DATASET_DIR)
     if not files:
-        LOGGER.warning(
+        _LOGGER.warning(
             f"No .jsonl files found in {PROD_DATASET_DIR} — nothing to seed."
         )
-        return {"collection": COLLECTION_NAME, "seeded": False, "n_vectors": existing}
+        return {"collection": _MEDICAL_COLLECTION, "seeded": False, "n_vectors": existing}
 
     # Fresh build: create_collection wipes any partial/stale collection first.
-    qdrant_client.create_collection(COLLECTION_NAME)
+    qdrant_client.create_collection(_MEDICAL_COLLECTION)
 
     ids, queries, embedded_queries = [], [], []
     n_vectors = 0
@@ -102,12 +102,12 @@ def seed(force: bool = False) -> dict:
         nonlocal ids, queries, embedded_queries, n_vectors
         if not ids:
             return
-        qdrant_client.push_documents(COLLECTION_NAME, ids, queries, embedded_queries)
+        qdrant_client.push_documents(_MEDICAL_COLLECTION, ids, queries, embedded_queries)
         n_vectors += len(ids)
         ids, queries, embedded_queries = [], [], []
 
     for file_path in files:
-        LOGGER.info(f"Seeding from {file_path}")
+        _LOGGER.info(f"Seeding from {file_path}")
         with open(file_path, "r", encoding = "utf-8") as f:
             for line_no, line in enumerate(f, start = 1):
                 line = line.strip()
@@ -122,9 +122,9 @@ def seed(force: bool = False) -> dict:
                     flush()
     flush()
 
-    LOGGER.info(f"Seeded '{COLLECTION_NAME}' with {n_vectors} vectors from {len(files)} file(s).")
+    _LOGGER.info(f"Seeded '{_MEDICAL_COLLECTION}' with {n_vectors} vectors from {len(files)} file(s).")
     return {
-        "collection": COLLECTION_NAME,
+        "collection": _MEDICAL_COLLECTION,
         "seeded": True,
         "n_vectors": n_vectors,
         "files": len(files),

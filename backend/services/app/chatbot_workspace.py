@@ -5,7 +5,7 @@ import json, re
 
 from logger import get_logger
 from services.chatbot.constants.schemas import GraphState, UserInfo, UserDocumentRef
-from services.chatbot.tools.pattern_cipher import PatternCipher
+from services.utils.pattern_cipher import PatternCipher
 from services.utils.mongo_client import get_mongo_client
 from services.utils.redis_client import get_redis_client
 from vector_database_tests.utils.qdrant_client import get_qdrant_client
@@ -14,7 +14,7 @@ from services.documents_upload.constants import (
     EMBEDDING_MODEL, 
     EMBEDDING_DIMENSION,
 )
-from services.chatbot.tools.pattern_cipher import get_pattern_cipher
+from services.utils.pattern_cipher import get_pattern_cipher
 
 _LOGGER = get_logger(
     name = "chatbot_workspace",
@@ -49,6 +49,9 @@ class ChatbotWorkspace:
     # Qdrant (UserDocuments). Uploads use replace semantics — see prepare_replace.
     def get_user_document(self, user_id: str) -> Optional[Dict[str, Any]]:
         return self.__mongo_client.get_user_document(user_id)
+
+    def new_document_id(self, user_id: str) -> str:
+        return self.__pattern_cipher.hash_user_id(user_id)
 
     def prepare_new_document(
             self,

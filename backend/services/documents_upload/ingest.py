@@ -6,7 +6,6 @@ Idempotent: point ids are deterministic (uuid5 of "{doc_id}:{chunk_index}") and
 every ingest deletes the doc's existing points first, so re-running a job for the
 same doc_id never creates duplicate chunks.
 """
-import uuid
 from typing import List
 
 from logger import get_logger
@@ -15,19 +14,19 @@ from services.documents_upload.constants import (
     USER_DOCUMENTS_COLLECTION,
     EMBEDDING_MODEL,
     EMBEDDING_DIMENSION,
-    UUID_NAMESPACE,
     MAX_CHUNKS,
     EMBED_BATCH_SIZE,
 )
 from services.documents_upload.parsing import extract_text
 from services.documents_upload.chunking import chunk_text
+from services.utils.pattern_cipher import get_pattern_cipher
 
 _LOGGER = get_logger(name = "doc_ingest", level = "INFO")
-_NAMESPACE = uuid.UUID(UUID_NAMESPACE)
 
 
 def _chunk_point_id(doc_id: str, chunk_index: int) -> str:
-    return str(uuid.uuid5(_NAMESPACE, f"{doc_id}:{chunk_index}"))
+    # Deterministic so re-ingesting the same doc reuses the same point ids
+    return get_pattern_cipher().hash_username(f"{doc_id}:{chunk_index}")
 
 
 def ingest_document(
@@ -55,7 +54,7 @@ def ingest_document(
             USER_DOCUMENTS_COLLECTION,
             payload_indexes = ["user_id", "doc_id"],
         )
-    # Delete-first => safe re-ingestion (idempotent even if ids ever changed).
+    # Delete-first. Safe re-ingestion (idempotent even if ids ever changed).
     qdrant_client.delete_by_doc(USER_DOCUMENTS_COLLECTION, user_id, doc_id)
 
     for start in range(0, len(chunks), EMBED_BATCH_SIZE):

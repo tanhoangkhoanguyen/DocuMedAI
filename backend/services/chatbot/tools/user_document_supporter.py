@@ -14,7 +14,7 @@ from vector_database_tests.utils.qdrant_client import get_qdrant_client
 from services.chatbot.tools.rag import get_rag_client
 
 
-_MEDICAL_SUPPORTER_DICT: dict = {}
+_USER_DOCUMENT_SUPPORTER_DICT: dict = {}
 
 
 def _payload_key(payload: ToolParameter) -> tuple:
@@ -26,25 +26,6 @@ def _payload_key(payload: ToolParameter) -> tuple:
         payload.reranking_model,
         payload.reranking_threshold,
     )
-
-
-def _payload_texts_from_response(resp) -> List[str]:
-    if not resp:
-        return []
-    points = getattr(resp, "points", None)
-    if points is None and isinstance(resp, dict):
-        points = resp.get("points")
-    if not points:
-        return []
-    out: List[str] = []
-    for p in points:
-        payload = getattr(p, "payload", None) or {}
-        if not isinstance(payload, dict):
-            payload = {}
-        text = payload.get("text") or payload.get("query") or ""
-        if text:
-            out.append(str(text))
-    return out
 
 
 class UserDocumentSupporter:
@@ -81,7 +62,7 @@ class UserDocumentSupporter:
                 user_id = user_id,               # per-user isolation
                 with_payload = True,             # need the chunk text
             )
-            for text in _payload_texts_from_response(resp):
+            for text in self.__qdrant_client._payload_texts_from_response(resp):
                 if text not in seen:
                     seen.add(text)
                     passages.append(text)
@@ -101,6 +82,6 @@ class UserDocumentSupporter:
 
 def get_user_document_supporter(payload: ToolParameter) -> "UserDocumentSupporter":
     key = _payload_key(payload)
-    if key not in _MEDICAL_SUPPORTER_DICT:
-        _MEDICAL_SUPPORTER_DICT[key] = UserDocumentSupporter(payload)
-    return _MEDICAL_SUPPORTER_DICT[key]
+    if key not in _USER_DOCUMENT_SUPPORTER_DICT:
+        _USER_DOCUMENT_SUPPORTER_DICT[key] = UserDocumentSupporter(payload)
+    return _USER_DOCUMENT_SUPPORTER_DICT[key]

@@ -26,7 +26,7 @@ from vector_database_tests.utils import registry
 
 import os, json, time, argparse, threading, queue, statistics
 
-LOGGER = get_logger(
+_LOGGER = get_logger(
     name = "vectordb_lab_throughput",
     level = "INFO"
 )
@@ -43,7 +43,7 @@ def load_query_vectors(folder: str = QUERIES_DIR):
     for file_name in sorted(os.listdir(folder)):
         if not file_name.endswith(".jsonl"):
             continue
-        with open(os.path.join(folder, file_name), "r", encoding = "utf-8") as f:
+        with open(f"{folder}/{file_name}", "r", encoding = "utf-8") as f:
             for line in f:
                 vecs.append(json.loads(line)["embedded_query"])
     return vecs
@@ -51,9 +51,9 @@ def load_query_vectors(folder: str = QUERIES_DIR):
 
 def load_search_param(db: str):
     """Use the sweep's chosen search_param (recall >= target). None -> client default."""
-    path = os.path.join(SWEEP_DIR, f"{db}.json")
+    path = f"{SWEEP_DIR}/{db}.json"
     if not os.path.exists(path):
-        LOGGER.warning(f"No sweep result at {path}; using client default search_param.")
+        _LOGGER.warning(f"No sweep result at {path}; using client default search_param.")
         return None
     with open(path, "r", encoding = "utf-8") as f:
         return json.load(f).get("chosen", {}).get("search_param")
@@ -154,7 +154,7 @@ def run_throughput(db: str, qps_ladder, duration_s: float, warmup_s: float, work
 
     # Warmup window (discarded) so the first timed rung doesn't pay cold-cache / lazy-load cost.
     if warmup_s > 0:
-        LOGGER.info(f"[{db}] warmup {warmup_s}s ...")
+        _LOGGER.info(f"[{db}] warmup {warmup_s}s ...")
         run_level(client, collection, query_vecs, order, search_param,
                   target_qps = qps_ladder[0], duration_s = warmup_s, workers = workers)
 
@@ -162,7 +162,7 @@ def run_throughput(db: str, qps_ladder, duration_s: float, warmup_s: float, work
     for qps in qps_ladder:
         res = run_level(client, collection, query_vecs, order, search_param,
                         target_qps = qps, duration_s = duration_s, workers = workers)
-        LOGGER.info(
+        _LOGGER.info(
             f"[{db}] target={qps}qps achieved={res['achieved_rps']}rps "
             f"median={res['median_ms']}ms p95={res['p95_ms']}ms p99={res['p99_ms']}ms "
             f"errors={res['errors']}"
@@ -194,8 +194,8 @@ if __name__ == "__main__":
     result = run_throughput(db, args.qps, args.duration, args.warmup, args.workers)
 
     os.makedirs(RESULTS_DIR, exist_ok = True)
-    out_path = os.path.join(RESULTS_DIR, f"{db}.json")
+    out_path = f"{RESULTS_DIR}/{db}.json"
     with open(out_path, "w", encoding = "utf-8") as f:
         json.dump(result, f, indent = 2)
-    LOGGER.info(f"Wrote throughput result -> {out_path}")
+    _LOGGER.info(f"Wrote throughput result -> {out_path}")
     print(json.dumps(result, indent = 2))

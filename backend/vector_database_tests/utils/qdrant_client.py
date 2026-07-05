@@ -7,7 +7,7 @@ from qdrant_client import QdrantClient as SDKQdrantClient
 from qdrant_client.http.models import VectorParams, Distance, PointStruct, HnswConfigDiff, OptimizersConfigDiff, SearchParams, Filter, FieldCondition, MatchValue, PayloadSchemaType
 from typing import Any, Dict, List, Optional
 
-LOGGER = get_logger(
+_LOGGER = get_logger(
     name = "Qdrant_client",
     level = "INFO"
 )
@@ -34,7 +34,7 @@ class QdrantClient:
             collection_names = [collection.name for collection in collections_info.collections]
             return collection_names
         except Exception as e:
-            LOGGER.error(f"Failed to list collections\n\t{str(e)}")
+            _LOGGER.error(f"Failed to list collections\n\t{str(e)}")
             return []
     
     def collection_exists(
@@ -44,7 +44,7 @@ class QdrantClient:
         try:
             return self.__client.collection_exists(collection_name)
         except Exception as e:
-            LOGGER.error(f"Failed to check collection '{collection_name}'\n\t{str(e)}")
+            _LOGGER.error(f"Failed to check collection '{collection_name}'\n\t{str(e)}")
             return False
     
     def count_points(
@@ -57,7 +57,7 @@ class QdrantClient:
                 return 0
             return self.__client.count(collection_name = collection_name, exact = True).count
         except Exception as e:
-            LOGGER.error(f"Failed to count points in '{collection_name}'\n\t{str(e)}")
+            _LOGGER.error(f"Failed to count points in '{collection_name}'\n\t{str(e)}")
             return 0
 
     def delete_collection(
@@ -66,13 +66,13 @@ class QdrantClient:
         ):
         try:
             if not self.collection_exists(collection_name):
-                LOGGER.info(f"Collection '{collection_name}' doesnt exist")
+                _LOGGER.info(f"Collection '{collection_name}' doesnt exist")
                 return
             
             self.__client.delete_collection(collection_name)
-            LOGGER.info(f"Deleted collection '{collection_name}'")
+            _LOGGER.info(f"Deleted collection '{collection_name}'")
         except Exception as e:
-            LOGGER.error(f"Failed to delete collection '{collection_name}'\n\t{str(e)}")
+            _LOGGER.error(f"Failed to delete collection '{collection_name}'\n\t{str(e)}")
             raise
 
     def create_collection(
@@ -102,9 +102,9 @@ class QdrantClient:
                     field_name = field,
                     field_schema = PayloadSchemaType.KEYWORD,
                 )
-            LOGGER.info(f"Created collection '{collection_name}'")
+            _LOGGER.info(f"Created collection '{collection_name}'")
         except Exception as e:
-            LOGGER.error(f"Failed to create collection '{collection_name}'\n\t{str(e)}")
+            _LOGGER.error(f"Failed to create collection '{collection_name}'\n\t{str(e)}")
             raise
 
     @staticmethod
@@ -132,7 +132,7 @@ class QdrantClient:
                 points_selector = self.__user_doc_filter(user_id, doc_id),
             )
         except Exception as e:
-            LOGGER.error(f"Failed to delete doc '{doc_id}' from '{collection_name}'\n\t{str(e)}")
+            _LOGGER.error(f"Failed to delete doc '{doc_id}' from '{collection_name}'\n\t{str(e)}")
             raise
 
     def embed_query(
@@ -168,7 +168,7 @@ class QdrantClient:
                 points = points
             )
         except Exception as e:
-            LOGGER.error(f"Failed to push to collection '{collection_name}'\n\t{str(e)}")
+            _LOGGER.error(f"Failed to push to collection '{collection_name}'\n\t{str(e)}")
 
     def retrieve_query(
             self,
@@ -193,7 +193,7 @@ class QdrantClient:
             )
             return resp
         except Exception as e:
-            LOGGER.error(f"Failed to retrieve from collection '{collection_name}'\n\t{str(e)}")
+            _LOGGER.error(f"Failed to retrieve from collection '{collection_name}'\n\t{str(e)}")
             return []
 
     def retrieve_ids(
@@ -207,6 +207,25 @@ class QdrantClient:
         resp = self.retrieve_query(collection_name, embedded_query, top_k, search_param)
         points = getattr(resp, "points", None) or []
         return [str(p.id) for p in points]
+
+    @staticmethod
+    def _payload_texts_from_response(resp) -> List[str]:
+        if not resp:
+            return []
+        points = getattr(resp, "points", None)
+        if points is None and isinstance(resp, dict):
+            points = resp.get("points")
+        if not points:
+            return []
+        out: List[str] = []
+        for p in points:
+            payload = getattr(p, "payload", None) or {}
+            if not isinstance(payload, dict):
+                payload = {}
+            text = payload.get("text") or payload.get("query") or ""
+            if text:
+                out.append(str(text))
+        return out
 
     @staticmethod
     def get_top_scored_payload(
