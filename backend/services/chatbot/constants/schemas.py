@@ -7,10 +7,10 @@ from typing import Annotated, Any, Callable, Dict, List, Literal, Optional
 
 # ==================== User State ====================
 class UserInfo(BaseModel):
-    user_id: str = "2b656bec-983f-571b-88b3-9cea12d3e654"
-    username: str = "Admin"
-    email: str = "admin@gmail.com"
-    password: str = "Admin123"
+    user_id: str                   # "2b656bec-983f-571b-88b3-9cea12d3e654"
+    username: str                  # "Admin"
+    email: str = ""
+    password: str = ""
     plan: Literal["Free", "Pro"] = "Free"
 
 
@@ -94,7 +94,7 @@ class UserDocumentRef(BaseModel):
 
 
 class GraphState(BaseModel):
-    user_info: UserInfo = Field(default_factory = lambda: UserInfo())
+    user_info: UserInfo
     chat_history: Annotated[List[AnyMessage], add_messages] = Field(default_factory = list)
     user_inputs: Optional[List[SubMessageState]] = None
     task_list: Optional[List[List[TaskState]]] = Field(default_factory = list)

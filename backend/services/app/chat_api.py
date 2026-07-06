@@ -20,28 +20,28 @@ chat_router = APIRouter(tags = ["chatbot_workspace"])
 
 
 @chat_router.get("/chats")
-def list_chats(
+async def list_chats(
         claims: Dict[str, Any] = Depends(require_bearer_claims),
         workspace: ChatbotWorkspace = Depends(get_workspace),
     ) -> List[Dict[str, str]]:
-    return workspace.list_chats(claims["id"])
+    return await run_in_threadpool(workspace.list_chats, claims["id"])
 
 @chat_router.post("/chats")
-def create_chat(
+async def create_chat(
         claims: Dict[str, Any] = Depends(require_bearer_claims),
         workspace: ChatbotWorkspace = Depends(get_workspace),
     ) -> Dict[str, str]:
-    return workspace.create_chat(claims["id"])
+    return await run_in_threadpool(workspace.create_chat, claims["id"])
 
 @chat_router.patch("/chats/{chat_id}")
-def rename_chat(
+async def rename_chat(
         chat_id: str,
         body: ChatRenameState,
         claims: Dict[str, Any] = Depends(require_bearer_claims),
         workspace: ChatbotWorkspace = Depends(get_workspace),
     ) -> Dict[str, str]:
     try:
-        workspace.rename_chat(claims["id"], chat_id, body.chat_name)
+        await run_in_threadpool(workspace.rename_chat, claims["id"], chat_id, body.chat_name)
     except PermissionError as exc:
         raise HTTPException(
             status_code = 404,
@@ -53,13 +53,13 @@ def rename_chat(
     }
 
 @chat_router.delete("/chats/{chat_id}")
-def delete_chat(
+async def delete_chat(
         chat_id: str,
         claims: Dict[str, Any] = Depends(require_bearer_claims),
         workspace: ChatbotWorkspace = Depends(get_workspace),
     ) -> Dict[str, str]:
     try:
-        workspace.delete_chat(claims["id"], chat_id)
+        await run_in_threadpool(workspace.delete_chat, claims["id"], chat_id)
     except PermissionError as exc:
         raise HTTPException(
             status_code = 404,
@@ -68,13 +68,13 @@ def delete_chat(
     return {"chat_id": chat_id}
 
 @chat_router.get("/chats/{chat_id}/messages")
-def get_messages(
+async def get_messages(
         chat_id: str,
         claims: Dict[str, Any] = Depends(require_bearer_claims),
         workspace: ChatbotWorkspace = Depends(get_workspace),
     ) -> Dict[str, Any]:
     try:
-        messages = workspace.get_messages(claims["id"], chat_id)
+        messages = await run_in_threadpool(workspace.get_messages, claims["id"], chat_id)
     except PermissionError as exc:
         raise HTTPException(
             status_code = 404,
@@ -83,7 +83,7 @@ def get_messages(
     return {"chat_id": chat_id, "messages": messages}
 
 @chat_router.post("/chats/{chat_id}/messages")
-def post_message( # receive human message
+async def post_message( # receive human message
         request: Request,
         chat_id: str,
         body: ChatMessageState,
@@ -97,7 +97,8 @@ def post_message( # receive human message
             detail = "Graph not initialized"
         )
     try:
-        reply = workspace.append_user_and_reply(
+        reply = await run_in_threadpool(
+            workspace.append_user_and_reply,
             claims["id"],
             claims["username"],
             chat_id,

@@ -210,6 +210,24 @@ class RedisClient:
             _LOGGER.error(f"Failed to delete key '{key}' in collection '{collection_name}'\n\t{str(e)}")
             raise
 
+    def scan_keys(self, collection_name: str, key_prefix: str = "") -> List[str]:
+        """
+        Return the logical string-key names in a collection whose name starts with
+        key_prefix (prefix stripped of the internal Redis key layout). Used to find
+        pending flush triggers on shutdown.
+        """
+        pattern = f"{self._string_key(collection_name, key_prefix)}*"
+        strip = self._string_key(collection_name, "")
+        try:
+            out: List[str] = []
+            for rkey in self.__client.scan_iter(match = pattern, count = 1000):
+                if rkey.startswith(strip):
+                    out.append(rkey[len(strip):])
+            return out
+        except Exception as e:
+            _LOGGER.error(f"Failed to scan keys '{key_prefix}' in '{collection_name}'\n\t{str(e)}")
+            return []
+
     def key_exists(self, collection_name: str, key: str) -> bool:
         try:
             return self.__client.exists(self._string_key(collection_name, key))
@@ -276,6 +294,24 @@ class RedisClient:
                 self.__client.expire(rkey, int(ttl_seconds))
         except Exception as e:
             _LOGGER.error(f"Failed list_push '{list_name}' in '{collection_name}'\n\t{str(e)}")
+
+    def list_expire(
+            self,
+            collection_name: str,
+            list_name: str,
+            ttl_seconds: int,
+        ) -> bool:
+        """Set/refresh TTL on a list key. Returns False if the list is missing."""
+        try:
+            return bool(
+                self.__client.expire(
+                    self._list_key(collection_name, list_name),
+                    int(ttl_seconds),
+                )
+            )
+        except Exception as e:
+            _LOGGER.error(f"Failed to set TTL on list '{list_name}' in '{collection_name}'\n\t{str(e)}")
+            return False
 
     def list_delete(self, collection_name: str, list_name: str) -> int:
         try:

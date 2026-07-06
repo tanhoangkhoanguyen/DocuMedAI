@@ -4,7 +4,18 @@ import torch, warnings
 warnings.filterwarnings("ignore")
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from qdrant_client import QdrantClient as SDKQdrantClient
-from qdrant_client.http.models import VectorParams, Distance, PointStruct, HnswConfigDiff, OptimizersConfigDiff, SearchParams, Filter, FieldCondition, MatchValue, PayloadSchemaType
+from qdrant_client.http.models import (
+    Distance,
+    FieldCondition,
+    Filter,
+    HnswConfigDiff,
+    KeywordIndexParams,
+    MatchValue,
+    OptimizersConfigDiff,
+    PayloadSchemaType,
+    PointStruct,
+    SearchParams,
+)
 from typing import Any, Dict, List, Optional
 
 _LOGGER = get_logger(
@@ -97,10 +108,17 @@ class QdrantClient:
                 )
             )
             for field in (payload_indexes or []):
+                # user_id is the tenant key in the shared multi-tenant collection:
+                # is_tenant=True tells Qdrant to co-locate each tenant's points on
+                # disk, so per-user filtered search stays fast as the collection grows.
+                if field == "user_id":
+                    field_schema = KeywordIndexParams(type = "keyword", is_tenant = True)
+                else:
+                    field_schema = PayloadSchemaType.KEYWORD
                 self.__client.create_payload_index(
                     collection_name = collection_name,
                     field_name = field,
-                    field_schema = PayloadSchemaType.KEYWORD,
+                    field_schema = field_schema,
                 )
             _LOGGER.info(f"Created collection '{collection_name}'")
         except Exception as e:
@@ -165,10 +183,12 @@ class QdrantClient:
 
             self.__client.upload_points(
                 collection_name = collection_name,
-                points = points
+                points = points,
+                wait = True    # Prevent server-side ingest error
             )
         except Exception as e:
             _LOGGER.error(f"Failed to push to collection '{collection_name}'\n\t{str(e)}")
+            raise
 
     def retrieve_query(
             self,
@@ -258,9 +278,10 @@ def get_qdrant_client(
         embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2",
         embedding_dimension: int = 384
     ):
-    if embedding_model not in _QDRANT_DICT:
-        _QDRANT_DICT[embedding_model] = QdrantClient(
+    cache_key = (embedding_model, embedding_dimension)
+    if cache_key not in _QDRANT_DICT:
+        _QDRANT_DICT[cache_key] = QdrantClient(
             embedding_model = embedding_model,
             embedding_dimension = embedding_dimension,
         )
-    return _QDRANT_DICT[embedding_model]
+    return _QDRANT_DICT[cache_key]

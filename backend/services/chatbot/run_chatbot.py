@@ -4,7 +4,7 @@ import os, json, warnings
 warnings.filterwarnings("ignore")
 
 from services.chatbot.workflow import build_graph
-from services.chatbot.constants.schemas import GraphState
+from services.chatbot.constants.schemas import GraphState, UserInfo
 from vector_database_tests.utils.qdrant_client import get_qdrant_client
 from logger import get_logger
 
@@ -17,7 +17,10 @@ _LOGGER = get_logger(
 
 def call_agent(user_input: str, chat_id: str):
     human_msg = HumanMessage(content = user_input)
-    init_state = GraphState(chat_history = [human_msg])
+    init_state = GraphState(
+        user_info = UserInfo(user_id = "test-user", username = "TestUser"),
+        chat_history = [human_msg],
+    )
     try:
         result = graph.invoke(
             input = init_state,

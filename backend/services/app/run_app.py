@@ -56,6 +56,12 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown
+    # Flush pending write-behind snapshots to Mongo before dropping connections,
+    # so an in-TTL conversation survives a graceful stop (docker compose down / SIGTERM).
+    try:
+        workspace.flush_all()
+    except Exception as exc:
+        _LOGGER.error(f"flush_all on shutdown failed\n\t{exc}")
     workspace.close()
     try:
         await app.state.arq_pool.close()
