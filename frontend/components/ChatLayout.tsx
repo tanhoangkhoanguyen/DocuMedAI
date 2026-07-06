@@ -14,6 +14,7 @@ export default function ChatLayout({ userEmail }: { userEmail: string }) {
   const [input, setInput] = useState("");
   const [loadingList, setLoadingList] = useState(true);
   const [sending, setSending] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const loadChats = useCallback(async () => {
@@ -196,6 +197,36 @@ export default function ChatLayout({ userEmail }: { userEmail: string }) {
     }
   }
 
+  async function uploadDocument(file: File) {
+    if (uploading) return;
+    const MAX_BYTES = 20 * 1024 * 1024; // mirror backend MAX_BYTES
+    if (file.size > MAX_BYTES) {
+      setError(`"${file.name}" is too large (max 20 MB).`);
+      return;
+    }
+
+    setUploading(true);
+    setError(null);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      form.append("description", file.name); // backend requires a description
+
+      // No headers — the browser sets the multipart boundary itself.
+      const res = await fetch("/api/documents", { method: "POST", body: form });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        setError(j.error ?? "Upload failed");
+        return;
+      }
+      setError(`Uploaded "${file.name}" — processing…`);
+    } catch {
+      setError("Upload failed");
+    } finally {
+      setUploading(false);
+    }
+  }
+
   async function signOut() {
     await fetch("/api/auth/logout", { method: "POST" });
     const supabase = createClient();
@@ -242,6 +273,8 @@ export default function ChatLayout({ userEmail }: { userEmail: string }) {
           input={input}
           setInput={setInput}
           onSend={() => void sendMessage()}
+          onUploadFile={(f) => void uploadDocument(f)}
+          uploading={uploading}
           activeId={activeId}
           sending={sending}
           isEmptyChat={isEmptyChat}
