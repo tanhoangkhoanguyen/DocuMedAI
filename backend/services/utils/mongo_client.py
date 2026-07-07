@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from pymongo import MongoClient as PyMongoClient
 from typing import Any, Dict, Optional
 
@@ -6,7 +7,7 @@ from logger import get_logger
 
 MONGO_URL = "mongodb://la-mongo:27017/"
 SHARED_MONGO_CLIENT = None
-_HOST_DB = "host"
+_HOST_DB = "documedai_prod"
 _LOGGER = get_logger(
     name = "Mongo_client",
     level = "INFO",
@@ -21,6 +22,10 @@ class MongoClient:
         self.__client = PyMongoClient(MONGO_URL)
         if not self.ping():
             raise RuntimeError(f"Cannot connect to Mongo at {MONGO_URL}")
+        try:
+            self._ensure_documents_indexes()
+        except Exception as e:
+            _LOGGER.error(f"ensure documents indexes failed\n\t{str(e)}")
 
     def ping(self) -> bool:
         try:
@@ -136,6 +141,17 @@ class MongoClient:
             _LOGGER.error(f"rename_chat failed chat_id={chat_id}\n\t{str(e)}")
             raise
 
+    def delete_chat(self, chat_id: str, user_id: str) -> None:
+        try:
+            self._db()["user_chat"].delete_one({"chat_id": chat_id})
+            self._db()["user_data"].update_one(
+                {"user_id": user_id},
+                {"$pull": {"chat_ids": chat_id}},
+            )
+        except Exception as e:
+            _LOGGER.error(f"delete_chat failed chat_id={chat_id}\n\t{str(e)}")
+            raise
+
     def get_one(self, collection_name: str, key: str, value: str) -> Optional[Dict[str, Any]]:
         try:
             return self._db()[collection_name].find_one({key: value})
@@ -176,6 +192,90 @@ class MongoClient:
             )
         except Exception as e:
             _LOGGER.error(f"update_user_chat_state failed chat_id={chat_id}\n\t{str(e)}")
+            raise
+
+    # ==================== Document upload metadata ====================
+    # Collection "documents" tracks each user's uploaded file and its ingestion
+    # status. The vector chunks live in Qdrant (UserDocuments); this is the
+    # metadata / job-status store. Product rule: ONE document per user — a unique
+    # index on user_id enforces it at the storage layer (uploads use replace
+    # semantics: the old doc is deleted before the new one is inserted).
+    # user_id in every query = ownership.
+
+    @staticmethod
+    def _now() -> str:
+        return datetime.now(timezone.utc).isoformat()
+
+    def _ensure_documents_indexes(self) -> None:
+        # Unique on user_id => the 1-doc-per-user rule can't be violated even under
+        # a race; a stale duplicate insert fails loudly instead of silently.
+        self._db()["documents"].create_index("user_id", unique = True)
+        self._db()["documents"].create_index("doc_id")
+
+    def create_document(
+            self,
+            user_id: str,
+            doc_id: str,
+            filename: str,
+            mime: str,
+            size: int,
+            description: str,
+        ) -> None:
+        try:
+            now = self._now()
+            self._db()["documents"].insert_one({
+                "doc_id": doc_id,
+                "user_id": user_id,
+                "filename": filename,
+                "mime": mime,
+                "size": size,
+                "description": description,                                             # user-supplied; drives tool routing
+                "status": "queued",
+                "chunk_count": 0,
+                "error": None,
+                "created_at": now,
+                "updated_at": now,
+            })
+        except Exception as e:
+            _LOGGER.error(f"create_document failed doc_id={doc_id}\n\t{str(e)}")
+            raise
+
+    def set_document_status(
+            self,
+            doc_id: str,
+            status: str,
+            chunk_count: Optional[int] = None,
+            error: Optional[str] = None,
+        ) -> None:
+        try:
+            update: Dict[str, Any] = {"status": status, "updated_at": self._now()}
+            if chunk_count is not None:
+                update["chunk_count"] = chunk_count
+            update["error"] = error                                                     # cleared on success, set on failure
+            self._db()["documents"].update_one(
+                {"doc_id": doc_id},
+                {"$set": update},
+            )
+        except Exception as e:
+            _LOGGER.error(f"set_document_status failed doc_id={doc_id}\n\t{str(e)}")
+            raise
+
+    def get_user_document(self, user_id: str) -> Optional[Dict[str, Any]]:
+        """The user's single document (1-doc rule), or None. Keyed by user_id."""
+        try:
+            return self._db()["documents"].find_one(
+                {"user_id": user_id},
+                {"_id": 0},
+            )
+        except Exception as e:
+            _LOGGER.error(f"get_user_document failed user_id={user_id}\n\t{str(e)}")
+            return None
+
+    def delete_document(self, user_id: str, doc_id: str) -> None:
+        try:
+            self._db()["documents"].delete_one({"doc_id": doc_id, "user_id": user_id})  # Extra safety
+        except Exception as e:
+            _LOGGER.error(f"delete_document failed doc_id={doc_id}\n\t{str(e)}")
             raise
 
     def close(self) -> None:

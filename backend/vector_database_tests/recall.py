@@ -15,7 +15,7 @@ from vector_database_tests.ground_truth import load_queries, OUT_PATH
 import time, json, statistics
 import numpy as np
 
-LOGGER = get_logger(
+_LOGGER = get_logger(
     name = "vectordb_lab_recall",
     level = "INFO"
 )
@@ -104,5 +104,5 @@ if __name__ == "__main__":
     args = p.parse_args()
     db = registry.resolve_db(args.db)
     result = evaluate_db(db, k = args.k, search_param = args.search_param)
-    LOGGER.info(f"Recall result: {result}")
+    _LOGGER.info(f"Recall result: {result}")
     print(json.dumps(result, indent = 2))

@@ -1,18 +1,21 @@
 from langchain_core.messages import AIMessage, HumanMessage, AnyMessage
 from typing import Any, Dict, List, Optional, Tuple
 
-import json, re
+import json, re, time
 
 from logger import get_logger
-from services.chatbot.constants.schemas import GraphState, UserInfo
-from services.chatbot.tools.pattern_cipher import PatternCipher
-from services.utils.mongo_client import MongoClient
-from services.utils.redis_client import RedisClient
+from services.chatbot.constants.schemas import GraphState, UserInfo, UserDocumentRef
+from services.utils.pattern_cipher import PatternCipher
+from services.utils.mongo_client import get_mongo_client
+from services.utils.redis_client import get_redis_client
+from vector_database_tests.utils.qdrant_client import get_qdrant_client
+from services.documents_upload.constants import (
+    USER_DOCUMENTS_COLLECTION, 
+    EMBEDDING_MODEL, 
+    EMBEDDING_DIMENSION,
+)
+from services.utils.pattern_cipher import get_pattern_cipher
 
-
-_SHARED_MONGO_CLIENT = MongoClient()
-_SHARED_REDIS_CLIENT = RedisClient()
-_SHARED_PATTERN_CIPHER = PatternCipher()
 _LOGGER = get_logger(
     name = "chatbot_workspace",
     level = "INFO"
@@ -27,41 +30,101 @@ _TTL_SECONDS = 1800
 class ChatbotWorkspace:
     def __init__(self, graph) -> None:
         # Initialize objects
-        self.__mongo_client = _SHARED_MONGO_CLIENT
-        self.__redis_client = _SHARED_REDIS_CLIENT
-        self.__pattern_cipher = _SHARED_PATTERN_CIPHER
+        self.__mongo_client = get_mongo_client()
+        self.__redis_client = get_redis_client()
+        self.__qdrant_client = get_qdrant_client(EMBEDDING_MODEL, EMBEDDING_DIMENSION)
+        self.__pattern_cipher = get_pattern_cipher()
         self.__graph = graph
 
         # Start the service
         self.__redis_client.start_expire_listener(self._on_redis_expired)
 
+    def flush_all(self) -> None:
+        """
+        Force-flush every pending write-behind snapshot to Mongo NOW, without waiting
+        for its TTL trigger to expire. Called on graceful shutdown so an in-progress
+        conversation isn't lost when the container stops. Best-effort: one failing
+        flush doesn't abort the rest (and the flush methods re-arm their own trigger).
+        """
+        for chat_id in self.__redis_client.scan_keys(_WORKSPACE_COLLECTION, _FLUSH_CHAT_PREFIX):
+            try:
+                self._flush_chat_to_mongo(chat_id[len(_FLUSH_CHAT_PREFIX):])
+            except Exception as e:
+                _LOGGER.error(f"flush_all chat failed key={chat_id}\n\t{e}")
+        for user_key in self.__redis_client.scan_keys(_WORKSPACE_COLLECTION, _FLUSH_SIDEBAR_PREFIX):
+            try:
+                self._flush_sidebar_and_rename_to_mongo(user_key[len(_FLUSH_SIDEBAR_PREFIX):])
+            except Exception as e:
+                _LOGGER.error(f"flush_all sidebar failed key={user_key}\n\t{e}")
+
     def close(self) -> None:
         self.__mongo_client.close()
         self.__redis_client.close()
 
+    # ========== DOCUMENT UPLOAD (1 doc per user) ==========
+    # Ownership is enforced by the user_id key inside each Mongo query. The worker
+    # updates status directly; the API goes through these. Vector chunks live in
+    # Qdrant (UserDocuments). Uploads use replace semantics — see prepare_replace.
+    def get_user_document(self, user_id: str) -> Optional[Dict[str, Any]]:
+        return self.__mongo_client.get_user_document(user_id)
+
+    def new_document_id(self, user_id: str) -> str:
+        return self.__pattern_cipher.hash_user_id(user_id)
+
+    def prepare_new_document(
+            self,
+            user_id: str,
+            doc_id: str,
+            filename: str,
+            mime: str,
+            size: int,
+            description: str,
+        ) -> None:
+        """
+        Atomic replace: purge the user's existing document (Qdrant chunks + Mongo
+        metadata) before inserting the new one, upholding the 1-doc-per-user rule.
+        The unique index on user_id is the last-resort guard.
+        """
+        existing = self.__mongo_client.get_user_document(user_id)
+        if existing:
+            self.delete_user_document(user_id, existing["doc_id"])
+        self.__mongo_client.create_document(user_id, doc_id, filename, mime, size, description)
+
+    def delete_user_document(self, user_id: str, doc_id: str) -> None:
+        """Purge the doc's Qdrant chunks (user_id-scoped) then its Mongo metadata."""
+        self.__qdrant_client.delete_by_doc(USER_DOCUMENTS_COLLECTION, user_id, doc_id)
+        self.__mongo_client.delete_document(user_id, doc_id)
+
+    # ========== DATA CACHING KEYS ==========
     @staticmethod
     def _sidebar_cache_key(id: str) -> str:
+        """Cached sidebar chat list (id/name rows) for one user; TTL-refreshed from Mongo."""
         return f"sidebar:{id}"
 
     @staticmethod
     def _pending_rename_key(user_id: str) -> str:
+        """Map of chat_id -> new name awaiting flush to Mongo; merged into the sidebar on read."""
         return f"pending_rename:{user_id}"
 
     @staticmethod
-    def _messages_cache_key(chat_id: str) -> str:
-        return f"messages:{chat_id}"
-
-    @staticmethod
     def _user_cache_key(email: str) -> str:
+        """Cached user_info (id/username/password) keyed by email; speeds up login."""
         return f"userinfo:{email}"
 
     @staticmethod
+    def _messages_cache_key(chat_id: str) -> str:
+        """Legacy per-chat messages cache key (superseded by _messages_snap_list_key)."""
+        return f"messages:{chat_id}"
+
+    @staticmethod
     def _messages_snap_list_key(chat_id: str) -> str:
-        """
-        Redis list of two JSON blobs: [chat_history rows], [shortterm_memory].
-        """
+        """Redis list of two JSON blobs: [chat_history rows], [shortterm_memory]."""
         return f"msgsnap:{chat_id}"
 
+    # ========== DUMMY FLUSHING KEYS ==========
+    # Empty (value "1") TTL trigger, never read. When it expires Redis fires an
+    # 'expired' event that tells us to write the cached chat snapshot (msgsnap)
+    # back to Mongo. Write-behind: many edits in the TTL window = one Mongo write.
     @staticmethod
     def _flush_chat_key(chat_id: str) -> str:
         return f"{_FLUSH_CHAT_PREFIX}{chat_id}"
@@ -78,24 +141,57 @@ class ChatbotWorkspace:
             return match.group(1)
         return email or "unknown_user"
 
+    @staticmethod
+    def _retry(fn, attempts: int = 3, base_delay: float = 0.2) -> bool:
+        """
+        Run fn() with exponential backoff (0.2s, 0.4s, 0.8s by default).
+        Returns True on success, False if every attempt raised.
+        Runs on the Redis expire-listener thread, so keep attempts/delay small.
+        """
+        for i in range(attempts):
+            try:
+                fn()
+                return True
+            except Exception as e:
+                if i == attempts - 1:
+                    _LOGGER.error(f"flush retry exhausted after {attempts} attempts\n\t{e}")
+                    return False
+                _LOGGER.warning(f"flush attempt {i + 1}/{attempts} failed, retrying\n\t{e}")
+                time.sleep(base_delay * (2 ** i))
+        return False
+
     def _flush_sidebar_and_rename_to_mongo(self, user_id: str) -> None:
         pending_key = self._pending_rename_key(user_id)
         pending = self.__redis_client.get_json_key(_WORKSPACE_COLLECTION, pending_key)
         if isinstance(pending, dict):
+            failed = False
             for cid, nm in pending.items():
                 if cid is None or nm is None:
                     continue
-                try:
-                    self.__mongo_client.rename_chat(str(cid), str(nm).strip() or "Untitled")
-                except Exception as e:
-                    _LOGGER.error(f"flush rename failed chat_id={cid}\n\t{e}")
+                ok = self._retry(
+                    lambda cid = cid, nm = nm: self.__mongo_client.rename_chat(
+                        str(cid), str(nm).strip() or "Untitled"
+                    )
+                )
+                if not ok:
+                    failed = True
+            if failed:
+                # Keep pending renames + re-arm the trigger so a later expiry retries.
+                self.__redis_client.set_key(
+                    _WORKSPACE_COLLECTION,
+                    self._flush_sidebar_key(user_id),
+                    "1",
+                    _TTL_SECONDS,
+                )
+                return
             self.__redis_client.delete_key(_WORKSPACE_COLLECTION, pending_key)
         self.__redis_client.delete_key(_WORKSPACE_COLLECTION, self._sidebar_cache_key(user_id))
 
     def _flush_chat_to_mongo(self, chat_id: str) -> None:
+        snap_key = self._messages_snap_list_key(chat_id)
         pair = self.__redis_client.list_range(
             _WORKSPACE_COLLECTION,
-            self._messages_snap_list_key(chat_id),
+            snap_key,
             0,
             -1,
         )
@@ -110,14 +206,29 @@ class ChatbotWorkspace:
             return
         if not isinstance(stm, list):
             stm = []
-        try:
-            self.__mongo_client.update_user_chat_state(chat_id, rows, stm)
-        except Exception as e:
-            _LOGGER.error(f"flush chat to mongo failed chat_id={chat_id}\n\t{e}")
+        ok = self._retry(
+            lambda: self.__mongo_client.update_user_chat_state(chat_id, rows, stm)
+        )
+        if not ok:
+            # Mongo unreachable: keep the snapshot, refresh its TTL so it can't die
+            # before the next attempt, and re-arm the trigger so an expiry re-fires.
+            self.__redis_client.list_expire(_WORKSPACE_COLLECTION, snap_key, _TTL_SECONDS)
+            self.__redis_client.set_key(
+                _WORKSPACE_COLLECTION,
+                self._flush_chat_key(chat_id),
+                "1",
+                _TTL_SECONDS,
+            )
+            _LOGGER.error(f"flush chat to mongo failed, re-armed trigger chat_id={chat_id}")
             return
-        self.__redis_client.list_delete(_WORKSPACE_COLLECTION, self._messages_snap_list_key(chat_id))
+        self.__redis_client.list_delete(_WORKSPACE_COLLECTION, snap_key)
 
     def _on_redis_expired(self, redis_key: str) -> None:
+        """
+        Called by the Redis expire listener whenever any key expires. If the expired
+        key is a flush trigger, write the matching cached data back to Mongo — this is
+        how Redis "notifies" us to persist the cache. Non-flush keys are ignored.
+        """
         marker = f":s:{_FLUSH_SIDEBAR_PREFIX}"
         if marker in redis_key:
             user_id = redis_key.split(marker, 1)[-1]
@@ -370,6 +481,33 @@ class ChatbotWorkspace:
             _TTL_SECONDS,
         )
 
+    def delete_chat(self, id: str, chat_id: str) -> None:
+        if not self._user_owns_chat_cached(id, chat_id):
+            raise PermissionError("Chat not found for user")
+
+        self.__mongo_client.delete_chat(chat_id, id)
+
+        # Drop cached chat state + sidebar so it disappears immediately
+        self.__redis_client.list_delete(
+            _WORKSPACE_COLLECTION, self._messages_snap_list_key(chat_id)
+        )
+        self.__redis_client.delete_key(
+            _WORKSPACE_COLLECTION, self._flush_chat_key(chat_id)
+        )
+        self.__redis_client.delete_key(
+            _WORKSPACE_COLLECTION, self._sidebar_cache_key(id)
+        )
+
+        # Drop any pending rename for this chat so it can't resurrect the deleted
+        # chat's name in the sidebar or get flushed to a now-missing Mongo doc.
+        pending = self._load_pending_renames(id)
+        if pending.pop(str(chat_id), None) is not None:
+            self.__redis_client.set_key(
+                _WORKSPACE_COLLECTION,
+                self._pending_rename_key(id),
+                pending,
+            )
+
     def get_messages(self, id: str, chat_id: str) -> List[Dict[str, Any]]:
         if not self._user_owns_chat_cached(id, chat_id):
             raise PermissionError("User does not own this chat")
@@ -388,9 +526,14 @@ class ChatbotWorkspace:
             graph,
         ) -> str:
         state = self._build_reply_state(id, username, chat_id, message)
+        # Fresh thread per turn: Redis/Mongo already hold the durable history and we
+        # reload it into `state` every turn, so the in-memory checkpointer must NOT
+        # re-accumulate prior turns (that duplicated chat_history via add_messages).
+        # hash_user_id seeds a new UUID from username + timestamp → unique per invoke.
+        thread_id = self.__pattern_cipher.hash_user_id(username)
         result = graph.invoke(
             input = state,
-            config = {"configurable": {"thread_id": chat_id}},
+            config = {"configurable": {"thread_id": thread_id}},
         )
 
         chatbot_response = self._extract_reply(result)
@@ -427,10 +570,21 @@ class ChatbotWorkspace:
             plan = "Free",
         )
 
+        # Attach the user's uploaded doc. Only a fully-ingested ('ready') doc is 
+        # advertised, so a doc mid-ingestion isn't offered as answerable.
+        user_document = None
+        user_doc = self.__mongo_client.get_user_document(id)
+        if user_doc and user_doc.get("status") == "ready":
+            user_document = UserDocumentRef(
+                doc_id = user_doc.get("doc_id", ""),
+                description = user_doc.get("description", ""),
+            )
+
         return GraphState(
             user_info = user_info,
             chat_history = chat_history_lc,
             shortterm_memory = doc["shortterm_memory"],
+            user_document = user_document,
         )
 
     @staticmethod

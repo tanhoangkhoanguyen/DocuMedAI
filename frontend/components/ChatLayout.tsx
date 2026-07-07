@@ -14,7 +14,9 @@ export default function ChatLayout({ userEmail }: { userEmail: string }) {
   const [input, setInput] = useState("");
   const [loadingList, setLoadingList] = useState(true);
   const [sending, setSending] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const loadChats = useCallback(async () => {
     setError(null);
@@ -94,6 +96,25 @@ export default function ChatLayout({ userEmail }: { userEmail: string }) {
       return;
     }
     await loadChats();
+  }
+
+  async function deleteChat(chatId: string) {
+    if (!window.confirm("Delete this chat? This cannot be undone.")) return;
+    const res = await fetch(`/api/chats/${encodeURIComponent(chatId)}`, {
+      method: "DELETE",
+    });
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      setError(j.error ?? "Delete failed");
+      return;
+    }
+    const remaining = chats.filter((x) => x.chat_id !== chatId);
+    setChats(remaining);
+    if (activeId === chatId) {
+      const next = remaining[0]?.chat_id ?? null;
+      setActiveId(next);
+      if (next === null) setMessages([]); // no chat left → clear the thread
+    }
   }
 
   async function sendMessage() {
@@ -177,6 +198,68 @@ export default function ChatLayout({ userEmail }: { userEmail: string }) {
     }
   }
 
+  async function uploadDocument(file: File) {
+    if (uploading) return;
+    const MAX_BYTES = 20 * 1024 * 1024; // mirror backend MAX_BYTES
+    if (file.size > MAX_BYTES) {
+      setError(`"${file.name}" is too large (max 20 MB).`);
+      return;
+    }
+
+    setUploading(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      form.append("description", file.name); // backend requires a description
+
+      // No headers — the browser sets the multipart boundary itself.
+      const res = await fetch("/api/documents", { method: "POST", body: form });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        setError(j.error ?? "Upload failed");
+        return;
+      }
+      // Upload is accepted (202); ingestion runs async in the worker. Show a
+      // progress notice (not an error), then poll GET /documents for the final
+      // status so the user gets a real "ready" (or "failed") notification.
+      setNotice(`Uploading "${file.name}" — processing…`);
+      await pollDocumentStatus(file.name);
+    } catch {
+      setError("Upload failed");
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  // Poll ingestion status until the doc is ready/failed (or we give up).
+  async function pollDocumentStatus(filename: string) {
+    const MAX_ATTEMPTS = 24;                              // 2 mins
+    for (let i = 0; i < MAX_ATTEMPTS; i++) {
+      await new Promise((r) => setTimeout(r, 5000));      // Set the wait for 5s
+      let doc: { status?: string; error?: string } | null = null;
+      try { // Ask for the document upload status
+        const res = await fetch("/api/documents", { cache: "no-store" });
+        if (res.ok) doc = await res.json();
+      } catch {
+        continue; // transient — keep polling
+      }
+      if (!doc?.status) continue;
+      if (doc.status === "ready") {
+        setNotice(`"${filename}" is ready — you can now ask about it.`);
+        return;
+      }
+      if (doc.status === "failed") {
+        setNotice(null);
+        setError(doc.error ?? `Processing "${filename}" failed.`);
+        return;
+      }
+      // queued / processing → keep the progress notice and keep polling
+    }
+    setNotice(`"${filename}" is still processing — it will be ready shortly.`);
+  }
+
   async function signOut() {
     await fetch("/api/auth/logout", { method: "POST" });
     const supabase = createClient();
@@ -199,6 +282,7 @@ export default function ChatLayout({ userEmail }: { userEmail: string }) {
         onSelect={setActiveId}
         onNewChat={() => void newChat()}
         onRename={(id) => void renameChat(id)}
+        onDelete={(id) => void deleteChat(id)}
         onSignOut={() => void signOut()}
       />
 
@@ -216,12 +300,14 @@ export default function ChatLayout({ userEmail }: { userEmail: string }) {
           </h1>
         </header>
 
-        <MessageList messages={messages} sending={sending} error={error} />
+        <MessageList messages={messages} sending={sending} error={error} notice={notice} />
 
         <MessageInput
           input={input}
           setInput={setInput}
           onSend={() => void sendMessage()}
+          onUploadFile={(f) => void uploadDocument(f)}
+          uploading={uploading}
           activeId={activeId}
           sending={sending}
           isEmptyChat={isEmptyChat}

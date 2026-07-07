@@ -103,6 +103,7 @@ RULES
 - A task may require MULTIPLE tool_calls.
 - Each tool_call must use an exact tool name from the list and a short "message" string: the query for THAT tool only.
 - Use CONTEXT only to disambiguate; put the actionable query in "message".
+- Prefer using an available retrieval tool over giving up.
 - If no tool fits, return an empty tool_calls list.
 
 CONTEXT FOR THIS TASK:

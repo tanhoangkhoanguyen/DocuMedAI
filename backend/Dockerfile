@@ -45,4 +45,8 @@ COPY --from=builder /opt/venv /opt/venv
 # which otherwise fails CI on every cold run.
 RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')"
 
-CMD ["python", "-m", "services.app.run_app"]
+# Entrypoint: Wait for the Qdrant data upload (from prod_dataset/) to complete, then start the API
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+CMD ["/usr/local/bin/entrypoint.sh"]

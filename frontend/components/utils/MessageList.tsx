@@ -5,10 +5,12 @@ export default function MessageList({
   messages,
   sending,
   error,
+  notice,
 }: {
   messages: MsgRow[];
   sending: boolean;
   error: string | null;
+  notice?: string | null;
 }) {
   return (
     <div className="scrollbar-brand relative flex-1 overflow-y-auto px-4 py-6 pb-40">
@@ -16,6 +18,13 @@ export default function MessageList({
         <p className="mx-auto mb-4 flex max-w-3xl items-start gap-2 rounded-lg border border-[#C23A24]/30 bg-[#C23A24]/10 px-3 py-2 text-[13px] text-[#C23A24]">
           <span aria-hidden className="mt-px font-mono">✕</span>
           {error}
+        </p>
+      ) : null}
+
+      {!error && notice ? (
+        <p className="mx-auto mb-4 flex max-w-3xl items-start gap-2 rounded-lg border border-[#1E7A5B]/30 bg-[#1E7A5B]/10 px-3 py-2 text-[13px] text-[#1E7A5B]">
+          <span aria-hidden className="mt-px font-mono">✓</span>
+          {notice}
         </p>
       ) : null}
 

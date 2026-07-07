@@ -6,7 +6,7 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 from pymilvus import connections, FieldSchema, CollectionSchema, DataType, Collection, utility
 from typing import List
 
-LOGGER = get_logger(
+_LOGGER = get_logger(
     name = "Milvus_client",
     level = "INFO"
 )
@@ -44,7 +44,7 @@ class MilvusClient:
             collections = utility.list_collections()
             return collections
         except Exception as e:
-            LOGGER.error(f"Failed to list collections\n\t{str(e)}")
+            _LOGGER.error(f"Failed to list collections\n\t{str(e)}")
             return []
     
     def collection_exists(
@@ -56,7 +56,7 @@ class MilvusClient:
                 return True
             return False
         except Exception as e:
-            LOGGER.error(f"Failed to check '{collection_name}' existence\n\t{e}")
+            _LOGGER.error(f"Failed to check '{collection_name}' existence\n\t{e}")
             return False
     
     def delete_collection(
@@ -65,13 +65,13 @@ class MilvusClient:
         ):
         try:
             if not self.collection_exists(collection_name):
-                LOGGER.info(f"Collection '{collection_name}' doesnt exist")
+                _LOGGER.info(f"Collection '{collection_name}' doesnt exist")
                 return
             
             utility.drop_collection(collection_name)
-            LOGGER.info(f"Deleted collection '{collection_name}'")
+            _LOGGER.info(f"Deleted collection '{collection_name}'")
         except Exception as e:
-            LOGGER.error(f"Failed to delete collection '{collection_name}'\n\t{str(e)}")
+            _LOGGER.error(f"Failed to delete collection '{collection_name}'\n\t{str(e)}")
             raise
 
     def create_collection(
@@ -107,9 +107,9 @@ class MilvusClient:
                 name = collection_name,
                 schema = schema
             )
-            LOGGER.info(f"Created collection '{collection_name}'")
+            _LOGGER.info(f"Created collection '{collection_name}'")
         except Exception as e:
-            LOGGER.error(f"Failed to create collection '{collection_name}'\n\t{str(e)}")
+            _LOGGER.error(f"Failed to create collection '{collection_name}'\n\t{str(e)}")
             raise
 
     def bind_collection(
@@ -145,7 +145,7 @@ class MilvusClient:
                 }
             )
         except Exception as e:
-            LOGGER.error(f"Failed to create index for collection '{collection_name}'\n\t{str(e)}")
+            _LOGGER.error(f"Failed to create index for collection '{collection_name}'\n\t{str(e)}")
             raise
 
     def push_documents(
@@ -164,7 +164,7 @@ class MilvusClient:
             ]
             self._milvus_client.insert(objects)
         except Exception as e:
-            LOGGER.error(f"Failed to push to collection '{collection_name}'\n\t{str(e)}")
+            _LOGGER.error(f"Failed to push to collection '{collection_name}'\n\t{str(e)}")
 
     def retrieve_query(
             self,
@@ -190,7 +190,7 @@ class MilvusClient:
             )
             return resp
         except Exception as e:
-            LOGGER.error(f"Failed to retrieve from collection '{collection_name}'\n\t{str(e)}")
+            _LOGGER.error(f"Failed to retrieve from collection '{collection_name}'\n\t{str(e)}")
             return []
 
     def retrieve_ids(

@@ -2,15 +2,13 @@ from crewai import Agent, Crew, LLM, Process, Task
 from concurrent.futures import ThreadPoolExecutor
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langchain_core.runnables import Runnable
-# Gemini is reached through the Go LLM proxy via its OpenAI-compatible endpoint
-from langchain_openai import ChatOpenAI
+# Gemini is reached through Google Vertex AI
+from langchain_google_vertexai import ChatVertexAI
 from pydantic import BaseModel
 from typing import Any, List, Optional, Type
 
-import os, warnings
+import warnings
 warnings.filterwarnings("ignore")
-
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 from services.chatbot.constants.schemas import (
     GraphState,
@@ -31,8 +29,8 @@ from services.chatbot.constants.prompts import (
 from vector_database_tests.utils.qdrant_client import get_qdrant_client
 from services.chatbot.mcp import get_mcp_client
 from services.chatbot.tools.rag import get_rag_client
-from services.chatbot.tools.pattern_cipher import get_pattern_cipher
-from services.chatbot.tools.llm_config import get_llm_base_url  # route LLM calls via the Go proxy
+from services.utils.pattern_cipher import get_pattern_cipher
+from services.chatbot.tools.llm_config import get_vertex_project, get_vertex_location  # Vertex AI config
 
 
 LONGTERM_COLLECTION = "LongtermMemory"
@@ -49,11 +47,11 @@ class TopicChecker(Runnable):
             reranking_model: str,
             reranking_threshold: float,
         ):
-        self.__llm = ChatOpenAI(
+        self.__llm = ChatVertexAI(
                 model = chat_model,
                 temperature = temperature,
-                base_url = get_llm_base_url(),  # → Go LLM proxy → Gemini (OpenAI-compat)
-                api_key = GEMINI_API_KEY,
+                project = get_vertex_project(),
+                location = get_vertex_location(),
             )
         self.__rag_client = get_rag_client(
             chat_model = chat_model,
@@ -112,11 +110,11 @@ class MessageAnalysis(Runnable):
         user_inputs: List[SubMessageState]
 
     def __init__(self, chat_model: str, temperature: float):
-        self.__llm = ChatOpenAI(
+        self.__llm = ChatVertexAI(
                 model = chat_model,
                 temperature = temperature,
-                base_url = get_llm_base_url(),  # → Go LLM proxy → Gemini (OpenAI-compat)
-                api_key = GEMINI_API_KEY,
+                project = get_vertex_project(),
+                location = get_vertex_location(),
             )
 
     def invoke(self, state: GraphState, config = None):
@@ -150,8 +148,10 @@ class LongTermMemoryRetriever(Runnable):
         self.__qdrant_threshold = qdrant_threshold
         self.__max_workers = max_workers
 
-    def __retrieve_longterm_snippet(self, query: str) -> str:
-        if not query or not str(query).strip():
+    def __retrieve_longterm_snippet(self, unit: SubMessageState) -> str:
+        parts = [unit.context or "", " ".join(unit.messages or []), unit.instruction or ""]
+        query = " ".join(p for p in parts if p).strip()
+        if not query:
             return ""
 
         # Retrieve semantic longterm memory
@@ -163,32 +163,16 @@ class LongTermMemoryRetriever(Runnable):
 
         return self.__qdrant_client.get_top_scored_payload(resp, self.__qdrant_threshold)
 
-    def __search_memory(self, unit: SubMessageState) -> List[str]:
-        ctx = (unit.context or "").strip()
-
-        if ctx:
-            blob = self.__retrieve_longterm_snippet(ctx)
-            return [blob] * len(unit.messages)
-
-        with ThreadPoolExecutor(max_workers = self.__max_workers) as pool:
-            futures = [
-                pool.submit(self.__retrieve_longterm_snippet, msg.strip())
-                for msg in unit.messages
-            ]
-            return [f.result() for f in futures]
-    
     def invoke(self, state: GraphState, config = None):
         for unit in state.user_inputs:
             if not unit.messages:
                 continue
-            memories = self.__search_memory(unit)
-            state.task_list.append([
+            state.task_list.append(
                 TaskState(
-                        context = mem,
-                        message = msg,
-                    )
-                for mem, msg in zip(memories, unit.messages)
-            ])
+                    context = (unit.context or "") + self.__retrieve_longterm_snippet(unit),
+                    messages = [m.strip() for m in unit.messages if m and m.strip()],
+                )
+            )
         return state
 
 
@@ -198,12 +182,13 @@ class Agents(Runnable):
 
     @staticmethod
     def get_crew_model(chat_model: str):
+        # CrewAI/litellm reaches Vertex AI via the "vertex_ai/<model>" prefix,
+        # reading GOOGLE_CLOUD_PROJECT / GOOGLE_CLOUD_LOCATION from the env.
         if "/" in chat_model:
             return chat_model
-        if get_llm_base_url() or chat_model.startswith(("gpt")):
+        if chat_model.startswith(("gpt")):
             return f"openai/{chat_model}"
-        if chat_model.startswith(("gemini")):
-            return f"gemini/{chat_model}"
+        return f"vertex_ai/{chat_model}"
 
     def __init__(
             self,
@@ -217,19 +202,17 @@ class Agents(Runnable):
             reranking_model: str,
             reranking_threshold: float,
         ):
-        self.__llm = ChatOpenAI(
+        self.__llm = ChatVertexAI(
             model = chat_model,
             temperature = temperature,
-            base_url = get_llm_base_url(),  # → Go LLM proxy → Gemini (OpenAI-compat)
-            api_key = GEMINI_API_KEY,
+            project = get_vertex_project(),
+            location = get_vertex_location(),
         )
-        _crew_base_url = get_llm_base_url()
-        _crew_kwargs = {"base_url": _crew_base_url} if _crew_base_url else {}
         self.__crew_llm = LLM(
-            model = self.get_crew_model(chat_model),
+            model = self.get_crew_model(chat_model),  # vertex_ai/<model>
             temperature = temperature,
-            api_key = GEMINI_API_KEY,
-            **_crew_kwargs,
+            vertex_project = get_vertex_project(),
+            vertex_location = get_vertex_location(),
         )
         self.__max_workers = max_workers
         self.__mcp_client = get_mcp_client(
@@ -243,21 +226,26 @@ class Agents(Runnable):
         self.__shortterm_memory_size = shortterm_memory_size
         self.__max_revision_cycles = max_revision_cycles
 
-    def __run_planner(self, task: TaskState):
+    def __run_planner(self, task: TaskState, doc_hint: str = ""):
         catalog = self.__mcp_client.format_registry()
+        # doc_hint is per-request (the current user's uploaded-doc description) and
+        # is prepended to the planner context so the LLM router can decide whether
+        # user_document_tool is relevant. It's a local arg — never stored on self —
+        # so concurrent users can't see each other's document.
+        context = f"{doc_hint}\n{task.context}" if doc_hint else task.context
         prompt = [
             SystemMessage(
                 content = AGENT_PLANNER_PROMPT.format(
                     tool_catalog = catalog,
-                    context = task.context,
+                    context = context,
                 )
             ),
-            HumanMessage(content = f"USER MESSAGE:\n{task.message}")
+            HumanMessage(content = "USER MESSAGES:\n" + "\n".join(f"- {m}" for m in task.messages))
         ]
         return self.__llm.with_structured_output(self.planner_output_schema).invoke(prompt)
 
-    def __process_task(self, task: TaskState):
-        plan = self.__run_planner(task)
+    def __process_task(self, task: TaskState, user_id: str = "", doc_hint: str = ""):
+        plan = self.__run_planner(task, doc_hint)
         tool_calls = [tool_call for tool_call in plan.tool_calls if self.__mcp_client.has_tool(tool_call.tool)]
         if not tool_calls:
             return ""
@@ -267,6 +255,7 @@ class Agents(Runnable):
                     self.__mcp_client.execute_tool_call,
                     tool_call.tool,
                     tool_call.message,
+                    user_id,
                 )
                 for tool_call in tool_calls
             ]
@@ -279,13 +268,12 @@ class Agents(Runnable):
             return ""
         seen: set[str] = set()
         out: List[str] = []
-        for tasks in task_list:
-            for task in tasks:
-                ctx = (task.context or "").strip()
-                if not ctx or ctx in seen:
-                    continue
-                seen.add(ctx)
-                out.append(ctx)
+        for task in task_list:
+            ctx = (task.context or "").strip()
+            if not ctx or ctx in seen:
+                continue
+            seen.add(ctx)
+            out.append(ctx)
         return '\n'.join(out) if out else ""
 
     @staticmethod
@@ -325,6 +313,18 @@ class Agents(Runnable):
         shortterm_memories = state.shortterm_memory or []
         shortterm_memory = "\n".join(shortterm_memories[-1 * self.__shortterm_memory_size:])
         user_message = state.chat_history[-1].content
+        user_id = state.user_info.user_id if state.user_info else ""
+
+        # Per-request routing hint: tell the planner what the user's uploaded doc is
+        # about so it can choose user_document_tool when relevant. Empty if no ready
+        # doc. Read off GraphState (populated by the workspace layer) — no DB call here.
+        doc_hint = ""
+        if state.user_document and state.user_document.description:
+            doc_hint = (
+                f"The user has uploaded a document described as: "
+                f"\"{state.user_document.description}\". Use user_document_tool to "
+                f"retrieve from it when the question relates to that document."
+            )
 
         draft_agent = Agent(
             role = "Draft Writer",
@@ -350,12 +350,11 @@ class Agents(Runnable):
         for _ in range (self.__max_revision_cycles):
             if state.task_list:
                 # Update mcp_outputs
-                for idx, tasks in enumerate(state.task_list):
-                    with ThreadPoolExecutor(max_workers = self.__max_workers) as pool:
-                        futures = [pool.submit(self.__process_task, task) for task in tasks]
-                        for task, future in zip(state.task_list[idx], futures):
-                            task.result = future.result()
-                            mcp_outputs += f"\n{task.result or ''}"
+                with ThreadPoolExecutor(max_workers = self.__max_workers) as pool:
+                    futures = [pool.submit(self.__process_task, task, user_id, doc_hint) for task in state.task_list]
+                    for task, future in zip(state.task_list, futures):
+                        task.result = future.result()
+                        mcp_outputs += f"\n{task.result or ''}"
 
             draft_task = Task(
                 description = DRAFT_AGENT_PROMPT.format(

@@ -5,7 +5,7 @@ warnings.filterwarnings("ignore")
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from typing import List
 
-LOGGER = get_logger(
+_LOGGER = get_logger(
     name = "Chromadb_client",
     level = "INFO"
 )
@@ -44,7 +44,7 @@ class ChromadbClient:
             collections = self.__chromadb_client.list_collections()
             return [collection.name for collection in collections]
         except Exception as e:
-            LOGGER.error(f"Failed to list collections\n\t{str(e)}")
+            _LOGGER.error(f"Failed to list collections\n\t{str(e)}")
             raise
     
     def collection_exists(
@@ -56,7 +56,7 @@ class ChromadbClient:
                 return True
             return False
         except Exception as e:
-            LOGGER.error(f"Failed to check '{collection_name}' existence\n\t{e}")
+            _LOGGER.error(f"Failed to check '{collection_name}' existence\n\t{e}")
             return False
 
     def delete_collection(
@@ -65,13 +65,13 @@ class ChromadbClient:
         ):
         try:
             if not self.collection_exists(collection_name):
-                LOGGER.info(f"Collection '{collection_name}' doesnt exist")
+                _LOGGER.info(f"Collection '{collection_name}' doesnt exist")
                 return
             
             self.__chromadb_client.delete_collection(collection_name)
-            LOGGER.info(f"Deleted collection '{collection_name}'")
+            _LOGGER.info(f"Deleted collection '{collection_name}'")
         except Exception as e:
-            LOGGER.error(f"Failed to delete collection '{collection_name}'\n\t{str(e)}")
+            _LOGGER.error(f"Failed to delete collection '{collection_name}'\n\t{str(e)}")
             raise
 
     def create_collection(
@@ -90,9 +90,9 @@ class ChromadbClient:
                     "hnsw:search_ef": search_ef,
                 }
             )
-            LOGGER.info(f"Created collection '{collection_name}'")
+            _LOGGER.info(f"Created collection '{collection_name}'")
         except Exception as e:
-            LOGGER.error(f"Failed to create collection '{collection_name}'\n\t{str(e)}")
+            _LOGGER.error(f"Failed to create collection '{collection_name}'\n\t{str(e)}")
             raise
 
     def set_search_ef(self, collection_name: str, search_ef: int):
@@ -102,7 +102,7 @@ class ChromadbClient:
             self._chroma_client.modify(metadata = {"hnsw:search_ef": search_ef})
             self.__current_collection = None  # force re-bind so the new ef takes effect
         except Exception as e:
-            LOGGER.error(f"Failed to set search_ef on '{collection_name}'\n\t{str(e)}")
+            _LOGGER.error(f"Failed to set search_ef on '{collection_name}'\n\t{str(e)}")
             raise
     
     def bind_collection(
@@ -131,7 +131,7 @@ class ChromadbClient:
                 ids = ids
             )
         except Exception as e:
-            LOGGER.error(f"Failed to push to collection '{collection_name}'\n\t{str(e)}")
+            _LOGGER.error(f"Failed to push to collection '{collection_name}'\n\t{str(e)}")
 
     def retrieve_query(
             self,
@@ -151,7 +151,7 @@ class ChromadbClient:
             )
             return resp
         except Exception as e:
-            LOGGER.error(f"Failed to retrieve from collection '{collection_name}'\n\t{str(e)}")
+            _LOGGER.error(f"Failed to retrieve from collection '{collection_name}'\n\t{str(e)}")
             return []
 
     def retrieve_ids(

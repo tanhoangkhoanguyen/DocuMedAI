@@ -8,7 +8,7 @@ from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from services.app.chatbot_workspace import ChatbotWorkspace
-from services.chatbot.tools.pattern_cipher import PatternCipher
+from services.utils.pattern_cipher import PatternCipher
 from services.utils.supabase_client import SupabaseClient
 
 
@@ -70,6 +70,35 @@ def mint_access_token(id: str, username: str) -> str:
     return token if isinstance(token, str) else token.decode("utf-8")
 
 def decode_bearer_any(token: str) -> Dict[str, Any]:
+    # Peek the claims without verifying the signature to decide which verifier
+    # owns this token, then run ONLY that verifier so its real error surfaces.
+    try:
+        unverified = jwt.decode(token, options = {"verify_signature": False})
+    except jwt.PyJWTError as exc:
+        raise HTTPException(
+            status_code = 401,
+            detail = f"Malformed token: {exc}"
+        ) from exc
+
+    # Local tokens are minted with "type": "local" (see mint_access_token).
+    if unverified.get("type") == "local":
+        if not _SECRET:
+            raise HTTPException(
+                status_code = 401,
+                detail = "AUTH_JWT_SECRET is not configured"
+            )
+        try:
+            p = jwt.decode(token, _SECRET, algorithms = ["HS256"])
+            if p.get("type") != "local" or not p.get("id"):
+                raise jwt.InvalidTokenError("token missing type=local or id")
+            return {**p, "_auth": "local"}
+        except jwt.PyJWTError as exc:
+            raise HTTPException(
+                status_code = 401,
+                detail = f"Invalid local token: {exc}"
+            ) from exc
+
+    # Otherwise treat it as a Supabase token.
     try:
         c = SupabaseClient.decode_access_token(token)
         sub = c.get("sub")
@@ -80,22 +109,10 @@ def decode_bearer_any(token: str) -> Dict[str, Any]:
         email = c.get("email") or ""
         username = ChatbotWorkspace._extract_email_name(email)
         return {**c, "_auth": "supabase", "id": uid, "username": username}
-    except Exception:
-        pass
-    if not _SECRET:
+    except Exception as exc:
         raise HTTPException(
             status_code = 401,
-            detail = "Invalid or expired token"
-        )
-    try:
-        p = jwt.decode(token, _SECRET, algorithms = ["HS256"])
-        if p.get("type") != "local" or not p.get("id"):
-            raise jwt.InvalidTokenError()
-        return {**p, "_auth": "local"}
-    except jwt.PyJWTError as exc:
-        raise HTTPException(
-            status_code = 401,
-            detail = "Invalid or expired token"
+            detail = f"Invalid Supabase token: {exc}"
         ) from exc
 
 async def require_bearer_claims(

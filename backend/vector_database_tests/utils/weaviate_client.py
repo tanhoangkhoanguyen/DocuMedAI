@@ -5,7 +5,7 @@ warnings.filterwarnings("ignore")
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from typing import List
 
-LOGGER = get_logger(
+_LOGGER = get_logger(
     name = "Weaviate_client",
     level = "INFO"
 )
@@ -39,7 +39,7 @@ class WeaviateClient:
             classes = [cls['class'] for cls in schema.get("classes", [])]
             return classes
         except Exception as e:
-            LOGGER.error(f"Failed to list classes\n\t{str(e)}")
+            _LOGGER.error(f"Failed to list classes\n\t{str(e)}")
             raise
     
     def collection_exists(
@@ -51,7 +51,7 @@ class WeaviateClient:
                 return True
             return False
         except Exception as e:
-            LOGGER.error(f"Failed to check '{class_name}' existence\n\t{e}")
+            _LOGGER.error(f"Failed to check '{class_name}' existence\n\t{e}")
             return False
 
     def delete_collection(
@@ -60,13 +60,13 @@ class WeaviateClient:
         ):
         try:
             if not self.collection_exists(class_name):
-                LOGGER.info(f"Class '{class_name}' doesnt exist")
+                _LOGGER.info(f"Class '{class_name}' doesnt exist")
                 return
             
             self.__weaviate_client.schema.delete_class(class_name)
-            LOGGER.info(f"Deleted class '{class_name}'")
+            _LOGGER.info(f"Deleted class '{class_name}'")
         except Exception as e:
-            LOGGER.error(f"Failed to delete class '{class_name}'\n\t{str(e)}")
+            _LOGGER.error(f"Failed to delete class '{class_name}'\n\t{str(e)}")
             raise
 
     def create_collection(
@@ -92,9 +92,9 @@ class WeaviateClient:
                     }
                 ]
             })
-            LOGGER.info(f"Created class '{class_name}'")
+            _LOGGER.info(f"Created class '{class_name}'")
         except Exception as e:
-            LOGGER.error(f"Failed to create class '{class_name}'\n\t{str(e)}")
+            _LOGGER.error(f"Failed to create class '{class_name}'\n\t{str(e)}")
             raise
 
     def push_documents(
@@ -115,7 +115,7 @@ class WeaviateClient:
                         uuid = ids[idx]
                     )
         except Exception as e:
-            LOGGER.error(f"Failed to push to class '{class_name}'\n\t{str(e)}")
+            _LOGGER.error(f"Failed to push to class '{class_name}'\n\t{str(e)}")
 
     def retrieve_query(
             self,
@@ -134,7 +134,7 @@ class WeaviateClient:
                 .do()
             return resp
         except Exception as e:
-            LOGGER.error(f"Failed to retrieve from class '{class_name}'\n\t{str(e)}")
+            _LOGGER.error(f"Failed to retrieve from class '{class_name}'\n\t{str(e)}")
             return []
 
     def retrieve_ids(

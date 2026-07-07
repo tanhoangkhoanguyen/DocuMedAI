@@ -7,10 +7,10 @@ from typing import Annotated, Any, Callable, Dict, List, Literal, Optional
 
 # ==================== User State ====================
 class UserInfo(BaseModel):
-    user_id: str = "2b656bec-983f-571b-88b3-9cea12d3e654"
-    username: str = "Admin"
-    email: str = "admin@gmail.com"
-    password: str = "Admin123"
+    user_id: str                   # "2b656bec-983f-571b-88b3-9cea12d3e654"
+    username: str                  # "Admin"
+    email: str = ""
+    password: str = ""
     plan: Literal["Free", "Pro"] = "Free"
 
 
@@ -64,11 +64,12 @@ class ToolParameter(BaseModel):
     embedding_dimension: int
     reranking_model: str
     reranking_threshold: float
+    user_id: str = ""
 
 
 class TaskState(BaseModel):
     context: str = Field(default_factory = str)
-    message: str = Field(default_factory = str)
+    messages: List[str] = Field(default_factory = list)
     result: str = Field(default_factory = str)
 
 
@@ -87,12 +88,18 @@ class SubMessageState(BaseModel):
     instruction: Optional[str] = None
 
 
+class UserDocumentRef(BaseModel):
+    doc_id: str = ""
+    description: str = ""
+
+
 class GraphState(BaseModel):
-    user_info: UserInfo = Field(default_factory = lambda: UserInfo())
+    user_info: UserInfo
     chat_history: Annotated[List[AnyMessage], add_messages] = Field(default_factory = list)
     user_inputs: Optional[List[SubMessageState]] = None
-    task_list: Optional[List[List[TaskState]]] = Field(default_factory = list)
+    task_list: Optional[List[TaskState]] = Field(default_factory = list)
     shortterm_memory: List[str] = Field(default_factory = list)
+    user_document: Optional[UserDocumentRef] = None
 
     @field_validator("shortterm_memory", mode = "before")
     @classmethod
