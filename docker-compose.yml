@@ -176,19 +176,18 @@ services:
       MONGO_URL: mongodb://la-mongo:27017/
       REDIS_URL: redis://la-redis:6379/0
       QDRANT_URL: http://la-qdrant:6333
-      # Route all OpenAI chat-completion calls through the Go LLM proxy.
-      # Read explicitly by services.chatbot.llm_config.get_llm_base_url(); also
-      # set OPENAI_BASE_URL as a belt-and-suspenders default for langchain.
-      LLM_PROXY_BASE_URL: http://la-llm-proxy:8081/v1
-      OPENAI_BASE_URL: http://la-llm-proxy:8081/v1
+      # Chat-completion calls run on Google Vertex AI.
+      # Read by services.chatbot.tools.llm_config; also consumed by LiteLLM (CrewAI).
+      GOOGLE_CLOUD_PROJECT: ${GOOGLE_CLOUD_PROJECT}
+      GOOGLE_CLOUD_LOCATION: ${GOOGLE_CLOUD_LOCATION:-us-central1}
+      # ADC: service-account key mounted read-only below.
+      GOOGLE_APPLICATION_CREDENTIALS: /secrets/gcp-sa.json
     depends_on:
       la-qdrant:
         condition: service_started
       la-mongo:
         condition: service_healthy
       la-redis:
-        condition: service_healthy
-      la-llm-proxy:
         condition: service_healthy
     restart: unless-stopped
     container_name: la-backend-service
@@ -199,6 +198,7 @@ services:
     volumes:
       - ./backend:/backend            # live source → uvicorn reload + logs to host ./backend/logs
       - models_cache:/models
+      - ${GOOGLE_SA_KEY_PATH:-./gcp-sa.json}:/secrets/gcp-sa.json:ro  # Vertex AI ADC
     mem_limit: 8g                    # ground_truth (faiss exact-kNN over 1M vectors)
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:2010/health"]

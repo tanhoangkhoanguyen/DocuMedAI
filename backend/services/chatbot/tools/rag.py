@@ -1,21 +1,19 @@
 from langsmith import traceable
 from langchain_core.messages import SystemMessage, HumanMessage
-# Gemini is reached through the Go LLM proxy via its OpenAI-compatible endpoint
-from langchain_openai import ChatOpenAI
+# Gemini is reached through Google Vertex AI
+from langchain_google_vertexai import ChatVertexAI
 from pydantic import BaseModel
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 from typing import List
 
-import os, torch, warnings
+import torch, warnings
 warnings.filterwarnings("ignore")
-
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 from services.chatbot.constants.prompts import (
     PARAPHRASE_MESSAGE_PROMPT,
     GENERALIZE_USER_MESSAGE_PROMPT,
 )
-from services.chatbot.tools.llm_config import get_llm_base_url  # route LLM calls via the Go proxy
+from services.chatbot.tools.llm_config import get_vertex_project, get_vertex_location  # Vertex AI config
 from logger import get_logger
 
 
@@ -34,11 +32,11 @@ class RAG:
         reranking_model: str,
         reranking_threshold: float,
     ):
-        self.__llm = ChatOpenAI(
+        self.__llm = ChatVertexAI(
             model = chat_model,
             temperature = temperature,
-            base_url = get_llm_base_url(),  # → Go LLM proxy → Gemini (OpenAI-compat)
-            api_key = GEMINI_API_KEY,
+            project = get_vertex_project(),
+            location = get_vertex_location(),
         )
         self.__reranking_threshold = reranking_threshold
         try:

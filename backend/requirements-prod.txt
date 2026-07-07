@@ -34,6 +34,7 @@ langchain==1.3.11
 langchain-community==0.4.2
 langchain-openai==1.3.3
 langchain-google-genai==4.2.6
+langchain-google-vertexai==3.0.1
 langchain-huggingface==1.2.2
 langchain-text-splitters==1.1.2
 langgraph==1.2.7
@@ -49,11 +50,9 @@ tiktoken==0.13.0
 
 # Multi-agent orchestration
 crewai==1.15.1
-# CrewAI's native providers only accept known OpenAI/Gemini/etc. model names.
-# We route a Gemini model through the OpenAI-compatible LLM proxy as
-# "openai/gemini-2.5-flash", which fails native validation, so CrewAI falls back
-# to LiteLLM (its OpenAI-compatible custom-endpoint path). That fallback is an
-# optional dependency — install it explicitly or startup raises ImportError.
+# CrewAI reaches Vertex AI through LiteLLM using the "vertex_ai/<model>" prefix
+# (reading GOOGLE_CLOUD_PROJECT / GOOGLE_CLOUD_LOCATION). LiteLLM is an optional
+# CrewAI dependency — install it explicitly or startup raises ImportError.
 litellm==1.91.0
 mcp==1.26.0
 

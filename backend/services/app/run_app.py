@@ -35,7 +35,7 @@ def _build_graph():
         qdrant_threshold = 0.25,
         reranking_threshold = -5,
         shortterm_memory_size = 5,
-        max_revision_cycles = 3,
+        max_revision_cycles = 1,
     )
 
 

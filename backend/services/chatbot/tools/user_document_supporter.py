@@ -59,6 +59,7 @@ class UserDocumentSupporter:
             resp = self.__qdrant_client.retrieve_query(
                 collection_name = USER_DOCUMENTS_COLLECTION,
                 embedded_query = embedded_query,
+                top_k = 3,  # 4 seeds * 5
                 user_id = user_id,               # per-user isolation
                 with_payload = True,             # need the chunk text
             )

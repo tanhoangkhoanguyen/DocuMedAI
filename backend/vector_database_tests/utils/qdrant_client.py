@@ -15,6 +15,7 @@ from qdrant_client.http.models import (
     PayloadSchemaType,
     PointStruct,
     SearchParams,
+    VectorParams,
 )
 from typing import Any, Dict, List, Optional
 

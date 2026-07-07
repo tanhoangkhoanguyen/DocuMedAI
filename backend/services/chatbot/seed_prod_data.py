@@ -30,6 +30,7 @@ _LOGGER = get_logger(
 )
 
 _MEDICAL_COLLECTION = "MedicalTerms"
+_LONGTERM_COLLECTION = "LongtermMemory"
 PROD_DATASET_DIR = "services/chatbot/prod_dataset"
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 EMBEDDING_DIMENSION = 384
@@ -77,6 +78,14 @@ def seed(force: bool = False) -> dict:
         embedding_model = EMBEDDING_MODEL,
         embedding_dimension = EMBEDDING_DIMENSION,
     )
+
+    # Long-term memory is created lazily on first archival write, but the retriever
+    # reads it every turn once short-term memory is non-empty — so it must exist
+    # before the first read. Create it if absent; never wipe it (create_collection
+    # is destructive), so archived memories survive restarts.
+    if not qdrant_client.collection_exists(_LONGTERM_COLLECTION):
+        qdrant_client.create_collection(_LONGTERM_COLLECTION)
+        _LOGGER.info(f"Created empty '{_LONGTERM_COLLECTION}' collection.")
 
     existing = qdrant_client.count_points(_MEDICAL_COLLECTION)
     if existing > 0 and not force:

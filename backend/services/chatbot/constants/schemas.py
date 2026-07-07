@@ -69,7 +69,7 @@ class ToolParameter(BaseModel):
 
 class TaskState(BaseModel):
     context: str = Field(default_factory = str)
-    message: str = Field(default_factory = str)
+    messages: List[str] = Field(default_factory = list)
     result: str = Field(default_factory = str)
 
 
@@ -97,7 +97,7 @@ class GraphState(BaseModel):
     user_info: UserInfo
     chat_history: Annotated[List[AnyMessage], add_messages] = Field(default_factory = list)
     user_inputs: Optional[List[SubMessageState]] = None
-    task_list: Optional[List[List[TaskState]]] = Field(default_factory = list)
+    task_list: Optional[List[TaskState]] = Field(default_factory = list)
     shortterm_memory: List[str] = Field(default_factory = list)
     user_document: Optional[UserDocumentRef] = None
 

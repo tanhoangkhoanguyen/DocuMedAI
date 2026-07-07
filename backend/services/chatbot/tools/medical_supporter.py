@@ -47,6 +47,8 @@ class MedicalSupporter:
             resp = self.__qdrant_client.retrieve_query(
                 collection_name = _MEDICAL_COLLECTION,
                 embedded_query = vec,
+                top_k = 3,  # 4 seeds * 5
+                with_payload = True,
             )
             for text in self.__qdrant_client._payload_texts_from_response(resp):
                 if text not in seen:

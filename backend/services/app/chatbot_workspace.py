@@ -526,9 +526,14 @@ class ChatbotWorkspace:
             graph,
         ) -> str:
         state = self._build_reply_state(id, username, chat_id, message)
+        # Fresh thread per turn: Redis/Mongo already hold the durable history and we
+        # reload it into `state` every turn, so the in-memory checkpointer must NOT
+        # re-accumulate prior turns (that duplicated chat_history via add_messages).
+        # hash_user_id seeds a new UUID from username + timestamp → unique per invoke.
+        thread_id = self.__pattern_cipher.hash_user_id(username)
         result = graph.invoke(
             input = state,
-            config = {"configurable": {"thread_id": chat_id}},
+            config = {"configurable": {"thread_id": thread_id}},
         )
 
         chatbot_response = self._extract_reply(result)

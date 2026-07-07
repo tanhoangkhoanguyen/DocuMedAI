@@ -3,6 +3,10 @@
 **/venv
 **/.venv
 
+# GCP service-account key (Vertex AI credentials - never commit)
+gcp-sa.json
+**/gcp-sa.json
+
 # Cache
 **/__pycache__
 **/data_storage/

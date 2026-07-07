@@ -78,12 +78,12 @@ export default function MessageInput({
           onClick={() => fileInputRef.current?.click()}
           title="Upload a document (PDF, DOCX, TXT)"
           aria-label="Upload a document"
-          className="flex h-[52px] w-[52px] shrink-0 items-center justify-center rounded-full border border-[#102A26]/15 bg-white/80 text-[22px] font-light text-[#102A26] shadow-lg backdrop-blur transition-[transform,background,color] hover:border-[#FF5436]/60 hover:text-[#FF5436] active:translate-y-px disabled:cursor-not-allowed disabled:opacity-40"
+          className="flex h-[52px] w-[52px] shrink-0 items-center justify-center rounded-full border border-[#102A26]/15 bg-white/80 text-[32px] font-light leading-none text-[#102A26] shadow-lg backdrop-blur transition-[transform,background,color] hover:border-[#FF5436]/60 hover:text-[#FF5436] active:translate-y-px disabled:cursor-not-allowed disabled:opacity-40"
         >
           {uploading ? (
-            <span className="h-4 w-4 animate-spin rounded-full border-2 border-[#102A26]/30 border-t-[#FF5436]" />
+            <span className="h-5 w-5 animate-spin rounded-full border-2 border-[#102A26]/30 border-t-[#FF5436]" />
           ) : (
-            <span aria-hidden className="-mt-0.5">+</span>
+            <span aria-hidden>+</span>
           )}
         </button>
         <div className="flex min-h-[52px] flex-1 items-center rounded-2xl border border-[#102A26]/15 bg-white/80 px-1 py-1 shadow-lg backdrop-blur transition-colors focus-within:border-[#FF5436]/60">
