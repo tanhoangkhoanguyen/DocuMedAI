@@ -15,7 +15,8 @@
   <img src="https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white" alt="Docker">
 </p>
 
-> _Flow diagram coming soon._
+<img src="docs/assets/documedai-login.png">
+<img src="docs/assets/documedai-chat.png">
 
 ## Why
 

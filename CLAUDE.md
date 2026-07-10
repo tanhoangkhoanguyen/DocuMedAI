@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 DocuMedAI is a full-stack AI-powered medical document analysis system. Users upload medical documents, then ask questions via a chat interface. The backend uses a multi-agent LangGraph workflow with RAG retrieval across vector databases. The system supports persistent conversation memory, Redis caching, and JWT + Supabase authentication.
 
-**Key concept**: The LangGraph `StateGraph` routes each message through TopicChecker → MessageAnalysis → LongTermMemoryRetriever → Agents (CrewAI) → SchemaUpdater. RAG uses Qdrant retrieval with cross-encoder reranking. When a topic change is detected, the prior conversation is archived to a Qdrant long-term memory collection.
+**Key concept**: The LangGraph `StateGraph` is a **strictly linear pipeline** (no conditional edges — see `workflow.py:88-93`): TopicChecker → MessageAnalysis → LongTermMemoryRetriever → Agents (CrewAI) → SchemaUpdater. The branching (topic-change early-return, revision loop) lives *inside* the nodes, not in graph routing. RAG uses Qdrant retrieval with cross-encoder reranking. When a topic change is detected inside `TopicChecker`, the prior conversation is summarized and archived to a Qdrant long-term memory collection.
 
 ## Architecture
 
@@ -22,8 +22,8 @@ DocuMedAI is a full-stack AI-powered medical document analysis system. Users upl
 | Persistence | MongoDB | `backend/services/utils/mongo_client.py` |
 | Auth | JWT + Supabase SSR | `backend/services/app/auth_api.py`, `frontend/lib/supabase/` |
 | Vector DB | Qdrant (default); alternatives benchmarked in `backend/vector_database_tests/` | `backend/services/chatbot/tools/` |
-| MCP tools | Medical support tool registry | `backend/services/chatbot/mcp.py` |
-| Encryption | Pattern cipher for stored messages | `backend/services/utils/pattern_cipher.py` |
+| MCP tools | In-memory tool registry (NOT the MCP protocol — no JSON-RPC/transport; just a `Dict[str, handler]`) | `backend/services/chatbot/mcp.py` |
+| ID hashing | `pattern_cipher.py` does NOT encrypt — it's `uuid5` deterministic IDs + bcrypt helpers (the bcrypt helpers are currently unused; auth stores plaintext passwords). No message encryption exists anywhere. | `backend/services/utils/pattern_cipher.py` |
 
 **Important**: `backend/services/app/` holds the FastAPI routes and workspace layer. `backend/services/chatbot/` holds the LangGraph graph, nodes, and tools. `backend/services/utils/` holds shared DB clients (MongoDB, Redis, Supabase).
 
@@ -104,7 +104,7 @@ LLM proxy metrics: `http://localhost:8081/metrics`
 | File | Purpose |
 |------|---------|
 | `backend/services/app/run_app.py` | FastAPI entry point; graph config constants live here |
-| `backend/services/app/chat_api.py` | Chat endpoints; calls `ChatGraph.ainvoke()` |
+| `backend/services/app/chat_api.py` | Chat endpoints; drives the graph via the workspace layer (synchronous `graph.invoke` run in a threadpool — there is no `ChatGraph` class and no `ainvoke`) |
 | `backend/services/app/chatbot_workspace.py` | Redis/Mongo workspace layer; manages TTL flush |
 | `backend/services/app/auth_api.py` | Auth endpoints + JWT dependency injection |
 | `backend/services/chatbot/workflow.py` | Builds and compiles the LangGraph StateGraph |
@@ -112,20 +112,20 @@ LLM proxy metrics: `http://localhost:8081/metrics`
 | `backend/services/chatbot/tools/rag.py` | RAG pipeline (paraphrase → retrieve → rerank → threshold) |
 | `backend/services/chatbot/constants/schemas.py` | Pydantic models: `GraphState`, `ChatMessageState`, etc. |
 | `backend/services/chatbot/constants/prompts.py` | All LLM prompt templates |
-| `frontend/components/ChatLayout.tsx` | Main chat UI |
-| `frontend/lib/internal-api.ts` | Frontend → backend API client |
+| `frontend/components/ChatLayout.tsx` | Main chat UI; hand-rolled SSE parser for the streaming endpoint |
+| `frontend/lib/proxy-to-backend.ts` | Frontend → backend API client (buffered HTTP; `internal-api.ts` under `frontend/lib/utils/` is just an env-var reader) |
 
 ## Graph Config (run_app.py)
 
 ```python
-chat_model = "gpt-4o-mini"
+chat_model = "gemini-2.5-flash"  # gpt-4o-mini in older commits; now Gemini via the Go proxy
 embedding_model = "sentence-transformers/all-MiniLM-L6-v2"  # dim 384
 reranking_model = "BAAI/bge-reranker-v2-m3"
 qdrant_threshold = 0.25
-reranking_threshold = -5
-topic_threshold = -5
+reranking_threshold = -5  # raw cross-encoder logit; effectively "accept almost anything" — not calibrated
+topic_threshold = -5      # same caveat
 shortterm_memory_size = 5
-max_revision_cycles = 3
+max_revision_cycles = 1   # draft→critic→revise cycles
 max_workers = 4  # requires ≥8 CPU cores
 ```
 
@@ -146,11 +146,11 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=
 ## Data Flow: Chat Message
 
 1. Frontend posts to `/chats/{chat_id}/messages` (Next.js API route → backend)
-2. `chat_api.py` extracts JWT, loads workspace, calls `ChatGraph.ainvoke()`
-3. LangGraph: `TopicChecker` → conditional edge → `MessageAnalysis` → `LongTermMemoryRetriever` → `Agents` → `SchemaUpdater`
-4. `Agents` node runs CrewAI with RAG tool (Qdrant retrieval, cross-encoder reranker)
-5. Response stored in Redis; flushed to MongoDB on TTL expiry or explicit save
-6. Streaming response returned to frontend
+2. `chat_api.py` extracts JWT, loads the workspace, runs the graph synchronously (`graph.invoke` in a threadpool)
+3. LangGraph (linear): `TopicChecker` → `MessageAnalysis` → `LongTermMemoryRetriever` → `Agents` → `SchemaUpdater`
+4. `Agents` node runs CrewAI (Draft Writer → Critic reflection loop) with the RAG tool (Qdrant retrieval, cross-encoder reranker)
+5. Response stored in Redis; flushed to MongoDB on TTL expiry, explicit save, or graceful shutdown (`flush_all`)
+6. **"Streaming" is cosmetic**: the reply is computed in full, then the SSE endpoint (`/messages/stream`) regex-chunks the finished string into fake `token` events (`chatbot_workspace.py:619-630`). Time-to-first-token equals full latency; there is no real token streaming through the graph.
 
 ## Data Flow: Document Upload
 
@@ -160,8 +160,12 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=
 
 ## Vector DB Benchmark Lab (`backend/vector_database_tests/`)
 
-A standalone benchmark to choose which engine to self-host (Qdrant default vs Milvus,
-Weaviate, Vespa, ChromaDB). It is **not** part of the running app — it's a decision tool.
+A benchmark to choose which engine to self-host (Qdrant default vs Milvus,
+Weaviate, Vespa, ChromaDB). The benchmark *pipeline* is a decision tool, but note this
+directory is **load-bearing for prod**: the running app imports its Qdrant client
+(`from vector_database_tests.utils.qdrant_client import get_qdrant_client` in
+`chatbot_workspace.py:11`). Treat `vector_database_tests/utils/qdrant_client.py` as
+production code, not throwaway benchmark code.
 Methodology follows [ann-benchmarks](https://github.com/erikbern/ann-benchmarks): latency is
 only comparable **at equal recall**, so a fast-looking engine isn't rewarded for silently
 searching fewer candidates.
