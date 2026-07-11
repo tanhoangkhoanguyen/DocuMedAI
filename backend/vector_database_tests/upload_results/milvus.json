@@ -1,0 +1,7 @@
+{
+  "collection": "latency_test",
+  "total_indexing_time_s": 615.156,
+  "n_vectors": 999559,
+  "db": "milvus",
+  "timed_out": false
+}

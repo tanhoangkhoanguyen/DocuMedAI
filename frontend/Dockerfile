@@ -1,12 +1,24 @@
-FROM python:3.10-slim
+# syntax=docker/dockerfile:1
 
-WORKDIR /frontend
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Multi-stage build (different stages, different filesystem)
+# Stage 1: Install pakages
+FROM node:20-alpine AS deps
+WORKDIR /app
+COPY package.json package-lock.json* ./
 
-COPY . .
+# Docker cache for npm downloads
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci
 
-EXPOSE 9005
+# Stage 2 (dev): hot-reload server (webpack + polling)
+FROM node:20-alpine AS dev
+WORKDIR /app
+ENV PORT=2011 \
+    HOSTNAME=0.0.0.0 \
+    WATCHPACK_POLLING=true \
+    CHOKIDAR_USEPOLLING=true \
+    CHOKIDAR_INTERVAL=1000
+COPY --from=deps /app/node_modules ./node_modules
 
-CMD ["bash"]
+CMD ["npm", "run", "dev:docker"]

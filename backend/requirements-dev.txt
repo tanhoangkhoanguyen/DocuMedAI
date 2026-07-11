@@ -1,0 +1,18 @@
+# Vector DB benchmark lab only (not used by production API or core CI).
+# Install on top of prod: pip install -r requirements-prod.txt -r requirements-dev.txt
+
+# Pinned to current latest stable (Jun 2026 benchmark run) for reproducibility.
+# Bump deliberately and re-run the full benchmark when changing any pin here —
+# engine/client versions materially affect HNSW build + query performance.
+
+# Vector DB clients (lab tests only)
+chromadb==1.5.9
+weaviate-client==3.26.7
+pymilvus==2.6.15
+
+# Data processing (lab tests only)
+datasets==5.0.0
+pyarrow==24.0.0
+
+# Exact-kNN ground truth for recall@k (brute-force cosine over the 1M corpus)
+faiss-cpu==1.14.3

@@ -1,0 +1,40 @@
+import { NextResponse } from "next/server";
+import { getBackendBearer } from "@/lib/backend-bearer";
+import { getInternalApiBase } from "@/lib/utils/internal-api";
+
+type ProxyInit = RequestInit & { requireAuth?: boolean };
+
+export async function proxyToBackend(
+  path: string,
+  init: ProxyInit = {},
+): Promise<NextResponse> {
+  const { requireAuth = true, ...fetchInit } = init;                          // Require auth by default
+  const headers = new Headers(fetchInit.headers);
+  if (requireAuth) {
+    const token = await getBackendBearer();                                   // Check cookies
+    if (!token) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+  if (!headers.has("Content-Type") && fetchInit.body) {
+    headers.set("Content-Type", "application/json");                          // Tell backend to expect JSON
+  }
+  const res = await fetch(`${getInternalApiBase()}${path}`, {
+    ...fetchInit,
+    headers,
+    cache: "no-store",
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    return NextResponse.json({ error: text }, { status: res.status });
+  }
+  if (!text) {
+    return NextResponse.json({});
+  }
+  try {
+    return NextResponse.json(JSON.parse(text));
+  } catch {
+    return new NextResponse(text, { status: res.status });
+  }
+}

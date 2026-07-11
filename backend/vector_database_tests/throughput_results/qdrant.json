@@ -1,0 +1,59 @@
+{
+  "db": "qdrant",
+  "collection": "latency_test",
+  "search_param": 32,
+  "workers": 64,
+  "duration_s": 30.0,
+  "levels": [
+    {
+      "target_qps": 50.0,
+      "achieved_rps": 50.02,
+      "sent": 1501,
+      "completed": 1501,
+      "errors": 0,
+      "median_ms": 3.783,
+      "p95_ms": 7.254,
+      "p99_ms": 10.926
+    },
+    {
+      "target_qps": 100.0,
+      "achieved_rps": 100.0,
+      "sent": 3001,
+      "completed": 3001,
+      "errors": 0,
+      "median_ms": 4.314,
+      "p95_ms": 9.769,
+      "p99_ms": 17.064
+    },
+    {
+      "target_qps": 200.0,
+      "achieved_rps": 199.97,
+      "sent": 6001,
+      "completed": 6001,
+      "errors": 0,
+      "median_ms": 4.109,
+      "p95_ms": 8.344,
+      "p99_ms": 10.109
+    },
+    {
+      "target_qps": 400.0,
+      "achieved_rps": 256.62,
+      "sent": 7973,
+      "completed": 7973,
+      "errors": 0,
+      "median_ms": 5619.014,
+      "p95_ms": 10766.746,
+      "p99_ms": 11139.564
+    },
+    {
+      "target_qps": 800.0,
+      "achieved_rps": 249.11,
+      "sent": 7736,
+      "completed": 7736,
+      "errors": 0,
+      "median_ms": 10317.65,
+      "p95_ms": 20554.258,
+      "p99_ms": 21306.914
+    }
+  ]
+}

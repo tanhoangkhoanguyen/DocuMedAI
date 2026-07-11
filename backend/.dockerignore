@@ -1,0 +1,12 @@
+__pycache__/
+venv/
+
+.env
+.env.*
+
+chroma/
+logs/
+services/**/data_storage/
+vector_database_tests/
+
+.git

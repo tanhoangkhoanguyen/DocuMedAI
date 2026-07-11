@@ -1,0 +1,11 @@
+<validation-overrides>
+    <!--
+      Empty by default. The "hnsw-settings-change" validation only fires when REDEPLOYING
+      /app over a vespa that already holds an index AND the HNSW params (M / efConstruction)
+      changed. Vespa caps the override at 30 days in the future, so it cannot be a permanent
+      committed date. If you change the HNSW settings and redeploy over the old index, add an
+      allow line (date within 30 days of today), deploy, then revert this file:
+        allow until="YYYY-MM-DD" hnsw-settings-change
+      Or just wipe and redeploy clean with a "down -v" on the vectordb-lab profile.
+    -->
+</validation-overrides>

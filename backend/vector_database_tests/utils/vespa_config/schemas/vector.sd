@@ -1,0 +1,39 @@
+schema vector {
+    document vector {
+        field collection type string {
+            indexing: attribute | summary
+            attribute: fast-search
+        }
+
+        field query type string {
+            indexing: summary
+        }
+
+        field doc_id type string {
+            indexing: attribute | summary
+        }
+
+        field embedded_query type tensor<float>(x[384]) {
+            indexing: attribute | index
+            attribute {
+                distance-metric: angular
+            }
+            index {
+                hnsw {
+                    max-links-per-node: 64
+                    neighbors-to-explore-at-insert: 200
+                }
+            }
+        }
+    }
+
+    rank-profile default {
+        inputs {
+            query(query_embedding) tensor<float>(x[384])
+        }
+
+        first-phase {
+            expression: closeness(field, embedded_query)
+        }
+    }
+}

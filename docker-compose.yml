@@ -1,119 +1,241 @@
+# Default: DocuMedAI app (Mongo + Redis + Qdrant + API + Next.js).
+# Optional vector stores for backend/vector_database_tests benchmarks:
+#   docker compose --profile vectordb-lab up -d --build
+
 services:
   la-qdrant:
-    image: qdrant/qdrant:latest
+    image: qdrant/qdrant:v1.18.2
     restart: unless-stopped
     container_name: la-qdrant-service
     ports:
-      - "9001:6333"  
-      - "6335:6334"   
-    volumes:
-      - ./qdrant_data:/qdrant/storage
-      - ./qdrant_config/production.yaml:/qdrant/config/production.yaml
-    environment:
-      - QDRANT__SERVICE__API_KEY=${QDRANT_API_KEY}
+      - "6333:6333"
     networks:
-      - backend-net
-  
-  la-elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.8.1
-    container_name: la-elasticsearch-service
-    environment:
-      node.name: ${NODE_NAME:-es-node1}
-      cluster.name: ${CLUSTER_NAME:-es-cluster}
-      discovery.type: ${DISCOVERY_TYPE:-single-node}
-      bootstrap.memory_lock: "true"
-      ES_JAVA_OPTS: "${ES_JAVA_OPTS:- -Xms1g -Xmx1g}"
-      xpack.security.enabled: "true"
-      ELASTIC_PASSWORD: ${ELASTIC_PASSWORD}
-    ulimits:
-      memlock:
-        soft: -1
-        hard: -1
+      - documedai-net
     volumes:
-      - esdata:/usr/share/elasticsearch/data
+      - ./backend/vector_database_tests/utils/data_storage/qdrant_data:/qdrant/storage
+    # Equal resource budget across all perf DBs (see la-milvus/weaviate/vespa).
+    mem_limit: 8g
+    cpus: 4.0
+
+  la-mongo:
+    image: mongo:8.0.13-noble
+    restart: unless-stopped
+    container_name: la-mongo-service
     ports:
-      - "9002:9200" 
+      - "27017:27017"
     networks:
-      - backend-net
-  
-  la-mongodb:
-    image: mongo:7.0
-    container_name: la-mongodb-services
-    environment:
-      MONGO_INITDB_ROOT_USERNAME: ${MONGO_INITDB_ROOT_USERNAME}
-      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_INITDB_ROOT_PASSWORD}
-    ports:
-      - "9003:27017"
+      - documedai-net
     volumes:
-      - mongodb_data:/data/db
+      - ./backend/services/utils/data_storage/mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 180s
+
+  la-redis:
+    image: redis:7.2-alpine
+    restart: unless-stopped
+    container_name: la-redis-service
+    command: redis-server --notify-keyspace-events Ex
+    ports:
+      - "6379:6379"
     networks:
-      - backend-net
+      - documedai-net
+    volumes:
+      - ./backend/services/utils/data_storage/redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  la-llm-proxy:
+    # OpenAI-compatible gateway in front of Gemini's OpenAI-compat endpoint: rate
+    # limit, retry/backoff, circuit breaker, in-flight dedup, Prometheus metrics.
+    # The backend points its LLM base_url here instead of at Google directly.
+    # See backend/llm-proxy/.
+    build:
+      context: ./backend/llm-proxy
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    container_name: la-llm-proxy-service
+    env_file:
+      - path: .env                       # provides the REAL GEMINI_API_KEY
+    environment:
+      # Google's OpenAI-compatible Gemini endpoint. The proxy strips the leading
+      # /v1 from inbound paths, so this base must NOT end in /v1.
+      OPENAI_UPSTREAM_BASE: https://generativelanguage.googleapis.com/v1beta/openai
+      UPSTREAM_API_KEY: ${GEMINI_API_KEY}  # injected as the upstream Bearer token
+      PROXY_PORT: "8081"
+      REDIS_URL: redis://la-redis:6379/1 # DB 1 — separate from the app cache on DB 0
+    depends_on:
+      la-redis:
+        condition: service_healthy
+    ports:
+      - "8081:8081"                      # expose for local /metrics + smoke tests
+    networks:
+      - documedai-net
+    healthcheck:
+      # distroless image has no shell/curl; use the Go binary's own probe.
+      test: ["CMD", "/llm-proxy", "-healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  la-milvus:
+    profiles: ["vectordb-lab"]
+    image: milvusdb/milvus:v2.6.18
+    container_name: la-milvus-service
+    command: milvus run standalone
+    ports:
+      - "19530:19530"
+      - "9091:9091"
+    environment:
+      ETCD_USE_EMBED: "true"
+      ETCD_DATA_DIR: /var/lib/milvus/etcd
+      ETCD_CONFIG_PATH: /milvus/configs/advanced/etcd.yaml
+      COMMON_STORAGETYPE: local
+      DEPLOY_MODE: STANDALONE
+      MILVUS_STREAMING_SERVICE_ENABLED: "false"
+      COMMON_STORAGE_ENABLEV2: "false"
+    networks:
+      - documedai-net
+    volumes:
+      - ./backend/vector_database_tests/utils/data_storage/milvus_data:/var/lib/milvus
+    mem_limit: 8g
+    cpus: 4.0
+
+  la-vespa:
+    profiles: ["vectordb-lab"]
+    image: vespaengine/vespa:8.709.19
+    restart: unless-stopped
+    container_name: la-vespa-service
+    hostname: vespa-container
+    ports:
+      - "8080:8080"
+      - "19071:19071"
+    networks:
+      - documedai-net
+    volumes:
+      - ./backend/vector_database_tests/utils/vespa_config:/app
+      - ./backend/vector_database_tests/utils/data_storage/vespa_data:/opt/vespa/var
+    mem_limit: 8g
+    cpus: 4.0
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:19071/state/v1/health"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 360s
+
+  la-weaviate:
+    profiles: ["vectordb-lab"]
+    image: semitechnologies/weaviate:1.37.9
+    container_name: la-weaviate-service
+    restart: unless-stopped
+    ports:
+      - "8083:8080"
+    environment:
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "true"
+      PERSISTENCE_DATA_PATH: "/var/lib/weaviate"
+      ENABLE_MODULES: ""
+      DEFAULT_VECTORIZER_MODULE: ""
+      CLUSTER_HOSTNAME: "node1"
+    networks:
+      - documedai-net
+    volumes:
+      - ./backend/vector_database_tests/utils/data_storage/weaviate_data:/var/lib/weaviate
+    mem_limit: 8g
+    cpus: 4.0
+
+  la-chroma:
+    profiles: ["vectordb-lab"]
+    image: chromadb/chroma:1.5.9
+    container_name: la-chroma-service
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    networks:
+      - documedai-net
+    volumes:
+      - ./backend/vector_database_tests/utils/data_storage/chroma_data:/data
+    mem_limit: 8g
+    cpus: 4.0
 
   la-backend:
     build:
-      context: .
-      dockerfile: backend/Dockerfile
-    container_name: la-backend-service
-    volumes:
-      - ./backend:/backend
-    ports:
-      - "9004:9004"
-    stdin_open: true   
-    tty: true 
-    restart: always
-    command: python -m services.chatbot.app.main
-    environment:
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
-      TAVILY_API_KEY: ${TAVILY_API_KEY}
-      TAVILY_SEARCH_URL: ${TAVILY_SEARCH_URL}
-      LANGCHAIN_TRACING_V2: ${LANGCHAIN_TRACING_V2}
-      LANGCHAIN_ENDPOINT: ${LANGCHAIN_ENDPOINT}
-      LANGCHAIN_API_KEY: ${LANGCHAIN_API_KEY}
-      LANGCHAIN_PROJECT: ${LANGCHAIN_PROJECT}
-      QDRANT_URL: ${QDRANT_URL}
-      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY}
-      ELASTIC_HOST: ${ELASTIC_HOST}
-      ELASTIC_PASSWORD: ${ELASTIC_PASSWORD}
-      MONGODB_URI: mongodb+srv://${MONGO_INITDB_ROOT_USERNAME}:${MONGO_INITDB_ROOT_PASSWORD}@cluster0.rcb50pi.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0
+      context: ./backend
+      dockerfile: Dockerfile
     env_file:
-      - .env
-
+      - path: .env
+    environment:
+      MONGO_URL: mongodb://la-mongo:27017/
+      REDIS_URL: redis://la-redis:6379/0
+      QDRANT_URL: http://la-qdrant:6333
+      # Chat-completion calls run on Google Vertex AI.
+      # Read by services.chatbot.tools.llm_config; also consumed by LiteLLM (CrewAI).
+      GOOGLE_CLOUD_PROJECT: ${GOOGLE_CLOUD_PROJECT}
+      GOOGLE_CLOUD_LOCATION: ${GOOGLE_CLOUD_LOCATION:-us-central1}
+      # ADC: service-account key mounted read-only below.
+      GOOGLE_APPLICATION_CREDENTIALS: /secrets/gcp-sa.json
     depends_on:
-      - la-qdrant
-      - la-elasticsearch
-      - la-mongodb
+      la-qdrant:
+        condition: service_started
+      la-mongo:
+        condition: service_healthy
+      la-redis:
+        condition: service_healthy
+    restart: unless-stopped
+    container_name: la-backend-service
+    ports:
+      - "2010:2010"
     networks:
-      - backend-net
-  
+      - documedai-net
+    volumes:
+      - ./backend:/backend            # live source → uvicorn reload + logs to host ./backend/logs
+      - models_cache:/models
+      - ${GOOGLE_SA_KEY_PATH:-./gcp-sa.json}:/secrets/gcp-sa.json:ro  # Vertex AI ADC
+    mem_limit: 8g                    # ground_truth (faiss exact-kNN over 1M vectors)
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:2010/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 180s
+
   la-frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    container_name: la-frontend-service
     volumes:
-      - ./frontend:/frontend
-    ports:
-      - "9005:9005" 
-    stdin_open: true   
-    tty: true 
-    command: python -m run         
+      - ./frontend:/app               # live source → hot-reload
+      - /app/node_modules             # keep image node_modules (Linux binaries)
+      - /app/.next                    # keep dev cache in container (avoids stale host .next)
+    env_file:
+      - path: .env
     environment:
-      - CHATBOT_SERVICE_URL=http://la-backend-service:9004
+      INTERNAL_API_BASE: http://la-backend:2010
+      # Docker Desktop on Windows/macOS: inotify events often miss bind-mount writes
+      WATCHPACK_POLLING: "true"
+      CHOKIDAR_USEPOLLING: "true"
+      CHOKIDAR_INTERVAL: "1000"
     depends_on:
-      - la-backend
+      la-backend:
+        condition: service_healthy
+    restart: unless-stopped
+    container_name: la-frontend-service
+    ports:
+      - "2011:2011"
     networks:
-      - frontend-net
-      - backend-net
-
-volumes:
-  esdata:
-    driver: local
-  mongodb_data:
-    driver: local
-
+      - documedai-net
 
 networks:
-  backend-net:
+  documedai-net:
     driver: bridge
-  frontend-net:
-    driver: bridge
+
+volumes:
+  models_cache:

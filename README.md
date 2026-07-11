@@ -1,110 +1,67 @@
-# lawAdvisory ⚖️🤖
-[![Docker Compose](https://img.shields.io/badge/Docker--Compose-2.17.3-2496ED)](https://docs.docker.com/compose/)
-[![Qdrant](https://img.shields.io/badge/Qdrant-1.7.3-orange)](https://qdrant.tech/)
-[![Elasticsearch](https://img.shields.io/badge/Elasticsearch-8.13.4-005571)](https://www.elastic.co/elasticsearch/)
-[![MongoDB](https://img.shields.io/badge/MongoDB-4.0.1-47A248)](https://www.mongodb.com/)
-[![Redis](https://img.shields.io/badge/Redis-5.0.8-DC382D)](https://redis.io/)
-[![LangChain](https://img.shields.io/badge/LangChain-0.3.25-1A73E8)](https://www.langchain.com/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.111.0-009688)](https://fastapi.tiangolo.com/)
-[![Streamlit](https://img.shields.io/badge/Streamlit-1.28.0-FF4B4B)](https://streamlit.io/)
+<h1 align="center">🩺 DocuMedAI</h1>
+<p align="center"><em>Upload your medical documents. Ask in plain language. Get answers you can trust.</em></p>
 
-<p align="center"> 
-  <img src="backend/services/chatbot/assets/system_design-phase_2.png" width="" alt="">
-  <br>
-  <b>Figure 1:</b> System Design
-  <br><br><br>
-  <img src="backend/services/chatbot/assets/chatbot-phase_2 (detailed).png" width="" alt="">
-  <b>Figure 2:</b> Multi Agents core (detail)
+<p align="center">
+  <img src="https://img.shields.io/badge/Next.js-000000?logo=nextdotjs&logoColor=white" alt="Next.js">
+  <img src="https://img.shields.io/badge/React-20232A?logo=react&logoColor=61DAFB" alt="React">
+  <img src="https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white" alt="FastAPI">
+  <img src="https://img.shields.io/badge/Go-00ADD8?logo=go&logoColor=white" alt="Go">
+  <img src="https://img.shields.io/badge/LangGraph-1C3C3C?logo=langchain&logoColor=white" alt="LangGraph">
+  <img src="https://img.shields.io/badge/CrewAI-FF5A50?logo=crewai&logoColor=white" alt="CrewAI">
+  <img src="https://img.shields.io/badge/Qdrant-DC244C?logo=qdrant&logoColor=white" alt="Qdrant">
+  <img src="https://img.shields.io/badge/Redis-FF4438?logo=redis&logoColor=white" alt="Redis">
+  <img src="https://img.shields.io/badge/MongoDB-47A248?logo=mongodb&logoColor=white" alt="MongoDB">
+  <img src="https://img.shields.io/badge/Supabase-3FCF8E?logo=supabase&logoColor=white" alt="Supabase">
+  <img src="https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white" alt="Docker">
 </p>
 
+<img src="docs/assets/documedai-login.png">
+<img src="docs/assets/documedai-chat.png">
 
-## 📜 Overview
-**lawAdvisory** is an AI-powered **Retrieval-Augmented Generation (RAG)** chatbot that helps users quickly find clear, reliable U.S. legal topics across:
-- Criminal Law
-- Environmental Law
-- Civil Law
-- International Law
-- Labor & Employment Law
+## Why
 
-## ✨ Key Features
-**Multithreaded Chatbot Pipeline**: Built with **LangGraph**, **LangChain**, **LangSmith**, and **OpenAI API** model.
+Medical paperwork is dense, and generic chatbots guess, hallucinate, and forget. DocuMedAI remembers your conversation, reasons through a
+multi-agent workflow, and runs on production-grade infrastructure.
 
-**RAG Pipeline**: Dual retrieval from **Elasticsearch** and **Qdrant** with paraphrasing and generalization techniques, enhanced by **HuggingFace** reranker `BAAI/bge-reranker-v2-m3`.
+- **Grounded** - RAG over your docs (Qdrant + cross-encoder reranking); weak matches are dropped, not fabricated.
+- **Persistent** - short-term context plus long-term memory recalled across topics.
+- **Hardened** - Go LLM gateway (rate limit, retry, circuit breaker), encrypted messages, JWT + Supabase auth.
 
-**DAG-based Memory Tool**: **MongoDB** stores conversation context as a DAG (user message + chatbot response); **Qdrant** (**HuggingFace** embedding model `sentence-transformers/all-MiniLM-L6-v2`) retrieves root nodes; BFS traversal retrieves related parental nodes; **HuggingFace** reranker `BAAI/bge-reranker-v2-m3` ensures top context selection. User's message is then combined with chatbot response embedded in **Qdrant** and encrypted in **MongoDB** with an assigned unique node IDs.
+## Stack
 
-**Message Analysis Node**: Segments user input into context-specific chunks; each chunk can trigger multiple sub-requests based on intent classification.
+| Layer | Tech | Port |
+|-------|------|------|
+| Frontend | Next.js 15 / React 19 | 2011 |
+| Backend | FastAPI | 2010 |
+| LLM proxy | Go gateway → Gemini (OpenAI-compatible) | 8081 |
+| RAG | Qdrant + BAAI reranker | 6333 |
+| Memory | Redis → MongoDB | 6379 / 27017 |
 
-**Microservices Architecture**: Docker containers for five services: la-qdrant (9001), la-elasticsearch (9002), la-mongodb (9003), la-backend (9004, Swagger UI), la-frontend (9005, Streamlit UI).
+Each message flows: **TopicChecker → MessageAnalysis → LongTermMemory → Agents (CrewAI + RAG) → SchemaUpdater**.
 
-**Multi-Agent Support**: Agents for chit-chat, instructional assistance, and law advisory; intent detection routes chunks to the correct agent; **Tavily** data used for final law verification.
+## Fast API
 
-**Data Preprocessing**: Clean raw documents by removing icons, images using NLP, PyPDF.
+| Method | Path | |
+|--------|------|--|
+| POST | `/auth/register` · `/auth/login` · `/auth/supabase-sync` | auth |
+| GET | `/auth/me` | current user |
+| GET · POST | `/chats` | list / create |
+| PATCH | `/chats/{id}` | rename |
+| GET · POST | `/chats/{id}/messages` | history / send |
+| POST | `/chats/{id}/messages/stream` | stream reply (SSE) |
+| GET | `/health` | liveness |
 
-## 🗝 Environment Variables
-Create a `.env` in the project root:
+**Frontend** (`:2011`) — chat UI + `/api/*` routes proxying the backend.
+**LLM proxy** (`:8081`) — `/v1/*` completions, `/healthz`, `/metrics`.
+
+## Vector DB benchmark
+
+Five engines (Qdrant, Milvus, Weaviate, Vespa, ChromaDB) benchmarked the honest way - [ann-benchmarks](https://github.com/erikbern/ann-benchmarks) style, latency compared at equal recall. Lab lives in `backend/vector_database_tests/`.
+
+## Run
+
 ```bash
-# === API Keys ===
-OPENAI_API_KEY=your_openai_api_key
-TAVILY_API_KEY=your_tavily_api_key
-TAVILY_SEARCH_URL=https://api.tavily.com/search
-
-# === LangChain Tracing === (optional)
-LANGCHAIN_TRACING_V2=true
-LANGCHAIN_ENDPOINT=https://api.smith.langchain.com
-LANGCHAIN_API_KEY=your_langchain_api_key
-LANGCHAIN_PROJECT=lawAdvisory
-
-# === Qdrant Config ===
-QDRANT_API_KEY=your_qdrant_api_key
-QDRANT_URL=https://your-qdrant-instance-url
-
-# === Elasticsearch Config ===
-ELASTIC_PASSWORD=your_elastic_password
-ELASTIC_HOST=http://la-elasticsearch:9200
-ELASTIC_API_KEY=your_elastic_api_key
-# Default username: elastic
-
-# === MongoDB Config ===
-MONGO_INITDB_ROOT_USERNAME=your_mongo_username
-MONGO_INITDB_ROOT_PASSWORD=your_mongo_password
-MONGODB_URI=mongodb+srv://<username>:<password>@<cluster-url>/?retryWrites=true&w=majority
-
-# === Service Ports ===
-CHATBOT_SERVICE_PORT=9004
-```
-
-## 🚀 Getting Started
-### 1. Setup
-```bash
-git clone https://github.com/tanhoangkhoanguyen/lawAdvisory.git
-cd lawAdvisory
+cp .env.example .env        # fill in keys
 docker compose up -d --build
 ```
 
-### 2. Upload Data
-```bash
-python -m services.data_setup.data_upload
-```
-> Ensure `.env` is configured before running this step.
-
-### 3. Access Services
-| Service                  | Purpose                    | URL                                            |
-| ------------------------ | -------------------------- | ---------------------------------------------- |
-| **Elasticsearch Status** | Check ElasticSearch health            | [http://localhost:9002](http://localhost:9002) |
-| **Swagger UI**           | Test backend API endpoints | [http://localhost:9004](http://localhost:9004) |
-| **Chatbot UI**           | Interact with the chatbot  | [http://localhost:9005](http://localhost:9005) |
-
-## 🤝 Contributing
-1. Fork this repository
-2. Create a feature branch
-3. Commit changes
-4. Open a Pull Request
-
-## 📜 License
-MIT License – see [LICENSE](https://mit-license.org/)
-
-
-<p align="center">
-  <i>Built with 💙 for a more advanced future</i>
-</p>

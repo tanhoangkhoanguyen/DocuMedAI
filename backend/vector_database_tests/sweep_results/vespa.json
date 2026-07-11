@@ -1,0 +1,44 @@
+{
+  "db": "vespa",
+  "k": 10,
+  "recall_target": 0.95,
+  "recall_target_met": true,
+  "chosen": {
+    "db": "vespa",
+    "k": 10,
+    "search_param": 64,
+    "recall_at_k": 0.9737,
+    "median_ms": 7.749,
+    "p95_ms": 10.659,
+    "n_queries": 10000
+  },
+  "trials": [
+    {
+      "db": "vespa",
+      "k": 10,
+      "search_param": 64,
+      "recall_at_k": 0.9737,
+      "median_ms": 7.749,
+      "p95_ms": 10.659,
+      "n_queries": 10000
+    },
+    {
+      "db": "vespa",
+      "k": 10,
+      "search_param": 128,
+      "recall_at_k": 0.9871,
+      "median_ms": 8.175,
+      "p95_ms": 11.098,
+      "n_queries": 10000
+    },
+    {
+      "db": "vespa",
+      "k": 10,
+      "search_param": 256,
+      "recall_at_k": 0.9935,
+      "median_ms": 9.797,
+      "p95_ms": 14.354,
+      "n_queries": 10000
+    }
+  ]
+}

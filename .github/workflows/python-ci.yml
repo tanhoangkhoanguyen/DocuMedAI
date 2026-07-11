@@ -1,0 +1,47 @@
+name: Python CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - develop
+      - feature/Setup-CI
+
+env:
+  COMPOSE: docker compose -f docker-compose.yml -f docker-compose.ci.yml
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Write CI .env
+        run: |
+          cat > .env <<'EOF'
+          UUID_NAMESPACE="b1343753-a4f3-4be8-94c6-9780ee37ab61"
+          AUTH_JWT_SECRET=test-auth-secret
+          SUPABASE_JWT_SECRET=test-supabase-secret
+          EOF
+
+      - name: Start core stack
+        run: |
+          $COMPOSE up -d --build --wait la-qdrant la-mongo la-redis
+          $COMPOSE up -d --build la-backend
+
+      - name: Run backend CI tests
+        run: |
+          $COMPOSE exec -T la-backend pytest -q \
+            ci_tests/integration/utils \
+            ci_tests/integration/api \
+            ci_tests/integration/vector_db/test_qdrant_client.py
+
+      - name: Dump logs on failure
+        if: failure()
+        run: $COMPOSE logs --no-color
+
+      - name: Tear down
+        if: always()
+        run: $COMPOSE down -v

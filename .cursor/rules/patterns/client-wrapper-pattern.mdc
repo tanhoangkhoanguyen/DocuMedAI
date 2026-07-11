@@ -1,0 +1,35 @@
+---
+description: Mandatory layout and error-handling pattern for new *client.py SDK wrappers (see qdrant_client.py).
+globs:
+  - backend/**/*_client.py
+alwaysApply: false
+---
+
+# Client-wrapper coding pattern
+
+When **adding** or **editing** **SDK wrapper modules** named `*_client.py` under `backend/`, follow the same structure and conventions as the reference: `backend/vector_database_tests/utils/qdrant_client.py`
+
+## Module layout (top to bottom)
+
+1. **Logger** - `from logger import get_logger`.
+2. **Warning** - `warnings.filterwarnings("ignore")`.
+3. **Library** imports (`os`, etc.).
+
+## Class design
+
+- **One primary wrapper class** per module when wrapping a service (e.g. `QdrantClient`).
+- **Encapsulation** - store the SDK client and heavy dependencies on **`self.__...`** (double leading underscore for private use), **`self._...`** (single leading underscore for public access).
+- **`__init__`** - accept injectable/configurable inputs (models, dimensions, limits); construct the SDK client and helpers here.
+
+## Public methods
+
+- **Snake_case** names that describe the operation (`list_collections`, `push_documents`, `retrieve_query`).
+- **Type hints** on return types and parameters where the reference does (e.g. `-> List[str]`).
+
+## Errors and logging
+
+- Wrap **external I/O** (network, SDK calls) in **`try` / `except Exception as e`**.
+- On failure: **`LOGGER.error(f"<short context>\n\t{str(e)}")`** (message, newline, tab, then exception string) - same shape as the reference.
+- **retrieve_query** methods: on failure log and return a **safe sentinel** (`[]`, `False`, etc.) when that matches product behavior.
+- **Mutations** that must not appear to succeed when they failed: log and **`raise`** after logging (or re-raise the original), as in `delete_collection` / `create_collection`.
+- On successful mutations, **`LOGGER.info`** with enough context to identify the resource.
