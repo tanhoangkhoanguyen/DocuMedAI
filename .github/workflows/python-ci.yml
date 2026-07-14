@@ -27,6 +27,13 @@ jobs:
           EOF
 
       - name: Start core stack
+        env:
+          # Authenticates the HF embedding-model download during the backend image
+          # build (higher rate limits). Optional — if the secret is unset the build
+          # falls back to unauthenticated download with retries. Requires
+          # COMPOSE_BAKE so compose forwards build secrets to BuildKit.
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          COMPOSE_BAKE: "true"
         run: |
           $COMPOSE up -d --build --wait la-qdrant la-mongo la-redis
           $COMPOSE up -d --build la-backend

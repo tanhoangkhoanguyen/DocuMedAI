@@ -170,6 +170,10 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      # (Required) authenticates the HF model pre-cache download. Build fails if
+      # HF_TOKEN is unset/empty. Set it in .env or the shell env.
+      secrets:
+        - hf_token
     env_file:
       - path: .env
     environment:
@@ -181,7 +185,7 @@ services:
       GOOGLE_CLOUD_PROJECT: ${GOOGLE_CLOUD_PROJECT}
       GOOGLE_CLOUD_LOCATION: ${GOOGLE_CLOUD_LOCATION:-us-central1}
       # ADC: service-account key mounted read-only below.
-      GOOGLE_APPLICATION_CREDENTIALS: /secrets/gcp-sa.json
+      # GOOGLE_APPLICATION_CREDENTIALS: /secrets/gcp-sa.json            # Vertex AI ADC. Comment out in deployment
     depends_on:
       la-qdrant:
         condition: service_started
@@ -198,8 +202,8 @@ services:
     volumes:
       - ./backend:/backend            # live source → uvicorn reload + logs to host ./backend/logs
       - models_cache:/models
-      - ${GOOGLE_SA_KEY_PATH:-./gcp-sa.json}:/secrets/gcp-sa.json:ro  # Vertex AI ADC
-    mem_limit: 8g                    # ground_truth (faiss exact-kNN over 1M vectors)
+      # - ${GOOGLE_SA_KEY_PATH:-./gcp-sa.json}:/secrets/gcp-sa.json:ro  # Vertex AI ADC. Comment out in deployment
+    mem_limit: 8g                     # ground_truth (faiss exact-kNN over 1M vectors)
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:2010/health"]
       interval: 10s
@@ -239,3 +243,9 @@ networks:
 
 volumes:
   models_cache:
+
+secrets:
+  # Sourced from the HF_TOKEN env var. Required by the la-backend build — set it
+  # in .env or the shell env, else the backend image build fails.
+  hf_token:
+    environment: HF_TOKEN
