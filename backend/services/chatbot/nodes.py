@@ -1,3 +1,4 @@
+import uuid
 from crewai import Agent, Crew, LLM, Process, Task
 from concurrent.futures import ThreadPoolExecutor
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
@@ -88,11 +89,16 @@ class TopicChecker(Runnable):
         response = self.__llm.invoke(prompt)
         summarized_resp = response.content
         embedded_resp = self.__qdrant_client.embed_query(summarized_resp)
+        if state.user_info:
+            user_id = state.user_info.user_id
+        else:
+            raise ValueError("user_info is required for TopicChecker to store long-term memory")
         self.__qdrant_client.push_documents(
             LONGTERM_COLLECTION,
-            [self.__pattern_cipher.hash_user_id(state.user_info.username)],
-            [summarized_resp],
-            [embedded_resp],
+            ids = [self.__pattern_cipher.hash_user_id(user_id)],
+            queries = None,
+            embedded_queries = [embedded_resp],
+            payloads = [{"query": summarized_resp, "user_id": user_id}],
         )
         state.shortterm_memory = []
         return state
@@ -148,28 +154,37 @@ class LongTermMemoryRetriever(Runnable):
         self.__qdrant_threshold = qdrant_threshold
         self.__max_workers = max_workers
 
-    def __retrieve_longterm_snippet(self, unit: SubMessageState) -> str:
+    def __retrieve_longterm_snippet(self, unit: SubMessageState, user_id: str) -> str:
+        if not user_id:
+            return ""
+
         parts = [unit.context or "", " ".join(unit.messages or []), unit.instruction or ""]
         query = " ".join(p for p in parts if p).strip()
         if not query:
             return ""
 
-        # Retrieve semantic longterm memory
+        # Retrieve semantic longterm memory, scoped to this user (tenant isolation).
         vec = self.__qdrant_client.embed_query(query)
         resp = self.__qdrant_client.retrieve_query(
             LONGTERM_COLLECTION,
-            vec
+            vec,
+            user_id = user_id,
+            with_payload = True,   # payload holds the summary under "query"
         )
 
         return self.__qdrant_client.get_top_scored_payload(resp, self.__qdrant_threshold)
 
     def invoke(self, state: GraphState, config = None):
+        if state.user_info:
+            user_id = state.user_info.user_id
+        else:
+            raise ValueError("user_info is required for LongTermMemoryRetriever to retrieve long-term memory")
         for unit in state.user_inputs:
             if not unit.messages:
                 continue
             state.task_list.append(
                 TaskState(
-                    context = (unit.context or "") + self.__retrieve_longterm_snippet(unit),
+                    context = (unit.context or "") + self.__retrieve_longterm_snippet(unit, user_id),
                     messages = [m.strip() for m in unit.messages if m and m.strip()],
                 )
             )

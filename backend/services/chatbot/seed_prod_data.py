@@ -79,13 +79,13 @@ def seed(force: bool = False) -> dict:
         embedding_dimension = EMBEDDING_DIMENSION,
     )
 
-    # Long-term memory is created lazily on first archival write, but the retriever
-    # reads it every turn once short-term memory is non-empty — so it must exist
-    # before the first read. Create it if absent; never wipe it (create_collection
-    # is destructive), so archived memories survive restarts.
-    if not qdrant_client.collection_exists(_LONGTERM_COLLECTION):
-        qdrant_client.create_collection(_LONGTERM_COLLECTION)
-        _LOGGER.info(f"Created empty '{_LONGTERM_COLLECTION}' collection.")
+    # Recreate long-term memory with a user_id tenant index (P0.2 isolation fix).
+    # create_collection is destructive — this wipes legacy points that were stored
+    # without a user_id payload and are therefore unfilterable/unreachable. The
+    # retriever reads this collection every turn once short-term memory is
+    # non-empty, and now filters by user_id, so the index must exist.
+    qdrant_client.create_collection(_LONGTERM_COLLECTION, payload_indexes = ["user_id"])
+    _LOGGER.info(f"(Re)created '{_LONGTERM_COLLECTION}' with user_id index.")
 
     existing = qdrant_client.count_points(_MEDICAL_COLLECTION)
     if existing > 0 and not force:

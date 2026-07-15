@@ -83,7 +83,7 @@ if __name__ == "__main__":
         embedding_model = embedding_model,
         embedding_dimension = embedding_dimension,
     )
-    qdrant_client.create_collection("LongtermMemory")
+    qdrant_client.create_collection("LongtermMemory", payload_indexes = ["user_id"])
     # Upload medical dataset
     try:
         qdrant_client.create_collection("MedicalTerms")

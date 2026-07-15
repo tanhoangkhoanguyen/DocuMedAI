@@ -530,7 +530,7 @@ class ChatbotWorkspace:
         # reload it into `state` every turn, so the in-memory checkpointer must NOT
         # re-accumulate prior turns (that duplicated chat_history via add_messages).
         # hash_user_id seeds a new UUID from username + timestamp → unique per invoke.
-        thread_id = self.__pattern_cipher.hash_user_id(username)
+        thread_id = self.__pattern_cipher.hash_user_id(id)
         result = graph.invoke(
             input = state,
             config = {"configurable": {"thread_id": thread_id}},
