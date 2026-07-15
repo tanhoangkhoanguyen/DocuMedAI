@@ -50,7 +50,14 @@ COPY --from=builder /opt/venv /opt/venv
 #   - HF_HUB_DOWNLOAD_TIMEOUT makes a stalled connection fail fast instead of hanging.
 #   - the retry loop rides out transient 429s / timeouts.
 ENV HF_HUB_DOWNLOAD_TIMEOUT=30
+# CI passes SKIP_MODEL_PRECACHE=1 to skip this download (the graph is mocked in
+# tests, so the model is never used). Real builds leave it 0 and require HF_TOKEN.
+ARG SKIP_MODEL_PRECACHE=0
 RUN --mount=type=secret,id=hf_token,required=true \
+    if [ "$SKIP_MODEL_PRECACHE" = "1" ]; then \
+      echo "SKIP_MODEL_PRECACHE=1 — skipping HF model pre-cache (model fetched at runtime)"; \
+      exit 0; \
+    fi; \
     HF_TOKEN="$(cat /run/secrets/hf_token)"; export HF_TOKEN; \
     if [ -z "$HF_TOKEN" ]; then echo "ERROR: hf_token secret is empty; set HF_TOKEN" >&2; exit 1; fi; \
     for i in 1 2 3 4 5; do \

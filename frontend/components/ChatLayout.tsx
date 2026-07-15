@@ -61,6 +61,9 @@ export default function ChatLayout({ userEmail }: { userEmail: string }) {
 
   useEffect(() => {
     if (activeId) {
+      // Intentionally syncing local state to an external fetch keyed on activeId;
+      // not a cascading-render smell.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       void loadMessages(activeId);
     }
   }, [activeId, loadMessages]);

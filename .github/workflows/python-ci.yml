@@ -28,11 +28,12 @@ jobs:
 
       - name: Start core stack
         env:
-          # Authenticates the HF embedding-model download during the backend image
-          # build (higher rate limits). Optional — if the secret is unset the build
-          # falls back to unauthenticated download with retries. Requires
-          # COMPOSE_BAKE so compose forwards build secrets to BuildKit.
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          # The Dockerfile marks the hf_token secret required=true, so BuildKit
+          # needs a non-empty value present. CI skips the model pre-cache entirely
+          # via SKIP_MODEL_PRECACHE=1 (docker-compose.ci.yml) — the graph is mocked
+          # in tests, so the model is never used — so a dummy value is enough.
+          # COMPOSE_BAKE lets compose forward build secrets/args to BuildKit.
+          HF_TOKEN: "ci-skip"
           COMPOSE_BAKE: "true"
         run: |
           $COMPOSE up -d --build --wait la-qdrant la-mongo la-redis

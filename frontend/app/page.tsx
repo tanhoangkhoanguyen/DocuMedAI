@@ -28,6 +28,7 @@ export default async function Home() {
   const authCookies = await cookies();
   const authUser = authCookies.get(LOCAL_COOKIE)?.value;
   if (authUser) {
+    let username: string | null = null;
     try {
       const res = await fetch(`${getInternalApiBase()}/auth/me`, {
         headers: { Authorization: `Bearer ${authUser}` },
@@ -35,11 +36,12 @@ export default async function Home() {
       });
       if (res.ok) {
         const metadata = (await res.json()) as { username?: string };
-        return <ChatLayout userEmail={metadata.username || "Unknown"} />;
+        username = metadata.username || "Unknown";
       }
     } catch {
         // backend is down
     }
+    if (username !== null) return <ChatLayout userEmail={username} />;
   }
 
   redirect("/login");
