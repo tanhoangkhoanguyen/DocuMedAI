@@ -1,11 +1,11 @@
 /*
-Every incoming request goes through this 
-middleware before reaching your pages/API routes.
+Every incoming request goes through this
+proxy before reaching your pages/API routes.
 */
 import { type NextRequest } from "next/server";
 import { updateSession } from "@/lib/utils/middleware";
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   return await updateSession(request);
 }
 
