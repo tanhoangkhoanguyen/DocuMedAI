@@ -2,6 +2,7 @@ from datetime import datetime
 from pathlib import Path
 
 import logging
+import sys
 
 _LOGGER_DICT = {}
 
@@ -31,15 +32,21 @@ class SimpleLogger:
 
         log_file = self.logs_dir / f"{self.name}_{datetime.now().strftime('%Y%m%d')}.log"
 
-        file_handler = logging.FileHandler(log_file)
-        file_handler.setLevel(self.level)
-
         formatter = logging.Formatter(
             "%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s"
         )
-        file_handler.setFormatter(formatter)
 
+        file_handler = logging.FileHandler(log_file)
+        file_handler.setLevel(self.level)
+        file_handler.setFormatter(formatter)
         self.logger.addHandler(file_handler)
+
+        # Stream to stdout so `docker compose logs` shows runtime events (the
+        # container previously logged only to files, leaving Docker stdout empty).
+        stream_handler = logging.StreamHandler(sys.stdout)
+        stream_handler.setLevel(self.level)
+        stream_handler.setFormatter(formatter)
+        self.logger.addHandler(stream_handler)
 
     # -------- basic logs --------
     def info(self, msg, **kwargs):
