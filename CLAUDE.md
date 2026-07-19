@@ -21,8 +21,8 @@ DocuMedAI is a full-stack AI-powered medical document analysis system. Users upl
 | Memory cache | Redis (TTL 1800s → flush to MongoDB) | `backend/services/utils/redis_client.py` |
 | Persistence | MongoDB | `backend/services/utils/mongo_client.py` |
 | Auth | JWT + Supabase SSR | `backend/services/app/auth_api.py`, `frontend/lib/supabase/` |
-| Vector DB | Qdrant (default); alternatives benchmarked in `backend/vector_database_tests/` | `backend/services/chatbot/tools/` |
-| MCP tools | In-memory tool registry (NOT the MCP protocol — no JSON-RPC/transport; just a `Dict[str, handler]`) | `backend/services/chatbot/mcp.py` |
+| Vector DB | Qdrant (default); alternatives benchmarked in `backend/vector_database_tests/` | `backend/toolcore/tools/` |
+| MCP tools | In-memory tool registry (NOT the MCP protocol — no JSON-RPC/transport; just a `Dict[str, handler]`) | `backend/toolcore/core.py` |
 | ID hashing | `pattern_cipher.py` does NOT encrypt — it's `uuid5` deterministic IDs + bcrypt helpers (the bcrypt helpers are currently unused; auth stores plaintext passwords). No message encryption exists anywhere. | `backend/services/utils/pattern_cipher.py` |
 
 **Important**: `backend/services/app/` holds the FastAPI routes and workspace layer. `backend/services/chatbot/` holds the LangGraph graph, nodes, and tools. `backend/services/utils/` holds shared DB clients (MongoDB, Redis, Supabase).
