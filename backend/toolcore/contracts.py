@@ -5,8 +5,8 @@ agent (in-process) and the external MCP server (Phase 2).
 Lives in backend/mcp so it depends on nothing under services/. The chatbot graph and
 any MCP surface both import these types from here.
 """
-from dataclasses import dataclass
-from typing import Any, Callable, Dict
+from dataclasses import dataclass, field
+from typing import Any, Callable, Dict, List, Literal
 
 from pydantic import BaseModel
 
@@ -14,6 +14,42 @@ from pydantic import BaseModel
 # ==================== Tool Contracts ====================
 class ToolInputError(Exception):
     """Raised when tool call args fail JSON Schema / model validation at the Core boundary."""
+
+
+class PrincipalRequiredError(ToolInputError):
+    """
+    Raised when a principal-scoped tool (requires_principal=True) is called without a
+    principal. Subclasses ToolInputError so existing `except ToolInputError` sites still
+    catch it — the Core boundary stays one error family.
+    """
+
+
+@dataclass(frozen = True)
+class Principal:
+    """
+    Typed caller identity threaded per-call (NOT bound to a cached singleton). `source`
+    distinguishes the internal LangGraph agent from the external MCP server (Phase 2).
+    """
+    user_id: str
+    source: Literal["internal", "mcp"]
+
+
+@dataclass(frozen = True)
+class ToolResult:
+    """
+    Structured tool output. `content` holds content blocks (today only text; the shape
+    leaves room for richer MCP content types in Phase 2). `duration_ms` is timing metadata
+    for Phase 4 metrics.
+    """
+    tool_name: str
+    content: List[Dict[str, Any]] = field(default_factory = list)
+    duration_ms: float = 0.0
+
+    def text(self) -> str:
+        """Join text blocks with newlines (empty content -> "") — reproduces the legacy string."""
+        return "\n".join(
+            block["text"] for block in self.content if block.get("type") == "text"
+        )
 
 
 class RuntimeConfig(BaseModel):

@@ -1,17 +1,25 @@
-from typing import Dict, Optional, Sequence
+import time
+from typing import Dict, List, Optional, Sequence
 
 from pydantic import ValidationError
 
 from toolcore.contracts import (
     IdentityArgs,
+    Principal,
+    PrincipalRequiredError,
     RuntimeConfig,
     SearchMedicalKnowledgeArgs,
     SearchUserDocumentsArgs,
     ToolInputError,
+    ToolResult,
     ToolSpec,
 )
 from toolcore.tools.medical_supporter import get_medical_supporter
 from toolcore.tools.user_document_supporter import get_user_document_supporter
+from logger import get_logger
+
+
+_LOGGER = get_logger(name = "toolcore", level = "INFO")
 
 
 def search_medical_knowledge(
@@ -135,9 +143,52 @@ class MCPServer:
     def has_tool(self, name: str) -> bool:
         return name in self.__registry
 
-    def execute_tool_call(self, name: str, message: str, user_id: str = "") -> str:
+    def list_tools(self) -> List[ToolSpec]:
+        # Structured catalog for the transport-agnostic surface (Phase 2 tools/list).
+        # Sorted by name to match format_registry's ordering.
+        return [self.__registry[name] for name in sorted(self.__registry.keys())]
+
+    def call_tool(
+            self, name: str, args: dict, principal: Optional[Principal]) -> ToolResult:
+        """
+        Transport-agnostic primary surface: raw dict args + typed Principal -> ToolResult.
+        Both the internal agent and the future MCP server call through here, so per-user
+        isolation is enforced ONCE, in the Core.
+        """
+        spec = self.__registry.get(name)
+        if spec is None:
+            raise ToolInputError(f"unknown tool '{name}'")
+
+        # Principal gate: isolation moved UP into the Core. Refuse before validating or
+        # executing so a principal-scoped tool can never run without a caller identity.
+        if spec.requires_principal and principal is None:
+            raise PrincipalRequiredError(f"tool '{name}' requires a principal")
+
+        # spec.input_schema is the JSON Schema advertised to external clients (Phase 2
+        # tools/list); the MCP server validates raw JSON at its own boundary, so the core
+        # validates once here.
+        try:
+            typed_args = spec.args_model.model_validate(args)
+        except ValidationError as exc:
+            raise ToolInputError(f"invalid args for tool '{name}': {exc}") from exc
+
         # user_id is threaded per-call (NOT bound to this cached-singleton server)
         # so concurrent users never see each other's documents.
+        user_id = principal.user_id if principal else ""
+
+        start = time.monotonic()
+        out = spec.handler(typed_args, self.__config, user_id)
+        duration_ms = (time.monotonic() - start) * 1000.0
+
+        return ToolResult(
+            tool_name = name,
+            content = [{"type": "text", "text": out}],
+            duration_ms = duration_ms,
+        )
+
+    def execute_tool_call(self, name: str, message: str, user_id: str = "") -> str:
+        # Legacy string-in/string-out shim over call_tool, kept so the internal planner
+        # (nodes.py) is untouched. Removed in Phase 2 once the agent speaks call_tool.
         spec = self.__registry.get(name)
         if spec is None:
             return ""
@@ -145,16 +196,20 @@ class MCPServer:
         # The planner emits {tool, message}; map `message` -> the tool's `query` arg.
         # `identity` takes no fields, so it validates against {} and ignores `message`.
         raw_args: Dict[str, str] = {} if spec.args_model is IdentityArgs else {"query": message}
+        principal = Principal(user_id, "internal") if user_id else None
 
-        # Validate + build the typed args in one pass. spec.input_schema is the JSON
-        # Schema advertised to external clients (Phase 2 tools/list); the MCP server
-        # will validate raw JSON at its own boundary, so the core validates once here.
         try:
-            args = spec.args_model.model_validate(raw_args)
-        except ValidationError as exc:
-            raise ToolInputError(f"invalid args for tool '{name}': {exc}") from exc
-
-        return spec.handler(args, self.__config, user_id)
+            return self.call_tool(name, raw_args, principal).text()
+        except PrincipalRequiredError:
+            # A principal-scoped tool (search_user_documents) was routed on the internal
+            # path with no user_id. In the real HTTP flow the JWT guarantees a user_id, so
+            # this means the graph ran outside the authenticated path — an auth/wiring bug,
+            # not a normal user state. Degrade to "" so no other tenant's data leaks, but
+            # log it: if this ever fires in prod it should be visible. call_tool still
+            # raises for the external MCP surface (Phase 2), which maps it to a protocol error.
+            _LOGGER.warning(
+                "principal-scoped tool '%s' called without user_id — skipping", name)
+            return ""
 
 
 def get_mcp_client(
