@@ -5,7 +5,7 @@ warnings.filterwarnings("ignore")
 from datasets import load_dataset
 from langchain_text_splitters import TokenTextSplitter
 from langchain_community.embeddings import HuggingFaceEmbeddings
-from services.utils.pattern_cipher import get_pattern_cipher
+from utils.pattern_cipher import get_pattern_cipher
 
 class DataProcessing:
     def __init__(

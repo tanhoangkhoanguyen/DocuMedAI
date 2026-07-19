@@ -9,11 +9,11 @@ from typing import List
 import torch, warnings
 warnings.filterwarnings("ignore")
 
-from services.chatbot.constants.prompts import (
+from utils.rag_prompts import (
     PARAPHRASE_MESSAGE_PROMPT,
     GENERALIZE_USER_MESSAGE_PROMPT,
 )
-from services.chatbot.tools.llm_config import get_vertex_project, get_vertex_location  # Vertex AI config
+from utils.llm_config import get_vertex_project, get_vertex_location  # Vertex AI config
 from logger import get_logger
 
 

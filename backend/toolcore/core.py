@@ -1,18 +1,29 @@
 from typing import Dict, Optional, Sequence
 
-from services.chatbot.constants.schemas import McpToolDefinition, ToolParameter
-from services.chatbot.tools.medical_supporter import get_medical_supporter
-from services.chatbot.tools.user_document_supporter import get_user_document_supporter
+from pydantic import ValidationError
+
+from toolcore.contracts import (
+    IdentityArgs,
+    RuntimeConfig,
+    SearchMedicalKnowledgeArgs,
+    SearchUserDocumentsArgs,
+    ToolInputError,
+    ToolSpec,
+)
+from toolcore.tools.medical_supporter import get_medical_supporter
+from toolcore.tools.user_document_supporter import get_user_document_supporter
 
 
-def medical_support_tool(payload: ToolParameter) -> str:
-    client = get_medical_supporter(payload)
-    return f"[medical_support_tool]: {client.run(payload.message)}"
+def search_medical_knowledge(
+        args: SearchMedicalKnowledgeArgs, config: RuntimeConfig, user_id: str = "") -> str:
+    client = get_medical_supporter(config)
+    return f"[search_medical_knowledge]: {client.run(args.query)}"
 
 
-def user_document_tool(payload: ToolParameter) -> str:
-    client = get_user_document_supporter(payload)
-    return f"[user_document_tool]: {client.run(payload.message, payload.user_id)}"
+def search_user_documents(
+        args: SearchUserDocumentsArgs, config: RuntimeConfig, user_id: str = "") -> str:
+    client = get_user_document_supporter(config)
+    return f"[search_user_documents]: {client.run(args.query, user_id)}"
 
 
 _ABOUT_DOCUMEDAI = (
@@ -33,33 +44,39 @@ _ABOUT_DOCUMEDAI = (
     "https://github.com/tanhoangkhoanguyen/DocuMedAI"
 )
 
+def identity(args: IdentityArgs, config: RuntimeConfig, user_id: str = "") -> str:
+    return f"[identity]: {_ABOUT_DOCUMEDAI}"
 
-def project_info_tool(payload: ToolParameter) -> str:
-    return f"[project_info_tool]: {_ABOUT_DOCUMEDAI}"
 
-
-_MCP_DICT = {}
-_BUILTIN_MCP_TOOLS: tuple[McpToolDefinition, ...] = (
-    McpToolDefinition(
-        name = "medical_support_tool",
+_MCP_DICT: dict = {}
+_BUILTIN_MCP_TOOLS: tuple[ToolSpec, ...] = (
+    ToolSpec(
+        name = "search_medical_knowledge",
+        title = "Search Medical Knowledge",
         description = (
             "A tool that retrieve medical terms and provide insight for that term. "
             "Pass a short natural-language query (e.g. 'The cause for X' or 'Definition of X')."
         ),
-        handler = medical_support_tool,
+        input_schema = SearchMedicalKnowledgeArgs.model_json_schema(),
+        args_model = SearchMedicalKnowledgeArgs,
+        handler = search_medical_knowledge,
     ),
-    McpToolDefinition(
-        name = "project_info_tool",
+    ToolSpec(
+        name = "identity",
+        title = "Identity",
         description = (
             "Provides general information about this chatbot and project. Use it to answer "
             "meta questions such as 'What are you?', 'Why do you exist / what is this project "
             "for?', 'Who created you?', or any question about DocuMedAI itself, its purpose, or "
             "its creator. Takes no meaningful input."
         ),
-        handler = project_info_tool,
+        input_schema = IdentityArgs.model_json_schema(),
+        args_model = IdentityArgs,
+        handler = identity,
     ),
-    McpToolDefinition(
-        name = "user_document_tool",
+    ToolSpec(
+        name = "search_user_documents",
+        title = "Search User Documents",
         description = (
             "Retrieve passages from the CURRENT USER's own uploaded documents (their PDFs, "
             "DOCX, or text files) to answer questions grounded in those files. Use this whenever "
@@ -67,7 +84,10 @@ _BUILTIN_MCP_TOOLS: tuple[McpToolDefinition, ...] = (
             "asks something that should be answered from their uploaded content. "
             "Pass a short natural-language query describing what to find."
         ),
-        handler = user_document_tool,
+        input_schema = SearchUserDocumentsArgs.model_json_schema(),
+        args_model = SearchUserDocumentsArgs,
+        handler = search_user_documents,
+        requires_principal = True,
     ),
 )
 
@@ -85,19 +105,21 @@ class MCPServer:
             embedding_dimension: int,
             reranking_model: str,
             reranking_threshold: float,
-            extra_tools: Optional[Sequence[McpToolDefinition]] = None
+            extra_tools: Optional[Sequence[ToolSpec]] = None
         ):
-        self.chat_model = chat_model
-        self.temperature = temperature
-        self.embedding_model = embedding_model
-        self.embedding_dimension = embedding_dimension
-        self.reranking_model = reranking_model
-        self.reranking_threshold = reranking_threshold
+        self.__config = RuntimeConfig(
+            chat_model = chat_model,
+            temperature = temperature,
+            embedding_model = embedding_model,
+            embedding_dimension = embedding_dimension,
+            reranking_model = reranking_model,
+            reranking_threshold = reranking_threshold,
+        )
 
-        self.__registry: Dict[str, McpToolDefinition] = {}
+        self.__registry: Dict[str, ToolSpec] = {}
         self._build_mcp_registry(extra_tools or ())
 
-    def _build_mcp_registry(self, extra_tools: Sequence[McpToolDefinition]) -> None:
+    def _build_mcp_registry(self, extra_tools: Sequence[ToolSpec]) -> None:
         for tool in (*_BUILTIN_MCP_TOOLS, *extra_tools):
             self.__registry[tool.name] = tool
 
@@ -119,17 +141,21 @@ class MCPServer:
         spec = self.__registry.get(name)
         if spec is None:
             return ""
-        return spec.handler(
-            ToolParameter(
-                message = message,
-                chat_model = self.chat_model,
-                temperature = self.temperature,
-                embedding_model = self.embedding_model,
-                embedding_dimension = self.embedding_dimension,
-                reranking_model = self.reranking_model,
-                reranking_threshold = self.reranking_threshold,
-                user_id = user_id,
-            ))
+
+        # The planner emits {tool, message}; map `message` -> the tool's `query` arg.
+        # `identity` takes no fields, so it validates against {} and ignores `message`.
+        raw_args: Dict[str, str] = {} if spec.args_model is IdentityArgs else {"query": message}
+
+        # Validate + build the typed args in one pass. spec.input_schema is the JSON
+        # Schema advertised to external clients (Phase 2 tools/list); the MCP server
+        # will validate raw JSON at its own boundary, so the core validates once here.
+        try:
+            args = spec.args_model.model_validate(raw_args)
+        except ValidationError as exc:
+            raise ToolInputError(f"invalid args for tool '{name}': {exc}") from exc
+
+        return spec.handler(args, self.__config, user_id)
+
 
 def get_mcp_client(
         chat_model: str = "gemini-2.5-flash",                                   # Switched from gpt-4o-mini to Gemini

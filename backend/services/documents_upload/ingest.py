@@ -19,7 +19,7 @@ from services.documents_upload.constants import (
 )
 from services.documents_upload.parsing import extract_text
 from services.documents_upload.chunking import chunk_text
-from services.utils.pattern_cipher import get_pattern_cipher
+from utils.pattern_cipher import get_pattern_cipher
 
 _LOGGER = get_logger(name = "doc_ingest", level = "INFO")
 

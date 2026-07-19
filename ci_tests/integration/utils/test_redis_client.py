@@ -1,5 +1,5 @@
 import uuid, pytest
-from services.utils.redis_client import RedisClient
+from utils.redis_client import RedisClient
 
 
 pytestmark = pytest.mark.integration

@@ -3,7 +3,7 @@ import os
 import jwt
 import pytest
 
-from services.utils.supabase_client import SupabaseClient
+from utils.supabase_client import SupabaseClient
 
 
 def test_decode_access_token_valid():

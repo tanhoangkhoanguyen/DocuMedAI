@@ -1,5 +1,5 @@
 import uuid, pytest
-from services.utils.mongo_client import MongoClient
+from utils.mongo_client import MongoClient
 
 
 pytestmark = pytest.mark.integration

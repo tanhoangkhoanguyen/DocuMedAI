@@ -71,23 +71,6 @@ Output:
 }]
 """
 
-# ==================== RAG prompt ====================
-PARAPHRASE_MESSAGE_PROMPT = """
-You are an expert in message rephrasing.
-Generate {number} versions of the user’s message that keep the original meaning but express it in different ways to improve search coverage.
-"""
-
-GENERALIZE_USER_MESSAGE_PROMPT = """
-Paraphrase the message into a more general, easier-to-answer version.
-EXAMPLE
-
-Input: "Could the members of The Police perform lawful arrests?"
-Output: "What can the members of The Police do?"
-
-Input: "Lionel Messi's was born in what country?"
-Output: "What is Lionel Messi's personal history?"
-"""
-
 # ==================== Agents ====================
 AGENT_PLANNER_PROMPT = """
 You are a planning assistant that chooses MCP tools for each user sub-message.

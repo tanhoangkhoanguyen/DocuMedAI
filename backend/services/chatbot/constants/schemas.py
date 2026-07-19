@@ -1,8 +1,7 @@
-from dataclasses import dataclass
 from langchain_core.messages import AnyMessage
 from langgraph.graph.message import add_messages
 from pydantic import BaseModel, Field, field_validator
-from typing import Annotated, Any, Callable, Dict, List, Literal, Optional
+from typing import Annotated, List, Literal, Optional
 
 
 # ==================== User State ====================
@@ -43,28 +42,6 @@ class ChatMessageState(BaseModel):
 class ToolCallState(BaseModel):
     tool: str
     message: str
-
-
-McpToolHandler = Callable[[Dict[str, Any]], str]
-McpCallTool = Callable[[str, Dict[str, Any]], str]
-
-
-@dataclass(frozen = True)
-class McpToolDefinition:
-    name: str
-    description: str
-    handler: McpToolHandler
-
-
-class ToolParameter(BaseModel):
-    message: str
-    chat_model: str
-    temperature: float
-    embedding_model: str
-    embedding_dimension: int
-    reranking_model: str
-    reranking_threshold: float
-    user_id: str = ""
 
 
 class TaskState(BaseModel):

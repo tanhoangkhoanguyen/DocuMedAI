@@ -1,36 +1,36 @@
 from typing import List
 
-from services.chatbot.constants.schemas import ToolParameter
+from toolcore.contracts import RuntimeConfig
 from vector_database_tests.utils.qdrant_client import get_qdrant_client
-from services.chatbot.tools.rag import get_rag_client
+from utils.rag import get_rag_client
 
 
 _MEDICAL_COLLECTION = "MedicalTerms"
 _MEDICAL_SUPPORTER_DICT: dict = {}
 
 
-def _payload_key(payload: ToolParameter) -> tuple:
+def _config_key(config: RuntimeConfig) -> tuple:
     return (
-        payload.chat_model,
-        payload.temperature,
-        payload.embedding_model,
-        payload.embedding_dimension,
-        payload.reranking_model,
-        payload.reranking_threshold,
+        config.chat_model,
+        config.temperature,
+        config.embedding_model,
+        config.embedding_dimension,
+        config.reranking_model,
+        config.reranking_threshold,
     )
 
 
 class MedicalSupporter:
-    def __init__(self, payload: ToolParameter):
+    def __init__(self, config: RuntimeConfig):
         self.__rag_client = get_rag_client(
-            chat_model = payload.chat_model,
-            temperature = payload.temperature,
-            reranking_model = payload.reranking_model,
-            reranking_threshold = payload.reranking_threshold,
+            chat_model = config.chat_model,
+            temperature = config.temperature,
+            reranking_model = config.reranking_model,
+            reranking_threshold = config.reranking_threshold,
         )
         self.__qdrant_client = get_qdrant_client(
-            embedding_model = payload.embedding_model,
-            embedding_dimension = payload.embedding_dimension,
+            embedding_model = config.embedding_model,
+            embedding_dimension = config.embedding_dimension,
         )
 
     def run(self, message: str, config = None):
@@ -68,8 +68,8 @@ class MedicalSupporter:
         return ""
 
 
-def get_medical_supporter(payload: ToolParameter) -> MedicalSupporter:
-    key = _payload_key(payload)
+def get_medical_supporter(config: RuntimeConfig) -> MedicalSupporter:
+    key = _config_key(config)
     if key not in _MEDICAL_SUPPORTER_DICT:
-        _MEDICAL_SUPPORTER_DICT[key] = MedicalSupporter(payload)
+        _MEDICAL_SUPPORTER_DICT[key] = MedicalSupporter(config)
     return _MEDICAL_SUPPORTER_DICT[key]
