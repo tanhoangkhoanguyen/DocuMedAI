@@ -8,8 +8,8 @@ from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from services.app.chatbot_workspace import ChatbotWorkspace
-from services.utils.pattern_cipher import PatternCipher
-from services.utils.supabase_client import SupabaseClient
+from utils.pattern_cipher import PatternCipher
+from utils.supabase_client import SupabaseClient
 
 
 security = HTTPBearer(auto_error = False)

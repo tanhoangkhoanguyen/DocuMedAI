@@ -26,4 +26,4 @@ MAX_CHUNKS = 2000                   # cap chunks per document (guards huge files
 EMBED_BATCH_SIZE = 256              # points per Qdrant upload batch
 
 # Shared bind-mounted dir where the API drops uploaded bytes for the worker to read
-USER_DOCUMENTS_STORAGE_DIR = "services/utils/data_storage/user_documents_storage"
+USER_DOCUMENTS_STORAGE_DIR = "utils/data_storage/user_documents_storage"

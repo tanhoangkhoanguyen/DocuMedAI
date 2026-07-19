@@ -17,7 +17,7 @@ load_dotenv()
 from arq.connections import RedisSettings
 
 from logger import get_logger
-from services.utils.mongo_client import get_mongo_client
+from utils.mongo_client import get_mongo_client
 from services.documents_upload.ingest import ingest_document
 
 _LOGGER = get_logger(name = "doc_worker", level = "INFO")

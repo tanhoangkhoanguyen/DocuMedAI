@@ -28,10 +28,10 @@ from services.chatbot.constants.prompts import (
     CRITIC_AGENT_PROMPT
 )
 from vector_database_tests.utils.qdrant_client import get_qdrant_client
-from services.chatbot.mcp import get_mcp_client
-from services.chatbot.tools.rag import get_rag_client
-from services.utils.pattern_cipher import get_pattern_cipher
-from services.chatbot.tools.llm_config import get_vertex_project, get_vertex_location  # Vertex AI config
+from toolcore.core import get_mcp_client
+from utils.rag import get_rag_client
+from utils.pattern_cipher import get_pattern_cipher
+from utils.llm_config import get_vertex_project, get_vertex_location  # Vertex AI config
 
 
 LONGTERM_COLLECTION = "LongtermMemory"
@@ -245,7 +245,7 @@ class Agents(Runnable):
         catalog = self.__mcp_client.format_registry()
         # doc_hint is per-request (the current user's uploaded-doc description) and
         # is prepended to the planner context so the LLM router can decide whether
-        # user_document_tool is relevant. It's a local arg — never stored on self —
+        # search_user_documents is relevant. It's a local arg — never stored on self —
         # so concurrent users can't see each other's document.
         context = f"{doc_hint}\n{task.context}" if doc_hint else task.context
         prompt = [
@@ -331,13 +331,13 @@ class Agents(Runnable):
         user_id = state.user_info.user_id if state.user_info else ""
 
         # Per-request routing hint: tell the planner what the user's uploaded doc is
-        # about so it can choose user_document_tool when relevant. Empty if no ready
+        # about so it can choose search_user_documents when relevant. Empty if no ready
         # doc. Read off GraphState (populated by the workspace layer) — no DB call here.
         doc_hint = ""
         if state.user_document and state.user_document.description:
             doc_hint = (
                 f"The user has uploaded a document described as: "
-                f"\"{state.user_document.description}\". Use user_document_tool to "
+                f"\"{state.user_document.description}\". Use search_user_documents to "
                 f"retrieve from it when the question relates to that document."
             )
 

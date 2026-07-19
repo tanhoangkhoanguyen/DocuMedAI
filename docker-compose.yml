@@ -26,7 +26,7 @@ services:
     networks:
       - documedai-net
     volumes:
-      - ./backend/services/utils/data_storage/mongo_data:/data/db
+      - ./backend/utils/data_storage/mongo_data:/data/db
     healthcheck:
       test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
       interval: 10s
@@ -44,7 +44,7 @@ services:
     networks:
       - documedai-net
     volumes:
-      - ./backend/services/utils/data_storage/redis_data:/data
+      - ./backend/utils/data_storage/redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
