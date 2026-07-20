@@ -15,9 +15,23 @@ internal agent uses — one core, two surfaces.
 | `search_medical_knowledge` | no | `{query: str}` |
 | `search_user_documents` | **yes** | `{query: str}` — refused without a principal |
 
-**Status:** protocol surface only. No auth yet (`principal=None`), so `identity` and
-`search_medical_knowledge` work while `search_user_documents` returns a JSON-RPC error.
-JWT auth arrives in Issue 2.2.
+## Auth
+
+The MCP boundary is the **only** auth surface — internal `source="internal"` callers
+bypass it. Tokens are verified by the shared `services.app.auth_deps.decode_bearer_any`
+(local HS256 + Supabase), turned into a `Principal(source="mcp")` in
+[`auth.py`](auth.py), and threaded into every `tools/call`.
+
+| Token | Result |
+|-------|--------|
+| absent | anonymous — `identity` / `search_medical_knowledge` work; `search_user_documents` refused |
+| valid | `Principal(user_id=…, source="mcp")` — sees only that user's chunks |
+| present but invalid | **rejected** — HTTP `401`; stdio aborts at startup |
+
+- **HTTP:** send `Authorization: Bearer <jwt>`. An ASGI step verifies it per request and
+  binds the principal for that request's scope before the session manager runs.
+- **stdio:** no HTTP headers, so pass the token via the `MCP_AUTH_TOKEN` env var. It is
+  read once at process start (one process = one client = one principal).
 
 ## Prerequisites
 
@@ -51,8 +65,9 @@ shows the JSON-RPC in a browser. Needs Node/npx on your host:
 npx @modelcontextprotocol/inspector docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T la-backend python -m mcp_server --transport stdio
 ```
 
-In the UI: open **Tools** (expect 3 with schemas) and **call** `identity`.
-`search_user_documents` should return a protocol error (until Issue 2.2).
+In the UI: open **Tools** (expect 3 with schemas) and **call** `identity`. With no
+`MCP_AUTH_TOKEN` set, `search_user_documents` returns a protocol error (principal
+required); set `MCP_AUTH_TOKEN=<jwt>` to have it return that user's chunks.
 
 ### Manual Server Launch
 

@@ -9,10 +9,11 @@ Entry point:  python -m mcp_server --transport {stdio,http}
 Both transports run the SAME `build_server()` instance — one execution core, two
 serving surfaces.
 """
-import anyio, argparse, contextlib, logging, sys
-from typing import AsyncIterator
+import anyio, argparse, contextlib, json, logging, os, sys
+from typing import AsyncIterator, Optional
 
-from mcp_server.server import build_server, SERVER_NAME
+from mcp_server.auth import MCPAuthError, principal_from_token
+from mcp_server.server import build_server, request_principal, SERVER_NAME
 from logger import get_logger
 
 
@@ -33,11 +34,44 @@ def _redirect_stdout_logging_to_stderr() -> None:
                 handler.setStream(sys.stderr)
 
 
+def _bearer_from_scope(scope: dict) -> Optional[str]:
+    # ASGI headers are a list of (name, value) byte tuples; header names are lowercased.
+    for name, value in scope.get("headers", []):
+        if name == b"authorization":
+            decoded = value.decode("latin-1")
+            scheme, _, token = decoded.partition(" ")
+            if scheme.lower() == "bearer" and token:
+                return token.strip()
+            return None
+    return None
+
+
+async def _send_401(send, detail: str) -> None:
+    body = json.dumps({"error": "unauthorized", "detail": detail}).encode("utf-8")
+    await send({
+        "type": "http.response.start",
+        "status": 401,
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"www-authenticate", b"Bearer"),
+            (b"content-length", str(len(body)).encode("ascii")),
+        ],
+    })
+    await send({"type": "http.response.body", "body": body})
+
+
 def _run_stdio() -> None:
     from mcp.server.stdio import stdio_server
 
     _redirect_stdout_logging_to_stderr()
-    server = build_server()
+
+    # stdio has no HTTP headers: the token arrives via env var, read ONCE at process start
+    # (one process = one client = one principal). An invalid token aborts launch here rather
+    # than degrading to anonymous — a broken MCP_AUTH_TOKEN is a misconfiguration.
+    principal = principal_from_token(os.getenv("MCP_AUTH_TOKEN"))
+    if principal is not None:
+        _LOGGER.info("stdio transport authenticated as user_id=%s", principal.user_id)
+    server = build_server(principal = principal)
 
     async def arun() -> None:
         async with stdio_server() as (read_stream, write_stream):
@@ -60,7 +94,17 @@ def _run_http(host: str, port: int) -> None:
     session_manager = StreamableHTTPSessionManager(app = server, json_response = False)
 
     async def handle_mcp(scope: Scope, receive: Receive, send: Send) -> None:
-        await session_manager.handle_request(scope, receive, send)
+        # Per-request auth: verify the bearer token, publish the principal for this request's
+        # scope, then delegate. Absent token -> anonymous (identity/medical still work, the
+        # Core refuses search_user_documents). Present-but-invalid -> 401 before the manager.
+        try:
+            principal = principal_from_token(_bearer_from_scope(scope))
+        except MCPAuthError as exc:
+            await _send_401(send, str(exc))
+            return
+
+        with request_principal(principal):
+            await session_manager.handle_request(scope, receive, send)
 
     @contextlib.asynccontextmanager
     async def lifespan(app: Starlette) -> AsyncIterator[None]:
