@@ -114,7 +114,7 @@ Both adapters call the **same** `ToolCore.call_tool`. That single fact is the en
 - **Criteria:** unauthenticated external `search_user_documents` is refused; a valid user's token returns only that user's chunks; a second user's token cannot read the first's docs; `identity` works with no token.
 - **Tech:** shared `auth_deps.decode_bearer_any`; per-session principal binding; the three existing isolation layers (Core `requires_principal`, Qdrant `user_id` filter [`qdrant_client.py:205`](../vector_database_tests/utils/qdrant_client.py#L205), empty-user short-circuit) all still fire.
 
-### Issue 2.3 — Package the MCP server as a compose service ✅
+### Issue 2.3 — Package the MCP server as a compose service
 - **Problem:** must run and be demoable without polluting the app runtime.
 - **What to do:**
   - Added `la-mcp-server` to [`docker-compose.yml`](../../docker-compose.yml): own container on `documedai-net`, streamable-HTTP port 8090 exposed, `mem_limit` set. The app (`la-documedai`) does **not** depend on it. Unlike `la-llm-proxy` (a standalone Go binary), the MCP server *is* the app's Python code, so it reuses the `la-documedai` image (shared `documedai` tag, built once) and overrides `command:` — no second Dockerfile, no duplicate model precache. Healthcheck is a TCP liveness probe (a bare GET to `/mcp` has no spec-defined status under streamable-HTTP).

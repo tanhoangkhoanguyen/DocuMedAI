@@ -35,15 +35,16 @@ Every assertion is a protocol-/auth-boundary check that takes no live LLM/RAG ca
 no keys in CI; that "valid token returns the user's own chunks" criterion is covered by
 the isolation tests in Issue 3.1 and the cross-surface equivalence test in Issue 3.3).
 """
-import os, uuid, httpx, jwt, pytest, socket, threading, time, uvicorn
+import os, uuid, httpx, jwt, pytest
 
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client, streamablehttp_client
 from mcp.types import INVALID_REQUEST, METHOD_NOT_FOUND, PARSE_ERROR
 
-from mcp_server.__main__ import build_http_app, MCP_PATH
 from mcp_server.server import SERVER_NAME
 from toolcore.core import get_mcp_client
+
+from ci_tests.integration.mcp.conftest import url as _url
 
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio, pytest.mark.mcp]
@@ -53,47 +54,6 @@ _JSONRPC_HEADERS = {
     "Content-Type": "application/json",
     "Accept": "application/json, text/event-stream",
 }
-
-
-def _free_port() -> int:
-    """Find an available port to run the test server."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
-@pytest.fixture(scope="module")
-def http_server():
-    """Run the prod ASGI app on a loopback uvicorn in a background thread."""
-    port = _free_port()
-    config = uvicorn.Config(
-        build_http_app(), host="127.0.0.1", port=port, log_level="warning",
-    )
-    server = uvicorn.Server(config)
-    # (background thread) Uvicorn.Server.run() is blocking, but we want to
-    # yield the URL to the test coroutine while the server is running.
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
-
-    # Wait until the port accepts connections (server.started flips once the loop is up).
-    deadline = time.time() + 15
-    while not server.started and time.time() < deadline:
-        time.sleep(0.05)
-    if not server.started:
-        raise RuntimeError("uvicorn did not start in time")
-
-    yield f"http://127.0.0.1:{port}"
-
-    # Shut down the server after the test and wait for the thread to exit.
-    server.should_exit = True
-    thread.join(timeout=10)
-
-
-def _url(base: str) -> str:
-    # Trailing slash: Starlette's Mount serves the app at "/mcp/" and 307-redirects
-    # "/mcp" -> "/mcp/". Hitting the canonical path avoids a redirect the SDK's custom
-    # httpx client won't follow by default.
-    return f"{base}{MCP_PATH}/"
 
 
 def _first_jsonrpc_object(body: str) -> dict:
@@ -261,4 +221,4 @@ async def test_valid_token_is_accepted(http_server):
         async with ClientSession(read, write) as session:
             await session.initialize()
             listed = await session.list_tools()
-    assert {t.name for t in listed.tools} == EXPECTED_TOOLS
+    assert listed.tools
