@@ -148,7 +148,9 @@ Both adapters call the **same** `ToolCore.call_tool`. That single fact is the en
 - **Tech:** pytest; shared fixtures; graph stays mocked (`conftest.py` `_build_graph` patch) so no LLM keys needed — Core tools hit live Qdrant only.
 
 ### Issue 3.4 — CI wiring
-- **What to do:** extend [`.github/workflows/python-ci.yml`](../../.github/workflows/python-ci.yml) to (a) run the new test dirs inside `la-documedai`, (b) execute the HTTP conformance tests (they self-host a loopback uvicorn in-process; no separate service needed). Keep the mocked-graph, no-LLM-key CI contract.
+- **What to do:** append the two new test dirs — `ci_tests/integration/tool_core` and `ci_tests/integration/mcp` — to the existing `pytest` step in [`.github/workflows/python-ci.yml`](../../.github/workflows/python-ci.yml), so the Core contracts, MCP protocol conformance, and the cross-surface equivalence test gate every merge.
+- **In-process, not a separate service:** the conformance/equivalence tests self-host a loopback uvicorn in-process inside `la-documedai` (the `http_server` fixture in [`ci_tests/integration/mcp/conftest.py`](../../ci_tests/integration/mcp/conftest.py)). They do **not** talk to the `la-mcp-server` container, so CI does **not** boot it — no test targets it, and booting it would only add image-build/model-load cost with zero coverage. The task's "or start la-mcp-server" branch does not match how the tests were written.
+- **No new services or secrets:** the stack the job already starts (`la-qdrant`/`la-mongo`/`la-redis`/`la-documedai`) is sufficient. `tool_core/` is schema/validation plus one live-Qdrant isolation test; `mcp/` stubs every LLM/RAG leaf to a sentinel so no GCP creds / LLM keys are touched; `AUTH_JWT_SECRET` (for the bearer mint) is already written by the "Write CI .env" step. All five paths run in one `$COMPOSE exec … pytest` process (one container, one stack) — kept as a single step, not split.
 - **Criteria:** CI green on PRs to `main`/`develop`; MCP conformance + equivalence gate every merge.
 - **Tech:** GitHub Actions, `docker compose -f docker-compose.yml -f docker-compose.ci.yml`.
 

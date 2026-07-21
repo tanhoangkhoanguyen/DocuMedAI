@@ -39,12 +39,24 @@ jobs:
           $COMPOSE up -d --build --wait la-qdrant la-mongo la-redis
           $COMPOSE up -d --build la-documedai
 
-      - name: Run backend CI tests
+      - name: App tests
         run: |
           $COMPOSE exec -T la-documedai pytest -q \
             ci_tests/integration/utils \
-            ci_tests/integration/api \
+            ci_tests/integration/api
+
+      - name: Vector DB tests
+        if: always()
+        run: |
+          $COMPOSE exec -T la-documedai pytest -q \
             ci_tests/integration/vector_db/test_qdrant_client.py
+
+      - name: MCP tests
+        if: always()
+        run: |
+          $COMPOSE exec -T la-documedai pytest -q \
+            ci_tests/integration/tool_core \
+            ci_tests/integration/mcp
 
       - name: Dump logs on failure
         if: failure()
