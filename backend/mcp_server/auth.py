@@ -18,7 +18,6 @@ Token policy:
     present-invalid -> raise MCPAuthError
 """
 from typing import Optional
-
 from fastapi import HTTPException
 
 from services.app.auth_deps import decode_bearer_any
