@@ -69,32 +69,32 @@ Note: **Weaviate is pinned to client v3**. Client v4 contains potential risk.
 
 ## Running the benchmark
 
-All commands run **inside the `la-backend` container** (it has the clients, the embedding model, and the dataset mount). DB selection is via `BENCH_DB` (or `--db`); each step writes a per-DB JSON result so every number records which engine produced it.
+All commands run **inside the `la-documedai` container** (it has the clients, the embedding model, and the dataset mount). DB selection is via `BENCH_DB` (or `--db`); each step writes a per-DB JSON result so every number records which engine produced it.
 
 ```bash
 # 0. Bring up the lab stack with equal resource limits
 docker compose --profile vectordb-lab up -d --build --wait la-qdrant la-chroma la-weaviate la-milvus la-vespa
-docker compose --profile vectordb-lab up -d la-backend
-docker compose exec la-backend pip install -r /backend/requirements-dev.txt
+docker compose --profile vectordb-lab up -d la-documedai
+docker compose exec la-documedai pip install -r /backend/requirements-dev.txt
 
 # Vespa only: deploy the application package once (adds the doc_id field)
 docker compose exec la-vespa vespa deploy --wait 300 /app
 
 # 1. Exact-kNN ground truth — ONCE (depends only on corpus+queries+cosine)
-docker compose exec -d la-backend sh -c "cd /backend && python -m vector_database_tests.ground_truth --top-k 100 2>> /backend/logs/gt_stderr.log"
+docker compose exec -d la-documedai sh -c "cd /backend && python -m vector_database_tests.ground_truth --top-k 100 2>> /backend/logs/gt_stderr.log"
 
-docker compose exec la-backend tail -f /backend/logs/vectordb_lab_ground_truth_20260626.log
+docker compose exec la-documedai tail -f /backend/logs/vectordb_lab_ground_truth_20260626.log
 
 # 2. Per engine: upload → sweep (equal-recall config) → open-loop throughput
 #    If upload exceeds its 1h budget, it exits non-zero and writes {"timed_out": true}; the `|| continue` then skips sweep + throughput for that engine and moves to the next.
 $databases = "qdrant", "milvus", "weaviate", "chromadb", "vespa"
 foreach ($db in $databases) {
-  docker compose exec -e BENCH_DB=$db -w /backend la-backend `
+  docker compose exec -e BENCH_DB=$db -w /backend la-documedai `
     python -m vector_database_tests.data_uploading
   if (-not $?) { continue }
-  docker compose exec -e BENCH_DB=$db -w /backend la-backend `
+  docker compose exec -e BENCH_DB=$db -w /backend la-documedai `
     python -m vector_database_tests.sweep --k 10 --recall-target 0.95
-  docker compose exec -e BENCH_DB=$db -w /backend la-backend `
+  docker compose exec -e BENCH_DB=$db -w /backend la-documedai `
     python -m vector_database_tests.throughput --qps 50 100 200 400 800 --duration 30
 }
 ```

@@ -310,7 +310,7 @@ If you can't build and run it, you can't verify anything. Do this first.
   - The `ChatOpenAI(..., base_url=get_llm_base_url())` construction sites in
     `backend/services/chatbot/nodes.py` and `tools/rag.py`, and the `crewai.LLM` one in `nodes.py`.
   - `docker-compose.yml` — the `la-llm-proxy` service (image, port 8081, `UPSTREAM_API_KEY`,
-    `OPENAI_UPSTREAM_BASE`, `REDIS_URL` on DB 1, healthcheck) and the `la-backend` env
+    `OPENAI_UPSTREAM_BASE`, `REDIS_URL` on DB 1, healthcheck) and the `la-documedai` env
     (`LLM_PROXY_BASE_URL`, `depends_on: la-llm-proxy: service_healthy`).
 - **Verify (hands-on):** bring up the full stack, send a chat message through the app UI/API, then check
   `/metrics` on the proxy incremented — proving the app's traffic really flows through your proxy.
