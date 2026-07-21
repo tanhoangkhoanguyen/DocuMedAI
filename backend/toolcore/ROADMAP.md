@@ -16,18 +16,18 @@ DocuMedAI ships a file called [`backend/services/chatbot/mcp.py`](../services/ch
 For an **AI Infra** portfolio this naming is a liability: it implies a capability the code doesn't have.
 
 ### Intended outcome
-A shared **Tool Core** consumed two ways — the internal agent calls it **directly in-process** (unchanged, no protocol overhead), and a **real MCP server** wraps the *same core* for external clients over **stdio + streamable-HTTP** with per-client JWT.
+A shared **Tool Core** consumed two ways — the internal agent calls it **directly in-process** (unchanged, no protocol overhead), and a **real MCP server** wraps the *same core* for external clients over **streamable-HTTP** with per-request JWT.
 
 ```
                     Tool Core   (shared execution core)
                    /          \    search_medical / search_user_documents / identity
                   /            \
-     Internal Agent            MCP Server  (FastMCP)
-  (direct in-process,           |   stdio + streamable-HTTP
-   unchanged fast path)         |   JSON-RPC 2.0, JWT per client
+     Internal Agent            MCP Server
+  (direct in-process,           |   streamable-HTTP
+   unchanged fast path)         |   JSON-RPC 2.0, JWT per request
                                 ▼
                        External MCP Clients
-                (Claude Desktop, MCP Inspector, any MCP host)
+                    (MCP Inspector, any HTTP MCP host)
 ```
 
 ### Constraints (non-negotiable)
@@ -50,7 +50,7 @@ The whole roadmap hinges on one refactor: **extract a Tool Core** that both cons
 **Target** — a transport-agnostic **Tool Core** exposing typed `list_tools()` / `call_tool(name, args, principal)` with **JSON-Schema input contracts**. Two thin adapters sit on top:
 
 1. **Internal adapter** — what [`nodes.py`](../services/chatbot/nodes.py) calls today, behavior preserved (LLM picks from catalog → threadpool → text results). Passes the already-authenticated `user_id` from `GraphState.user_info` as the principal ([`nodes.py:331`](../services/chatbot/nodes.py#L331)).
-2. **MCP adapter** — a FastMCP server mapping each Tool Core tool to an MCP tool, verifying a JWT per session, deriving the principal from verified claims, serving stdio + streamable-HTTP.
+2. **MCP adapter** — an MCP server mapping each Tool Core tool to an MCP tool, verifying a JWT per request, deriving the principal from verified claims, serving streamable-HTTP.
 
 Both adapters call the **same** `ToolCore.call_tool`. That single fact is the entire story: *one execution core, two serving surfaces, measured overhead between them.*
 
@@ -91,7 +91,9 @@ Both adapters call the **same** `ToolCore.call_tool`. That single fact is the en
 
 ## Phase 2 — Stand up the real MCP Server (external protocol surface)
 
-**Phase goal:** expose the Tool Core over genuine MCP — JSON-RPC 2.0, `initialize` / `tools/list` / `tools/call`, stdio + streamable-HTTP — as a **separate process/service** never in the internal agent's path.
+**Phase goal:** expose the Tool Core over genuine MCP — JSON-RPC 2.0, `initialize` / `tools/list` / `tools/call`, over **streamable-HTTP** — as a **separate process/service** never in the internal agent's path.
+
+> **Transport note:** a stdio transport was built in Issue 2.1 and later **removed** — DocuMedAI's users are served by the in-process core, and the only external surface worth maintaining for a multi-user system is HTTP. stdio references below are historical.
 
 ### Issue 2.1 — FastMCP server wrapping the Tool Core
 - **Problem:** there is no protocol server at all today.
@@ -116,8 +118,8 @@ Both adapters call the **same** `ToolCore.call_tool`. That single fact is the en
 - **Problem:** must run and be demoable without polluting the backend runtime.
 - **What to do:**
   - Add `la-mcp-server` to [`docker-compose.yml`](../../docker-compose.yml) (pattern mirrors `la-llm-proxy`, [`docker-compose.yml:55`](../../docker-compose.yml#L55)): own container, `documedai-net`, streamable-HTTP port exposed, `mem_limit`/`cpus` set. Backend does **not** depend on it.
-  - Document a `claude_desktop_config.json` / MCP-host connection snippet in `backend/mcp/README.md`.
-- **Criteria:** `docker compose up -d la-mcp-server` serves MCP over HTTP; Claude Desktop / Inspector lists + calls tools; backend stack runs identically whether or not this service is up.
+  - Document an MCP-host HTTP connection snippet (point Inspector/clients at the `/mcp` URL with an `Authorization: Bearer` header) in `backend/mcp_server/README.md`.
+- **Criteria:** `docker compose up -d la-mcp-server` serves MCP over HTTP; Inspector / an HTTP MCP client lists + calls tools; backend stack runs identically whether or not this service is up.
 - **Tech:** Docker, compose service, streamable-HTTP.
 
 ---
@@ -134,9 +136,9 @@ Both adapters call the **same** `ToolCore.call_tool`. That single fact is the en
 
 ### Issue 3.2 — MCP protocol conformance tests
 - **Problem:** must guarantee real JSON-RPC / lifecycle correctness, not just "it ran once."
-- **What to do:** spin the server over stdio in-test; assert `initialize` handshake + advertised capabilities; `tools/list` schema matches Core; `tools/call` happy path; malformed request → correct JSON-RPC error code; unauthenticated principal-tool call rejected; error taxonomy (input vs auth vs upstream) maps to distinct codes.
+- **What to do:** run the HTTP server in-test (loopback uvicorn); assert `initialize` handshake + advertised capabilities; `tools/list` schema matches Core; `tools/call` happy path; malformed request → correct JSON-RPC error code; unauthenticated principal-tool call rejected; error taxonomy (input vs auth vs upstream) maps to distinct codes. (The live-HTTP harness already exists in `test_mcp_server.py`.)
 - **Criteria:** all lifecycle methods pass; error codes spec-correct and categorized; auth rejection covered.
-- **Tech:** MCP SDK **client** in-process against the stdio server; add an `mcp` pytest marker to `pytest.ini` (today only `integration` is registered).
+- **Tech:** MCP SDK **client** against a loopback HTTP server; add an `mcp` pytest marker to `pytest.ini` (today only `integration` is registered).
 
 ### Issue 3.3 — Cross-surface equivalence test (the money test)
 - **Problem:** the core claim is "same execution core, two surfaces." Prove it.
@@ -145,7 +147,7 @@ Both adapters call the **same** `ToolCore.call_tool`. That single fact is the en
 - **Tech:** pytest; shared fixtures; graph stays mocked (`conftest.py` `_build_graph` patch) so no LLM keys needed — Core tools hit live Qdrant only.
 
 ### Issue 3.4 — CI wiring
-- **What to do:** extend [`.github/workflows/python-ci.yml`](../../.github/workflows/python-ci.yml) to (a) run the new test dirs inside `la-backend`, (b) start `la-mcp-server` (or run stdio in-container) and execute conformance tests. Keep the mocked-graph, no-LLM-key CI contract.
+- **What to do:** extend [`.github/workflows/python-ci.yml`](../../.github/workflows/python-ci.yml) to (a) run the new test dirs inside `la-backend`, (b) execute the HTTP conformance tests (they self-host a loopback uvicorn in-process; no separate service needed). Keep the mocked-graph, no-LLM-key CI contract.
 - **Criteria:** CI green on PRs to `main`/`develop`; MCP conformance + equivalence gate every merge.
 - **Tech:** GitHub Actions, `docker compose -f docker-compose.yml -f docker-compose.ci.yml`.
 
@@ -190,11 +192,11 @@ Collected in Phase 3 (correctness) + Phase 4 (performance). Fill `<>` from real 
 | `initialize` / `tools/list` / `tools/call` success rate `<>`% | Issue 4.2 | protocol reliability |
 | # CI contract + conformance tests gating merge (`<N>`) | Phase 3 | rigor signal |
 | Cross-surface equivalence: internal ≡ MCP results | Issue 3.3 | proves single-core architecture |
-| Tools over spec-compliant MCP (`3`) + transports (`stdio + streamable-HTTP`) | Phase 2 | interoperability |
+| Tools over spec-compliant MCP (`3`) over `streamable-HTTP` | Phase 2 | interoperability |
 | Error taxonomy coverage (input/auth/upstream/not-found) | Issue 4.2 | observability maturity |
 
 ### Draft aura bullet points (AI Infra flavored — finalize with real numbers)
-- **"Designed a shared Tool Core serving one execution path to both an internal LangGraph agent (direct, in-process) and a spec-compliant MCP server (JSON-RPC 2.0 over stdio + streamable-HTTP), exposing 3 medical-RAG tools to any external MCP host with per-client JWT enforcement — zero added latency on the internal path."**
+- **"Designed a shared Tool Core serving one execution path to both an internal LangGraph agent (direct, in-process) and a spec-compliant MCP server (JSON-RPC 2.0 over streamable-HTTP), exposing 3 medical-RAG tools to any external MCP host with per-request JWT enforcement — zero added latency on the internal path."**
 - **"Built a self-hosted MCP observability harness measuring per-tool P50/P95/P99 and protocol overhead vs direct execution (`<Y>`%) — quantifying the exact cost of interoperability instead of guessing."**
 - **"Gated every merge with `<N>` MCP conformance + cross-surface equivalence tests (lifecycle handshake, JSON-RPC error taxonomy, multi-tenant isolation across the protocol boundary)."**
 - **"Enforced multi-tenant document isolation across the MCP boundary by reusing the app's JWT verifier as a per-session principal — proven leak-free by adversarial cross-user CI tests."**

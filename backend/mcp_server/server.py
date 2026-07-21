@@ -13,16 +13,11 @@ and carried on each `ToolSpec.input_schema`. FastMCP re-derives schemas from Pyt
 type hints, which would fork the single source of truth; here we hand the SDK the
 core's schema directly.
 
-The principal threaded into each `tools/call` is JWT-derived
-(`Principal(source="mcp")`), resolved per transport:
-
-  HTTP  — one shared server serves every session, so the principal cannot be bound at
-          build time. An ASGI middleware (see __main__.py) verifies the bearer token
-          per request and publishes the principal on `_REQUEST_PRINCIPAL` (a ContextVar)
-          for the duration of that request; `call_tool` reads it.
-  stdio — one process = one client = one principal for its lifetime, so it is bound once
-          at build time via `build_server(principal=...)`. No ContextVar is set, so
-          `call_tool` falls back to the build-time arg.
+The principal threaded into each `tools/call` is JWT-derived (`Principal(source="mcp")`).
+One shared server serves every HTTP session, so the principal cannot be bound at build
+time: an ASGI step (see __main__.py) verifies the bearer token per request and publishes
+the principal on `_REQUEST_PRINCIPAL` (a ContextVar) for that request's scope; `call_tool`
+reads it, falling back to the (normally unset) `build_server(principal=...)` arg.
 
 Without a principal `identity` and `search_medical_knowledge` should work; the Core refuses
 the principal-scoped `search_user_documents` with a JSON-RPC error (`PrincipalRequiredError`).
@@ -43,8 +38,8 @@ from toolcore.core import get_mcp_client
 
 SERVER_NAME = "documedai-mcp"
 
-# Per-request principal for the HTTP transport, where a single server instance is shared
-# across all sessions. stdio leaves this unset and relies on the build-time arg instead.
+# Per-request principal: a single server instance is shared across all HTTP sessions, so
+# the caller identity is published here per request rather than bound onto the server.
 _REQUEST_PRINCIPAL: contextvars.ContextVar[Optional[Principal]] = contextvars.ContextVar(
     "mcp_request_principal", default = None
 )
@@ -64,9 +59,8 @@ def build_server(principal: Optional[Principal] = None) -> Server:
     """
     Construct the MCP server bound to the shared Tool Core.
 
-    `principal` is the build-time fallback used by the stdio transport (one process =
-    one principal). The HTTP transport leaves it None and instead publishes a per-request
-    principal via `request_principal(...)`, which `call_tool` prefers.
+    `principal` is a build-time fallback (normally None); the HTTP transport instead
+    publishes a per-request principal via `request_principal(...)`, which `call_tool` prefers.
     """
     core = get_mcp_client()
     server: Server = Server(SERVER_NAME)
@@ -85,8 +79,8 @@ def build_server(principal: Optional[Principal] = None) -> Server:
 
     @server.call_tool()
     async def call_tool(name: str, arguments: dict) -> List[types.ContentBlock]:
-        # HTTP publishes a per-request principal on the ContextVar; stdio leaves it unset
-        # and falls back to the build-time `principal`.
+        # HTTP publishes a per-request principal on the ContextVar; otherwise fall back to
+        # the (normally unset) build-time `principal`.
         effective = _REQUEST_PRINCIPAL.get() or principal
         try:
             result = core.call_tool(name, arguments or {}, principal = effective)

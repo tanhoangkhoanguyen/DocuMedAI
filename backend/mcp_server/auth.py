@@ -8,10 +8,8 @@ The JWT logic is NOT forked: we reuse `services.app.auth_deps.decode_bearer_any`
 already verifies both local HS256 tokens (`type=local`, `id`) and Supabase tokens
 (normalized to `id` via `stable_supabase_user_id`). That verifier raises FastAPI's
 `HTTPException` on failure; since the MCP adapter is not FastAPI, we translate it into a
-transport-neutral `MCPAuthError` the callers map to their own error surface:
-
-    HTTP  — 401 at the ASGI middleware, before the session manager.
-    stdio — abort at process start (a broken MCP_AUTH_TOKEN is a misconfiguration).
+transport-neutral `MCPAuthError`, which the ASGI auth step maps to a 401 before the
+session manager runs.
 
 Token policy:
     absent / empty  -> None            (anonymous: identity + medical search still work;
