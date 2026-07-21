@@ -38,7 +38,7 @@ The seeder is **idempotent**: if `MedicalTerms` already exists and is non-empty 
 does nothing. To force a rebuild (wipe + re-upload), run it with `SEED_FORCE=1`:
 
 ```bash
-docker compose exec la-backend sh -c "SEED_FORCE=1 python -m services.chatbot.seed_prod_data"
+docker compose exec la-documedai sh -c "SEED_FORCE=1 python -m services.chatbot.seed_prod_data"
 ```
 
 Adding files: drop additional `*.jsonl` files into `prod_dataset/`. They are picked

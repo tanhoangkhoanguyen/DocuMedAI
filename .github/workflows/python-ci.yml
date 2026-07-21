@@ -37,11 +37,11 @@ jobs:
           COMPOSE_BAKE: "true"
         run: |
           $COMPOSE up -d --build --wait la-qdrant la-mongo la-redis
-          $COMPOSE up -d --build la-backend
+          $COMPOSE up -d --build la-documedai
 
       - name: Run backend CI tests
         run: |
-          $COMPOSE exec -T la-backend pytest -q \
+          $COMPOSE exec -T la-documedai pytest -q \
             ci_tests/integration/utils \
             ci_tests/integration/api \
             ci_tests/integration/vector_db/test_qdrant_client.py

@@ -114,12 +114,12 @@ Both adapters call the **same** `ToolCore.call_tool`. That single fact is the en
 - **Criteria:** unauthenticated external `search_user_documents` is refused; a valid user's token returns only that user's chunks; a second user's token cannot read the first's docs; `identity` works with no token.
 - **Tech:** shared `auth_deps.decode_bearer_any`; per-session principal binding; the three existing isolation layers (Core `requires_principal`, Qdrant `user_id` filter [`qdrant_client.py:205`](../vector_database_tests/utils/qdrant_client.py#L205), empty-user short-circuit) all still fire.
 
-### Issue 2.3 — Package the MCP server as a compose service
-- **Problem:** must run and be demoable without polluting the backend runtime.
+### Issue 2.3 — Package the MCP server as a compose service ✅
+- **Problem:** must run and be demoable without polluting the app runtime.
 - **What to do:**
-  - Add `la-mcp-server` to [`docker-compose.yml`](../../docker-compose.yml) (pattern mirrors `la-llm-proxy`, [`docker-compose.yml:55`](../../docker-compose.yml#L55)): own container, `documedai-net`, streamable-HTTP port exposed, `mem_limit`/`cpus` set. Backend does **not** depend on it.
-  - Document an MCP-host HTTP connection snippet (point Inspector/clients at the `/mcp` URL with an `Authorization: Bearer` header) in `backend/mcp_server/README.md`.
-- **Criteria:** `docker compose up -d la-mcp-server` serves MCP over HTTP; Inspector / an HTTP MCP client lists + calls tools; backend stack runs identically whether or not this service is up.
+  - Added `la-mcp-server` to [`docker-compose.yml`](../../docker-compose.yml): own container on `documedai-net`, streamable-HTTP port 8090 exposed, `mem_limit` set. The app (`la-documedai`) does **not** depend on it. Unlike `la-llm-proxy` (a standalone Go binary), the MCP server *is* the app's Python code, so it reuses the `la-documedai` image (shared `documedai` tag, built once) and overrides `command:` — no second Dockerfile, no duplicate model precache. Healthcheck is a TCP liveness probe (a bare GET to `/mcp` has no spec-defined status under streamable-HTTP).
+  - Documented compose launch + an MCP-host HTTP connection snippet (Inspector + `claude_desktop_config.json`, `/mcp` URL with `Authorization: Bearer`) in `backend/mcp_server/README.md`.
+- **Criteria:** `docker compose up -d la-mcp-server` serves MCP over HTTP; Inspector / an HTTP MCP client lists + calls tools; the app stack runs identically whether or not this service is up.
 - **Tech:** Docker, compose service, streamable-HTTP.
 
 ---
@@ -147,7 +147,7 @@ Both adapters call the **same** `ToolCore.call_tool`. That single fact is the en
 - **Tech:** pytest; shared fixtures; graph stays mocked (`conftest.py` `_build_graph` patch) so no LLM keys needed — Core tools hit live Qdrant only.
 
 ### Issue 3.4 — CI wiring
-- **What to do:** extend [`.github/workflows/python-ci.yml`](../../.github/workflows/python-ci.yml) to (a) run the new test dirs inside `la-backend`, (b) execute the HTTP conformance tests (they self-host a loopback uvicorn in-process; no separate service needed). Keep the mocked-graph, no-LLM-key CI contract.
+- **What to do:** extend [`.github/workflows/python-ci.yml`](../../.github/workflows/python-ci.yml) to (a) run the new test dirs inside `la-documedai`, (b) execute the HTTP conformance tests (they self-host a loopback uvicorn in-process; no separate service needed). Keep the mocked-graph, no-LLM-key CI contract.
 - **Criteria:** CI green on PRs to `main`/`develop`; MCP conformance + equivalence gate every merge.
 - **Tech:** GitHub Actions, `docker compose -f docker-compose.yml -f docker-compose.ci.yml`.
 
@@ -225,5 +225,5 @@ Collected in Phase 3 (correctness) + Phase 4 (performance). Fill `<>` from real 
 1. **Internal unchanged:** run `python backend/services/chatbot/run_chatbot.py` + a live chat via FastAPI — answers identical to pre-refactor; assert no internal-path latency regression (Phase 4 metric, `source=internal`).
 2. **MCP live:** `docker compose up -d la-mcp-server`; connect **MCP Inspector** + **Claude Desktop** → `initialize`, `tools/list` (3 tools w/ schemas), `tools/call identity`.
 3. **Auth boundary:** external `tools/call search_user_documents` without token → refused; with user-A token → only A's chunks; with user-B token → cannot read A's (isolation across protocol).
-4. **CI:** `docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T la-backend pytest -q ci_tests/integration/tool_core ci_tests/integration/mcp` — contract + conformance + equivalence green.
+4. **CI:** `docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T la-documedai pytest -q ci_tests/integration/tool_core ci_tests/integration/mcp` — contract + conformance + equivalence green.
 5. **Observability:** `docker compose --profile observability up`; run `benchmark_mcp.py`; confirm P50/P95/P99, success rates, and the **internal-vs-MCP overhead** panel show real numbers; JSON report regenerates on demand.

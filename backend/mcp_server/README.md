@@ -5,7 +5,7 @@ tools to external MCP clients over **streamable-HTTP**. It wraps the **same** `t
 execution core the internal agent uses — one core, two surfaces (in-process + HTTP).
 
 > Named `mcp_server` (not `mcp`) so it never shadows the official `mcp` SDK package.
-> Nothing to install: `mcp` already ships in the `la-backend` image (via crewai).
+> Nothing to install: `mcp` already ships in the `la-documedai` image (via crewai).
 
 ## Tools
 
@@ -34,21 +34,21 @@ principal for that request's scope before the session manager runs.
 ## Prerequisites
 
 With Docker Desktop running, bring up the **CI** stack from the repo root. Both compose
-files are required: the `.ci.yml` override runs `la-backend` idle at `/workspace` with
+files are required: the `.ci.yml` override runs `la-documedai` idle at `/workspace` with
 `PYTHONPATH` set, so tests run via `exec` (the prod backend can't host tests).
 
 ```powershell
 docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d --build --wait la-qdrant la-mongo la-redis
-docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d --build la-backend
+docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d --build la-documedai
 ```
 
-Everything below runs **inside** `la-backend`; the CI container already puts the code
+Everything below runs **inside** `la-documedai`; the CI container already puts the code
 on `PYTHONPATH`, so no path flags are needed.
 
 ## Verify
 
 ```powershell
-docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T la-backend pytest -q ci_tests/integration/mcp/test_mcp_server.py
+docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T la-documedai pytest -q ci_tests/integration/mcp/test_mcp_server.py
 ```
 
 Expected: all pass — tools/list (3), tools/call identity, no-principal refusal, and a
@@ -57,17 +57,38 @@ uvicorn and drives the JSON-RPC lifecycle with the official MCP SDK client end t
 (A *successful* `search_user_documents` needs seeded Qdrant + LLM keys, so that path is
 covered by the isolation tests in Issue 3.1/3.3, not here.)
 
-### Manual Server Launch
+## Run as a service
+
+`la-mcp-server` is its own compose service — it reuses the `la-documedai` image (same code
+and deps) with a different command, and serves `/mcp` on port **8090**. The app does not
+depend on it; the backend stack runs identically whether or not it is up.
 
 ```powershell
-# streamable-HTTP (port 8090, path /mcp) — needs port 8090 published from
-# la-backend; a permanent service is Issue 2.3's job
-docker compose -f docker-compose.yml -f docker-compose.ci.yml exec la-backend python -m mcp_server --host 0.0.0.0 --port 8090
+docker compose up -d --build la-mcp-server        # serves http://localhost:8090/mcp
+docker compose logs -f la-mcp-server
 ```
 
-### Interactive Testing (MCP Inspector)
+## Connect an MCP host
 
-Inspector *is* the client — it runs `initialize → tools/list → tools/call` for you and
-shows the JSON-RPC in a browser. Point it at the running HTTP server's `/mcp` URL and set
-an `Authorization: Bearer <jwt>` header to exercise `search_user_documents`; with no
-header, that tool returns a protocol error (principal required).
+Point any streamable-HTTP MCP client at `http://localhost:8090/mcp` and send
+`Authorization: Bearer <jwt>` to exercise `search_user_documents`; with no header, that
+tool returns a protocol error (principal required) while `identity` / `search_medical_knowledge`
+still work.
+
+**MCP Inspector** — Inspector *is* the client: it runs `initialize → tools/list → tools/call`
+and shows the JSON-RPC in a browser. Set the transport to **Streamable HTTP**, URL
+`http://localhost:8090/mcp`, and add the `Authorization` header.
+
+**Claude Desktop** (`claude_desktop_config.json`) — a remote HTTP MCP server:
+
+```json
+{
+  "mcpServers": {
+    "documedai": {
+      "type": "http",
+      "url": "http://localhost:8090/mcp",
+      "headers": { "Authorization": "Bearer <jwt>" }
+    }
+  }
+}
+```

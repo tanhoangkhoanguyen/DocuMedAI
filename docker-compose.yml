@@ -166,7 +166,7 @@ services:
     mem_limit: 8g
     cpus: 4.0
 
-  la-backend:
+  la-documedai:
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -174,6 +174,7 @@ services:
       # HF_TOKEN is unset/empty. Set it in .env or the shell env.
       secrets:
         - hf_token
+    image: documedai
     env_file:
       - path: .env
     environment:
@@ -194,7 +195,7 @@ services:
       la-redis:
         condition: service_healthy
     restart: unless-stopped
-    container_name: la-backend-service
+    container_name: la-documedai-service
     ports:
       - "2010:2010"
     networks:
@@ -211,6 +212,41 @@ services:
       retries: 5
       start_period: 180s
 
+  la-mcp-server:
+    # DocuMedAI's Tool Core exposed over real MCP (JSON-RPC 2.0, streamable-HTTP) for
+    # external MCP hosts (Claude Desktop, MCP Inspector). Same code + image as la-documedai,
+    # different command (skips entrypoint.sh; serves /mcp instead of the FastAPI app).
+    # The app does NOT depend on this — la-documedai runs identically whether it is up or
+    # not. See backend/mcp_server/.
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      secrets:
+        - hf_token
+    image: documedai                  # reuse the la-documedai image (built once, shared tag)
+    command: ["python", "-m", "mcp_server", "--host", "0.0.0.0", "--port", "8090"]
+    env_file:
+      - path: .env                     # JWT secrets (auth) + LLM proxy config
+    environment:
+      MONGO_URL: mongodb://la-mongo:27017/
+      REDIS_URL: redis://la-redis:6379/0
+      QDRANT_URL: http://la-qdrant:6333
+    restart: unless-stopped
+    container_name: la-mcp-server-service
+    ports:
+      - "8090:8090"                    # streamable-HTTP MCP surface at /mcp
+    networks:
+      - documedai-net
+    mem_limit: 8g                      # loads the reranker + embedding model like la-documedai
+    healthcheck:
+      # TCP liveness only: a bare GET to /mcp has no spec-defined status (the streamable-HTTP
+      # manager wants an event-stream Accept + session), so probe that the port is listening.
+      test: ["CMD", "python", "-c", "import socket,sys; s=socket.create_connection(('127.0.0.1',8090),3); s.close()"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
   la-frontend:
     build:
       context: ./frontend
@@ -222,13 +258,13 @@ services:
     env_file:
       - path: .env
     environment:
-      INTERNAL_API_BASE: http://la-backend:2010
+      INTERNAL_API_BASE: http://la-documedai:2010    # containers must use service hostname, not localhost (cant load from .env)
       # Docker Desktop on Windows/macOS: inotify events often miss bind-mount writes
       WATCHPACK_POLLING: "true"
       CHOKIDAR_USEPOLLING: "true"
       CHOKIDAR_INTERVAL: "1000"
     depends_on:
-      la-backend:
+      la-documedai:
         condition: service_healthy
     restart: unless-stopped
     container_name: la-frontend-service
@@ -245,7 +281,7 @@ volumes:
   models_cache:
 
 secrets:
-  # Sourced from the HF_TOKEN env var. Required by the la-backend build — set it
+  # Sourced from the HF_TOKEN env var. Required by the la-documedai build — set it
   # in .env or the shell env, else the backend image build fails.
   hf_token:
     environment: HF_TOKEN

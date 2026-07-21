@@ -122,12 +122,12 @@ curl -H "Metadata-Flavor: Google" \
 ```
 
 > Already running when you fix this? Role applies instantly; a scope change needs
-> the Stop→Start. Then `docker compose restart la-backend` and re-test chat.
+> the Stop→Start. Then `docker compose restart la-documedai` and re-test chat.
 
 ## 5. Build + start the backend
 
 ```bash
-docker compose up -d --build la-backend la-llm-proxy
+docker compose up -d --build la-documedai la-llm-proxy
 ```
 
 Pulls in Qdrant/Mongo/Redis automatically. **First run is slow** — builds images, downloads the model, seeds the `MedicalTerms` collection.
@@ -135,14 +135,14 @@ Pulls in Qdrant/Mongo/Redis automatically. **First run is slow** — builds imag
 ## 6. Verify
 
 ```bash
-docker ps                                   # expect la-backend/llm-proxy/qdrant/mongo/redis
-docker compose logs -f la-backend           # watch the seed finish (may take minutes)
+docker ps                                   # expect la-documedai/llm-proxy/qdrant/mongo/redis
+docker compose logs -f la-documedai           # watch the seed finish (may take minutes)
 curl localhost:6333/collections/MedicalTerms  # status "green", points_count > 0
 curl localhost:2010/health                    # 200 once healthy
 ```
 
 > `MedicalTerms` empty? Seed likely errored — check full logs (no `grep`, it hides
-> the traceback): `docker compose logs la-backend`.
+> the traceback): `docker compose logs la-documedai`.
 
 ## 7. Expose over HTTPS (DuckDNS + Caddy)
 
@@ -193,8 +193,8 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=<anon-key>
 ## Common operations
 
 ```bash
-docker compose logs -f la-backend                       # tail logs
-docker compose restart la-backend                       # reload app only
-docker compose down && docker compose up -d --build la-backend la-llm-proxy   # after .env/compose edits
-docker compose exec la-backend printenv | grep GOOGLE   # confirm project, no *_CREDENTIALS
+docker compose logs -f la-documedai                       # tail logs
+docker compose restart la-documedai                       # reload app only
+docker compose down && docker compose up -d --build la-documedai la-llm-proxy   # after .env/compose edits
+docker compose exec la-documedai printenv | grep GOOGLE   # confirm project, no *_CREDENTIALS
 ```

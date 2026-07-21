@@ -35,7 +35,7 @@ DocuMedAI is a full-stack AI-powered medical document analysis system. Users upl
 ```bash
 docker compose up -d --build          # Start all services
 docker compose down                   # Stop all services
-docker compose logs -f la-backend     # Tail backend logs
+docker compose logs -f la-documedai     # Tail backend logs
 docker compose --profile vectordb-lab up -d  # Include optional vector DB lab services
 ```
 
@@ -57,7 +57,7 @@ python backend/services/chatbot/run_chatbot.py  # Graph-only test harness (no HT
 ```
 
 ### Tests
-Tests live in `ci_tests/` and run against live services inside the `la-backend` container
+Tests live in `ci_tests/` and run against live services inside the `la-documedai` container
 (see `pytest.ini`: `testpaths = ci_tests`, `pythonpath = backend .`). They are integration
 tests, not unit tests — Mongo/Redis/Qdrant must be reachable.
 
@@ -65,14 +65,14 @@ tests, not unit tests — Mongo/Redis/Qdrant must be reachable.
 # CI command (matches .github/workflows/python-ci.yml) — run inside the running stack
 COMPOSE="docker compose -f docker-compose.yml -f docker-compose.ci.yml"
 $COMPOSE up -d --build --wait la-qdrant la-mongo la-redis
-$COMPOSE up -d --build la-backend
-$COMPOSE exec -T la-backend pytest -q \
+$COMPOSE up -d --build la-documedai
+$COMPOSE exec -T la-documedai pytest -q \
   ci_tests/integration/utils \
   ci_tests/integration/api \
   ci_tests/integration/vector_db/test_qdrant_client.py
 
 # Single file inside the container
-$COMPOSE exec -T la-backend pytest -q ci_tests/integration/api/test_chat_api.py
+$COMPOSE exec -T la-documedai pytest -q ci_tests/integration/api/test_chat_api.py
 
 $COMPOSE down -v
 ```
@@ -80,7 +80,7 @@ $COMPOSE down -v
 Markers (`pytest.ini`): `integration` (live services), `vectordb` (Milvus/Weaviate/Vespa/
 ChromaDB — the `vectordb-lab` CI job; requires `requirements-dev.txt` clients).
 
-`docker-compose.ci.yml` overrides `la-backend` to idle (`sleep infinity`, healthcheck
+`docker-compose.ci.yml` overrides `la-documedai` to idle (`sleep infinity`, healthcheck
 disabled) and mounts the repo at `/workspace`, so tests run via `exec` rather than the
 prod entrypoint. The graph is mocked in `ci_tests/conftest.py` (`_build_graph` patched),
 so backend API tests don't call OpenAI.

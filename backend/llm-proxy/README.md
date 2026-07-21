@@ -49,7 +49,7 @@ The proxy strips a leading `/v1` from inbound paths before appending to
 ## How the backend points here
 
 `backend/services/chatbot/llm_config.py::get_llm_base_url()` reads
-`LLM_PROXY_BASE_URL` (set in docker-compose for `la-backend`) and is passed as
+`LLM_PROXY_BASE_URL` (set in docker-compose for `la-documedai`) and is passed as
 `base_url=` to every `ChatOpenAI(...)` and `crewai.LLM(...)`. Set
 `LLM_PROXY_BASE_URL=""` to bypass the proxy and call the provider directly.
 

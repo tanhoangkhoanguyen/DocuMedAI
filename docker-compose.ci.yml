@@ -4,7 +4,7 @@ services:
   la-qdrant:
     cpus: 2.0
 
-  la-backend:
+  la-documedai:
     build:
       args:
         # Skip the HF model pre-cache in CI (graph is mocked; model never used).
