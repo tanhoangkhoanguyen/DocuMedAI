@@ -34,6 +34,8 @@ from mcp import types
 
 from toolcore.contracts import Principal, ToolInputError
 from toolcore.core import get_mcp_client
+from toolcore.observability import classify_outcome
+from mcp_server.metrics import record_mcp_request
 
 
 SERVER_NAME = "documedai-mcp"
@@ -67,7 +69,7 @@ def build_server(principal: Optional[Principal] = None) -> Server:
 
     @server.list_tools()
     async def list_tools() -> List[types.Tool]:
-        return [
+        tools = [
             types.Tool(
                 name = spec.name,
                 title = spec.title,
@@ -76,6 +78,8 @@ def build_server(principal: Optional[Principal] = None) -> Server:
             )
             for spec in core.list_tools()
         ]
+        record_mcp_request("tools/list", "success")
+        return tools
 
     @server.call_tool()
     async def call_tool(name: str, arguments: dict) -> List[types.ContentBlock]:
@@ -85,13 +89,16 @@ def build_server(principal: Optional[Principal] = None) -> Server:
         try:
             result = core.call_tool(name, arguments or {}, principal = effective)
         except ToolInputError as exc:
-            # Covers PrincipalRequiredError too (it subclasses ToolInputError): bad args,
-            # unknown tool, and missing-principal all surface as a real JSON-RPC error
-            # (INVALID_PARAMS) rather than a success response wrapping an error string.
+            # Covers PrincipalRequiredError / ToolNotFoundError too (both subclass
+            # ToolInputError): bad args, unknown tool, and missing-principal all surface as a
+            # real JSON-RPC error (INVALID_PARAMS) rather than a success response wrapping an
+            # error string. classify_outcome splits them into the shared taxonomy for metrics.
+            record_mcp_request("tools/call", classify_outcome(exc))
             raise McpError(
                 types.ErrorData(code = types.INVALID_PARAMS, message = str(exc))
             ) from exc
 
+        record_mcp_request("tools/call", "success")
         return [
             types.TextContent(type = "text", text = block["text"])
             for block in result.content

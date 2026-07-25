@@ -92,3 +92,46 @@ and shows the JSON-RPC in a browser. Set the transport to **Streamable HTTP**, U
   }
 }
 ```
+
+## Observability
+
+Measures MCP **serving/protocol overhead**. Two metric families, both on the default
+Prometheus registry and served at `http://localhost:8090/metrics`:
+
+| Metric | Labels | Source |
+|--------|--------|--------|
+| `toolcore_tool_calls_total`, `toolcore_tool_call_duration_seconds` | `tool`, `surface` (internal\|mcp), `outcome` | every `call_tool` (both surfaces) — [`toolcore/observability.py`](../toolcore/observability.py) |
+| `mcp_requests_total` | `method`, `outcome` | per JSON-RPC request — [`metrics.py`](metrics.py) |
+
+`outcome` ∈ `success` \| `not_found` \| `input_error` \| `auth_error` \| `upstream_error`.
+Because both surfaces record on the same histogram tagged by `surface`, internal-vs-MCP
+overhead is one PromQL query.
+
+### Dashboard (Prometheus + Grafana)
+
+Optional compose profile. Needs `la-mcp-server` up:
+
+```powershell
+docker compose up -d --build la-mcp-server                 # exposes /metrics
+docker compose --profile observability up -d la-prometheus la-grafana
+```
+
+- Prometheus: `http://localhost:9090` (scrapes `la-mcp-server` + `la-llm-proxy`).
+- Grafana: `http://localhost:3000` (anonymous admin) → **DocuMedAI — MCP Observability**:
+  per-tool P50/P95/P99, MCP success rate by method, internal-vs-MCP overhead, error taxonomy.
+
+Panels stay flat until traffic flows — run the benchmark below (or drive the server) to
+populate them.
+
+### Overhead report (one command)
+
+`benchmark_mcp.py` times the same tool+args in-process vs over MCP and writes the delta:
+
+```powershell
+# from inside la-mcp-server (or any env with the code + AUTH_JWT_SECRET on PYTHONPATH)
+python -m mcp_server.benchmark_mcp --tool identity --n 200 --qps 50 --out overhead.json
+```
+
+Output (also printed): per-tool `{direct, mcp}` P50/P95/P99 plus `overhead_ms` /
+`overhead_pct` — the "cost of the protocol" number. Defaults to `identity` +
+`search_medical_knowledge`, so no uploaded documents are required.

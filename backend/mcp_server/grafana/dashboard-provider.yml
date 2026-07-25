@@ -1,0 +1,11 @@
+# Loads any dashboard JSON under /var/lib/grafana/dashboards (mounted read-only).
+apiVersion: 1
+providers:
+  - name: DocuMedAI
+    orgId: 1
+    type: file
+    disableDeletion: true
+    editable: true
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false
