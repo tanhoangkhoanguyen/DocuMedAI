@@ -1,0 +1,16 @@
+# Scrape config for the observability profile (docker compose --profile observability up).
+# Targets are reached by service DNS on documedai-net; both expose /metrics.
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: mcp-server
+    # Tool Core metrics (toolcore_*, surface=mcp) + protocol metrics (mcp_requests_total).
+    static_configs:
+      - targets: ["la-mcp-server:8090"]
+
+  - job_name: llm-proxy
+    # Go gateway metrics (llmproxy_*).
+    static_configs:
+      - targets: ["la-llm-proxy:8081"]

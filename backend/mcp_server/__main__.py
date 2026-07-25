@@ -8,15 +8,17 @@ External clients authenticate per request with `Authorization: Bearer <jwt>`
 (verified in auth.py). Internal LangGraph callers never reach this process — they
 use the in-process Tool Core path (`source="internal"`) directly.
 """
-import argparse, contextlib
+import argparse, contextlib, json
 from typing import AsyncIterator, Optional
 
+from prometheus_client import make_asgi_app
 from starlette.applications import Starlette
 from starlette.routing import Mount
 from starlette.types import Receive, Scope, Send
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 
 from mcp_server.auth import MCPAuthError, principal_from_token
+from mcp_server.metrics import record_mcp_request
 from mcp_server.server import build_server, request_principal, SERVER_NAME
 from logger import get_logger
 
@@ -40,7 +42,6 @@ def _bearer_from_scope(scope: dict) -> Optional[str]:
 
 
 async def _send_401(send, detail: str) -> None:
-    import json
     body = json.dumps({"error": "unauthorized", "detail": detail}).encode("utf-8")
     await send({
         "type": "http.response.start",
@@ -67,10 +68,17 @@ def build_http_app() -> Starlette:
         # Per-request auth: verify the bearer token, publish the principal for this request's
         # scope, then delegate. Absent token -> anonymous (identity/medical still work, the
         # Core refuses search_user_documents). Present-but-invalid -> 401 before the manager.
+        #
+        # Note: we do NOT buffer/parse the request body here. streamable-HTTP keeps the
+        # connection open for a server->client SSE stream, so consuming `receive` or gating
+        # on `handle_request` returning would stall the stream. Per-method metrics
+        # (tools/list, tools/call) are recorded inside the SDK handlers in server.py, which
+        # is the clean interception point; a transport-auth 401 is recorded here.
         try:
             principal = principal_from_token(_bearer_from_scope(scope))
         except MCPAuthError as exc:
             await _send_401(send, str(exc))
+            record_mcp_request("auth", "auth_error")
             return
 
         with request_principal(principal):
@@ -81,7 +89,16 @@ def build_http_app() -> Starlette:
         async with session_manager.run():
             yield
 
-    return Starlette(routes = [Mount(MCP_PATH, app = handle_mcp)], lifespan = lifespan)
+    # /metrics serves the default Prometheus registry, where the Tool Core's toolcore_*
+    # metrics (Issue 4.1) and this server's mcp_requests_total already register. Scraped
+    # by the observability profile's Prometheus.
+    return Starlette(
+        routes = [
+            Mount("/metrics", app = make_asgi_app()),
+            Mount(MCP_PATH, app = handle_mcp),
+        ],
+        lifespan = lifespan,
+    )
 
 
 def _run_http(host: str, port: int) -> None:

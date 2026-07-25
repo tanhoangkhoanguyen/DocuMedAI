@@ -58,6 +58,24 @@ Each message flows: **TopicChecker → MessageAnalysis → LongTermMemory → Ag
 
 Five engines (Qdrant, Milvus, Weaviate, Vespa, ChromaDB) benchmarked the honest way - [ann-benchmarks](https://github.com/erikbern/ann-benchmarks) style, latency compared at equal recall. Lab lives in `backend/vector_database_tests/`.
 
+## MCP server
+
+The RAG tools exposed over real **Model Context Protocol** (JSON-RPC 2.0, streamable-HTTP) so external hosts - Claude Desktop, MCP Inspector - can call them. **One core, two surfaces**: the same `toolcore` executes for both the in-process LangGraph agent and remote MCP clients, so per-user isolation is enforced once, in `call_tool`. Lives in `backend/mcp_server/`.
+
+```bash
+docker compose up -d --build la-mcp-server     # http://localhost:8090/mcp
+```
+
+Benchmarked on the same open-loop discipline as the vector DB lab - latency charged from each request's *ideal* send time, so saturation shows as rising latency, not reduced load:
+
+| | measured |
+|---|---|
+| Protocol overhead vs in-process | **4.8 ms** p50 (n=10,000/arm, loopback) |
+| Sustained throughput | **150 rps @ 13 ms** p50 (2 VMs, 4 vCPU server and 8 vCPU client) |
+| Under 4× overload (800 qps) | throughput holds ~162 rps, **100% success, zero transport errors** |
+
+Degrades by queueing, never by failing. Full tables, honest caveats, and the load-generator calibration that made the tail numbers trustworthy: [`backend/mcp_server/README.md`](backend/mcp_server/README.md#performance) · two-VM setup: [`docs/mcp-loadtest-runbook.md`](docs/mcp-loadtest-runbook.md).
+
 ## Run
 
 ```bash

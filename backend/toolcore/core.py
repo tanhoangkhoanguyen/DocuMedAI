@@ -11,9 +11,11 @@ from toolcore.contracts import (
     SearchMedicalKnowledgeArgs,
     SearchUserDocumentsArgs,
     ToolInputError,
+    ToolNotFoundError,
     ToolResult,
     ToolSpec,
 )
+from toolcore.observability import classify_outcome, record_tool_call
 from toolcore.tools.medical_supporter import get_medical_supporter
 from toolcore.tools.user_document_supporter import get_user_document_supporter
 from logger import get_logger
@@ -155,35 +157,47 @@ class MCPServer:
         Both the internal agent and the future MCP server call through here, so per-user
         isolation is enforced ONCE, in the Core.
         """
-        spec = self.__registry.get(name)
-        if spec is None:
-            raise ToolInputError(f"unknown tool '{name}'")
-
-        # Principal gate: isolation moved UP into the Core. Refuse before validating or
-        # executing so a principal-scoped tool can never run without a caller identity.
-        if spec.requires_principal and principal is None:
-            raise PrincipalRequiredError(f"tool '{name}' requires a principal")
-
-        # spec.input_schema is the JSON Schema advertised to external clients (Phase 2
-        # tools/list); the MCP server validates raw JSON at its own boundary, so the core
-        # validates once here.
+        # surface is derived from the principal (mcp calls carry source="mcp"); an
+        # unauthenticated internal call has principal=None and is still "internal".
+        surface = principal.source if principal else "internal"
+        start = time.perf_counter()
         try:
-            typed_args = spec.args_model.model_validate(args)
-        except ValidationError as exc:
-            raise ToolInputError(f"invalid args for tool '{name}': {exc}") from exc
+            spec = self.__registry.get(name)
+            if spec is None:
+                raise ToolNotFoundError(f"unknown tool '{name}'")
 
-        # user_id is threaded per-call (NOT bound to this cached-singleton server)
-        # so concurrent users never see each other's documents.
-        user_id = principal.user_id if principal else ""
+            # Principal gate: isolation moved UP into the Core. Refuse before validating or
+            # executing so a principal-scoped tool can never run without a caller identity.
+            if spec.requires_principal and principal is None:
+                raise PrincipalRequiredError(f"tool '{name}' requires a principal")
 
-        start = time.monotonic()
-        out = spec.handler(typed_args, self.__config, user_id)
-        duration_ms = (time.monotonic() - start) * 1000.0
+            # spec.input_schema is the JSON Schema advertised to external clients (Phase 2
+            # tools/list); the MCP server validates raw JSON at its own boundary, so the core
+            # validates once here.
+            try:
+                typed_args = spec.args_model.model_validate(args)
+            except ValidationError as exc:
+                raise ToolInputError(f"invalid args for tool '{name}': {exc}") from exc
+
+            # user_id is threaded per-call (NOT bound to this cached-singleton server)
+            # so concurrent users never see each other's documents.
+            user_id = principal.user_id if principal else ""
+
+            out = spec.handler(typed_args, self.__config, user_id)
+        except BaseException as exc:
+            # Record the failed call, then re-raise unchanged — the MCP surface and the
+            # internal shim still see the exact same exception.
+            duration_s = time.perf_counter() - start
+            record_tool_call(name, surface, classify_outcome(exc), duration_s)
+            raise
+
+        duration_s = time.perf_counter() - start
+        record_tool_call(name, surface, classify_outcome(None), duration_s)
 
         return ToolResult(
             tool_name = name,
             content = [{"type": "text", "text": out}],
-            duration_ms = duration_ms,
+            duration_ms = duration_s * 1000.0,
         )
 
     def execute_tool_call(self, name: str, message: str, user_id: str = "") -> str:

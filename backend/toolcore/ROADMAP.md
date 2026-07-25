@@ -162,25 +162,22 @@ Both adapters call the **same** `ToolCore.call_tool`. That single fact is the en
 
 ### Issue 4.1 — Per-call instrumentation in the Tool Core
 - **Problem:** no app-level latency measurement exists anywhere (only the Go proxy has metrics, and nothing scrapes it).
-- **What to do:** wrap `ToolCore.call_tool` to record `{tool, surface: internal|mcp, phase, duration, outcome}`. Emit a structured log line **and** Prometheus metrics. Tag **surface** so internal-vs-MCP is comparable from one metric.
+- **Approach:** a dedicated [`toolcore/observability.py`](observability.py) owns the metric objects and the log line so `call_tool` stays a plain control-flow read. `call_tool` is wrapped in one `time.perf_counter()` **whole-call span** (not per-stage — the handler's RAG/LLM work dominates, so sub-µs stage timing is noise); on every exit, success or exception, it records via `record_tool_call(tool, surface, outcome, duration_s)`. `surface` is **derived** from the principal (`principal.source if principal else "internal"`), not a new arg — so the internal shim and the MCP path are both tagged for free. `ToolResult.duration_ms` is now the whole-call span (was handler-only). Each record emits **both** Prometheus (`toolcore_tool_calls_total` counter + `toolcore_tool_call_duration_seconds` histogram, buckets tuned for tool calls, `toolcore_` prefix mirroring the proxy's `llmproxy_`) **and** a one-line orjson JSON log through the existing `get_logger` (payload is JSON; the shared plain-text formatter is untouched). Metrics register on the **default registry**; exposition is Issue 4.2.
 - **Criteria:** every call produces a timed record tagged by tool + surface + outcome.
-- **Tech:** `time.perf_counter`, `prometheus_client` (histograms with explicit buckets), JSON logs (consistent with the proxy's Loki-friendly logging).
 
 ### Issue 4.2 — MCP protocol metrics + overhead comparison
 - **Problem:** the standout, non-obvious metric — *what does the protocol cost vs calling the core directly?*
-- **What to do:**
-  - Per-tool **P50 / P95 / P99** latency (histograms).
-  - `mcp_requests_total{method,outcome}` for `initialize` / `tools/list` / `tools/call` → success rates.
-  - **Protocol-overhead metric:** same tool+args via (a) direct `ToolCore.call_tool` and (b) MCP `tools/call`; report the delta (absolute ms + %). The differentiator.
-  - **Error taxonomy** counter: `input_error` / `auth_error` / `upstream_error` / `not_found`.
-- **Criteria:** a `/metrics` endpoint on the MCP server exposes all of the above; a small `benchmark_mcp.py` driver produces a reproducible overhead report (JSON — its **own** metrics, not the recall harness).
-- **Tech:** `prometheus_client` on the MCP server; a fixed-workload async driver (open-loop send-time latency, echoing the proxy/lab discipline against coordinated omission, without importing the lab's recall code).
+- **Approach:**
+  - **Per-tool P50/P95/P99** reuse 4.1's `toolcore_tool_call_duration_seconds` (already tagged `surface="mcp"` on the MCP path) — Grafana derives percentiles via `histogram_quantile`; no second histogram.
+  - **`mcp_requests_total{method,outcome}`** ([`mcp_server/metrics.py`](../mcp_server/metrics.py)) counts JSON-RPC methods. `initialize` has no user-level handler (the low-level SDK owns the lifecycle), so an **ASGI wrapper** in [`mcp_server/__main__.py`](../mcp_server/__main__.py) buffers the request body once, reads the JSON-RPC `method`, replays the body downstream, and records the outcome from the transport (401 → `auth_error`, 5xx → `upstream_error`, else `success`). This covers `initialize` / `tools/list` / `tools/call`. Tool-level errors ride inside a 200 `isError` result and are counted precisely by `toolcore_tool_calls_total`, so the two families don't double-count.
+  - **Error taxonomy** unified across both surfaces: `classify_outcome` (4.1) refined to `success | not_found | input_error | auth_error | upstream_error`, with a new `ToolNotFoundError(ToolInputError)` so `not_found` separates from validation while `except ToolInputError` / the MCP `INVALID_PARAMS` mapping stay intact.
+  - **Overhead report:** [`mcp_server/benchmark_mcp.py`](../mcp_server/benchmark_mcp.py) times the same tool+args (a) in-process `call_tool` and (b) MCP `tools/call` over streamable-HTTP (SDK `ClientSession`), reporting per-tool P50/P95/P99 per arm + delta (ms + %) as JSON. Open-loop pacing, latency from ideal send time (coordinated-omission discipline echoed from the vector lab, **not** imported).
+- **Criteria:** `/metrics` on the MCP server (`make_asgi_app()` mounted alongside `/mcp`, serving the default registry) exposes all of the above; `benchmark_mcp.py` produces a reproducible overhead JSON on one command.
 
 ### Issue 4.3 — Dashboard + repro runbook
 - **Problem:** metrics are exposed but nothing visualizes them (no Prometheus/Grafana config in the repo today).
-- **What to do:** add a minimal `prometheus.yml` scraping `la-mcp-server` + `la-llm-proxy`, and a Grafana dashboard JSON (per-tool P50/P95/P99, success rates, internal-vs-MCP overhead panel, error taxonomy). Wire as an optional compose profile (mirror `--profile vectordb-lab`). Runbook in `backend/mcp/README.md`.
-- **Criteria:** `docker compose --profile observability up` shows live panels; overhead panel reads real numbers; one command regenerates the JSON report.
-- **Tech:** Prometheus, Grafana (provisioned dashboard JSON), compose profile.
+- **Approach:** [`mcp_server/prometheus.yml`](../mcp_server/prometheus.yml) scrapes `la-mcp-server:8090` + `la-llm-proxy:8081`; [`mcp_server/grafana_dashboard.json`](../mcp_server/grafana_dashboard.json) (auto-provisioned with a Prometheus datasource) panels per-tool P50/P95/P99, MCP success rate by method, **internal-vs-MCP overhead** (same histogram split by `surface`), and error taxonomy. `la-prometheus` + `la-grafana` are wired as `profiles: ["observability"]` (mirrors `vectordb-lab`), with a `grafana_data` volume. Runbook lives in [`mcp_server/README.md`](../mcp_server/README.md) (the real dir — the earlier `backend/mcp/` path never existed).
+- **Criteria:** `docker compose --profile observability up` shows live panels; the overhead panel reads real numbers once traffic flows (e.g. a `benchmark_mcp.py` run); one command regenerates the JSON report.
 
 ---
 

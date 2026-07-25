@@ -24,6 +24,15 @@ class PrincipalRequiredError(ToolInputError):
     """
 
 
+class ToolNotFoundError(ToolInputError):
+    """
+    Raised when a call names a tool the registry doesn't hold. Subclasses ToolInputError
+    so existing `except ToolInputError` sites still catch it (and the MCP surface still
+    maps it to INVALID_PARAMS), while letting observability separate it as `not_found`
+    from ordinary validation failures.
+    """
+
+
 @dataclass(frozen = True)
 class Principal:
     """
