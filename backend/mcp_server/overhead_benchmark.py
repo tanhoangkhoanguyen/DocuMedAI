@@ -1,5 +1,5 @@
 """
-MCP protocol-overhead benchmark (Tier 1):  python -m mcp_server.benchmark_mcp [options]
+MCP protocol-overhead benchmark:  python -m mcp_server.overhead_benchmark [options]
 
 Answers the headline question: *what does the MCP protocol cost vs calling the Tool Core
 directly?* It times the SAME tool + args two ways —
@@ -14,7 +14,7 @@ cost is usually worst under jitter.
 This is the LOCAL, single-in-flight probe: it isolates pure serialization + JSON-RPC +
 streamable-HTTP framing cost, so it is meant to run on loopback where network RTT ~ 0.
 Serving CAPACITY under concurrent load (throughput vs offered QPS, tail latency under load,
-error breakdown) is a separate axis — see loadtest_mcp.py (Tier 2, run against a remote VM).
+error breakdown) is a separate axis — see loadtest_mcp.py, which runs against a remote VM.
 
 Uses `identity` by default (no RAG/LLM, no uploaded docs) so the number is transport cost,
 not retrieval cost. Coordinated-omission discipline is echoed from vector_database_tests/
@@ -35,7 +35,6 @@ DEFAULT_URL = "http://127.0.0.1:8090/mcp/"   # trailing slash: Mount 307-redirec
 DEFAULT_TOOLS = ("identity",)
 _ARGS_FOR = {
     "identity": {},
-    "search_medical_knowledge": {"query": "what is sepsis"},
 }
 _PERCENTILES = ("p50", "p95", "p99")
 
@@ -137,9 +136,9 @@ async def _run(args) -> dict:
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        prog = "benchmark_mcp", description = "MCP protocol-overhead benchmark (Tier 1, local)")
+        prog = "overhead_benchmark", description = "MCP protocol-overhead benchmark (local)")
     p.add_argument("--tool", action = "append", help = "tool to bench (repeatable; default: identity)")
-    p.add_argument("--n", type = int, default = 200, help = "timed calls per tool per arm")
+    p.add_argument("--n", type = int, default = 10000, help = "timed calls per tool per arm")
     p.add_argument("--warmup", type = int, default = 20, help = "discarded warmup calls")
     p.add_argument("--qps", type = float, default = 50.0, help = "open-loop send rate (single in-flight)")
     p.add_argument("--url", default = DEFAULT_URL, help = "MCP streamable-HTTP endpoint")

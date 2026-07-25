@@ -95,8 +95,8 @@ and shows the JSON-RPC in a browser. Set the transport to **Streamable HTTP**, U
 
 ## Observability
 
-Measures MCP **serving/protocol overhead**. Two metric families, both on the default
-Prometheus registry and served at `http://localhost:8090/metrics`:
+Live server-side metrics — two families, both on the default Prometheus registry and served
+at `http://localhost:8090/metrics`:
 
 | Metric | Labels | Source |
 |--------|--------|--------|
@@ -120,18 +120,52 @@ docker compose --profile observability up -d la-prometheus la-grafana
 - Grafana: `http://localhost:3000` (anonymous admin) → **DocuMedAI — MCP Observability**:
   per-tool P50/P95/P99, MCP success rate by method, internal-vs-MCP overhead, error taxonomy.
 
-Panels stay flat until traffic flows — run the benchmark below (or drive the server) to
+Panels stay flat until traffic flows — run either benchmark below (or drive the server) to
 populate them.
 
-### Overhead report (one command)
+## Benchmarks
 
-`benchmark_mcp.py` times the same tool+args in-process vs over MCP and writes the delta:
+Two benchmarks measure two different things. Both write a JSON report (`--out`) and echo the
+coordinated-omission discipline of `vector_database_tests/` (latency from each request's
+*ideal* send time). Both default to `identity`, so no uploaded documents or LLM keys are
+needed — the numbers are the **protocol/serving** cost, not RAG cost.
+
+### 1. Protocol overhead — `overhead_benchmark.py` (local)
+
+*What does one MCP call cost vs calling the core directly?* Times the same tool+args
+in-process (`call_tool`) and over streamable-HTTP (`ClientSession.call_tool`), single call
+in flight, and reports the delta at each percentile. Run on **loopback** so network RTT ≈ 0
+and the number isolates pure serialization + JSON-RPC + framing cost.
 
 ```powershell
 # from inside la-mcp-server (or any env with the code + AUTH_JWT_SECRET on PYTHONPATH)
-python -m mcp_server.benchmark_mcp --tool identity --n 200 --qps 50 --out overhead.json
+docker compose exec la-mcp-server python -m mcp_server.overhead_benchmark --n 10000 --qps 50 --out overhead.json
 ```
 
-Output (also printed): per-tool `{direct, mcp}` P50/P95/P99 plus `overhead_ms` /
-`overhead_pct` — the "cost of the protocol" number. Defaults to `identity` +
-`search_medical_knowledge`, so no uploaded documents are required.
+Output: per-tool `{direct, mcp}` P50/P95/P99 plus `overhead: {p50,p95,p99}` with
+`overhead_ms` / `overhead_pct` — the "cost of the protocol" number.
+
+### 2. Serving capacity — `loadtest_mcp.py` (remote VM)
+
+*How much concurrent load can the server sustain, and how does tail latency degrade as
+offered load rises?* An open-loop QPS ladder over N persistent sessions; per rung it reports
+`achieved_rps` vs target (the saturation signal), P50/P95/P99 under load, success rate, and
+an outcome breakdown (`success` / `tool_error` / `transport_error`).
+
+Because this measures the **network + serving** path, run it client→server across machines,
+not on loopback. On GCP:
+
+```bash
+# 1. Server VM: bring up the MCP server (opens :8090)
+docker compose up -d --build la-mcp-server la-qdrant la-mongo la-redis
+#    Allow TCP 8090 from the client VM (firewall rule / same VPC).
+
+# 2. Client VM (separate machine, same AUTH_JWT_SECRET on PYTHONPATH):
+python -m mcp_server.loadtest_mcp \
+    --url http://<server-vm-ip>:8090/mcp/ \
+    --qps 50 100 200 400 800 --duration 30 --warmup 5 --concurrency 64 \
+    --out capacity.json
+```
+
+Sustainable throughput is the highest rung where `achieved_rps ≈ target` and P99 stays
+bounded; the first rung where `achieved_rps` falls short is the saturation point.

@@ -233,6 +233,8 @@ services:
       QDRANT_URL: http://la-qdrant:6333
     restart: unless-stopped
     container_name: la-mcp-server-service
+    volumes:
+      - ./backend:/backend            # app code — the image bakes only deps + entrypoint
     ports:
       - "8090:8090"                    # streamable-HTTP MCP surface at /mcp
     networks:
