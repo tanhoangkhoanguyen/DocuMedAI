@@ -1,0 +1,93 @@
+name: LLM Proxy CI
+
+# Scoped to the Go service by path so it stays off the critical path for the
+# Python and frontend workflows, which never touch this code.
+on:
+  pull_request:
+    paths:
+      - "backend/llm-proxy/**"
+      - ".github/workflows/llm-proxy-ci.yml"
+  push:
+    branches:
+      - main
+      - develop
+    paths:
+      - "backend/llm-proxy/**"
+      - ".github/workflows/llm-proxy-ci.yml"
+
+permissions:
+  contents: read
+
+# A new push to the same PR cancels the previous run — this workflow gates a
+# small service and there is no value in finishing a superseded run.
+concurrency:
+  group: llm-proxy-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: backend/llm-proxy
+
+jobs:
+  go:
+    name: test + lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      # The rate limiter's token bucket is a Lua script, so it can only be
+      # covered with a real server. testutil.RequireRedis skips when Redis is
+      # absent (a laptop), which means CI is the environment that has to supply
+      # it or those tests would silently never run.
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      # DB 15, matching testutil.DefaultRedisURL — never the app's DB 0 or the
+      # proxy's own DB 1.
+      TEST_REDIS_URL: redis://127.0.0.1:6379/15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          # Read the version from go.mod so the toolchain can never drift from
+          # what the module declares.
+          go-version-file: backend/llm-proxy/go.mod
+          cache-dependency-path: backend/llm-proxy/go.sum
+
+      # `make lint` installs the pinned golangci-lint via `go install` when it is
+      # missing. Caching GOBIN keeps that off the clock on every run but the
+      # first, while the Makefile stays the single source of the version.
+      - name: Cache golangci-lint binary
+        uses: actions/cache@v4
+        with:
+          path: ~/go/bin/golangci-lint
+          key: golangci-lint-${{ runner.os }}-v2.1.6
+
+      - name: Download modules
+        run: go mod download
+
+      # Fails if go.mod/go.sum are not what the source actually needs, so a
+      # forgotten `go mod tidy` is caught here rather than at the next build.
+      - name: Verify go.mod is tidy
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+
+      # Passes with "no test files" until the first _test.go lands. The race
+      # detector switches itself on here because CI has cgo.
+      - name: Test
+        run: make test
+
+      - name: Lint
+        run: make lint

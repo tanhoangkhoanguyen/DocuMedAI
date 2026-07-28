@@ -1,0 +1,72 @@
+# golangci-lint configuration for the llm-proxy service.
+#
+# Phase 1 posture: PERMISSIVE ON PURPOSE. This config is a safety net for new
+# code, not a cleanup mandate for existing code. Every linter enabled below was
+# verified to run clean against the proxy as it stands today, so `make lint` is
+# green from day one and a red lint always means "the change you just made
+# introduced something", never "this repo was already dirty".
+#
+# Linters deliberately NOT enabled, and the existing code that would trip them.
+# Each is a candidate for a later phase, once the flagged call site is revisited
+# on purpose rather than as drive-by churn:
+#
+#   errcheck         proxy.go:144, proxy.go:171 — `defer resp.Body.Close()`.
+#   forcetypeassert  dedup.go:35  — singleflight `v.(*upstreamResult)`
+#                    proxy.go:113 — gobreaker  `v.(*upstreamResult)`
+#                    Both are unchecked-by-design: the only producer of these
+#                    values is the callback immediately above them.
+#   nilnil           proxy.go:189 — the streaming breaker callback returns
+#                    (nil, nil) because it has already written the response.
+#
+# Formatting linters (gofmt/gofumpt/goimports) are intentionally absent. The
+# repo has core.autocrlf=true, so Go sources are LF in git but CRLF in a Windows
+# working copy — gofmt would pass in CI and fail on a developer's machine for
+# reasons that have nothing to do with their change. Formatting is left to
+# editor/gopls until a .gitattributes rule pins *.go to LF.
+version: "2"
+
+run:
+  timeout: 5m
+  # Include _test.go files: the point of this phase is to lint the tests we are
+  # about to start writing, not just the production code.
+  tests: true
+
+linters:
+  # Start from nothing and opt in explicitly, so a golangci-lint upgrade cannot
+  # silently add a linter and break an unrelated PR.
+  default: none
+  enable:
+    - govet        # go vet, in-process (see also the standalone `make vet`)
+    - staticcheck  # correctness/simplification analyses
+    - ineffassign  # assignments never read
+    - unused       # unreachable/unused identifiers
+    - misspell     # typos in comments and strings
+
+  settings:
+    govet:
+      # Everything vet offers except fieldalignment, which would demand
+      # reordering Config/Metrics struct fields purely for padding.
+      enable-all: true
+      disable:
+        - fieldalignment
+    misspell:
+      # Locale is deliberately left unset (neutral). Forcing `locale: US` turns
+      # misspell into a British/American style check, which flags existing prose
+      # such as "labelled" in metrics.go:12 — a spelling preference, not a typo.
+      # Neutral still catches genuine misspellings, which is the useful part.
+      ignore-rules: []
+
+  exclusions:
+    # Skip generated files entirely — nobody hand-fixes a lint in one.
+    generated: lax
+    # golangci-lint's own curated exclusion presets, which suppress well-known
+    # false positives rather than real findings.
+    presets:
+      - common-false-positives
+      - std-error-handling
+
+issues:
+  # Report everything rather than the default 3-per-linter / 1-per-line caps —
+  # a partial list makes a red build look smaller than it is.
+  max-issues-per-linter: 0
+  max-same-issues: 0
