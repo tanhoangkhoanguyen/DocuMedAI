@@ -17,7 +17,7 @@ DocuMedAI is a full-stack AI-powered medical document analysis system. Users upl
 | Agent workflow | LangGraph StateGraph | `backend/services/chatbot/` |
 | Multi-agent | CrewAI | `nodes.py` — Agents node |
 | RAG pipeline | Qdrant retrieval + BAAI reranker | `backend/services/chatbot/tools/rag.py` |
-| LLM proxy | Go gateway (rate limit, retry, circuit breaker, dedup) in front of Gemini's OpenAI-compat endpoint | `backend/llm-proxy/` |
+| LLMGuard | Go gateway (rate limit, retry, circuit breaker, dedup) in front of Gemini's OpenAI-compat endpoint | `backend/llmguard/` |
 | Memory cache | Redis (TTL 1800s → flush to MongoDB) | `backend/services/utils/redis_client.py` |
 | Persistence | MongoDB | `backend/services/utils/mongo_client.py` |
 | Auth | JWT + Supabase SSR | `backend/services/app/auth_api.py`, `frontend/lib/supabase/` |
@@ -50,7 +50,7 @@ the shared `services.app.auth_deps.decode_bearer_any` (local HS256 + Supabase) a
 `Principal(source="mcp")` for the request scope. Absent token → anonymous (the two unscoped
 tools still work); invalid token → HTTP 401 before any tool runs.
 
-**LLM proxy**: All chat-completion calls route through the Go `la-llm-proxy` service (port 8081), which forwards to Gemini's OpenAI-compatible endpoint, not to the provider directly. Embeddings and the reranker run locally and bypass it. Each `ChatOpenAI`/`crewai.LLM` is constructed with `base_url=get_llm_base_url()` (`backend/services/chatbot/llm_config.py`), driven by the `LLM_PROXY_BASE_URL` env var. Set `LLM_PROXY_BASE_URL=""` to bypass the proxy. See `backend/llm-proxy/README.md`.
+**LLMGuard**: All chat-completion calls route through the Go `la-llmguard` service (port 8081), which forwards to Gemini's OpenAI-compatible endpoint, not to the provider directly. Embeddings and the reranker run locally and bypass it. Each `ChatOpenAI`/`crewai.LLM` is constructed with `base_url=get_llm_base_url()` (`backend/services/chatbot/llm_config.py`), driven by the `LLM_PROXY_BASE_URL` env var. Set `LLM_PROXY_BASE_URL=""` to bypass it. See `backend/llmguard/README.md`.
 
 ## Common Commands
 
@@ -134,13 +134,13 @@ so backend API tests don't call OpenAI.
 | Qdrant | 6333 |
 | MongoDB | 27017 |
 | Redis | 6379 |
-| LLM proxy (Go) | 8081 |
+| LLMGuard (Go) | 8081 |
 | MCP server | 8090 (`observability` scrape target; always available) |
 | Prometheus | 9090 (`observability` profile) |
 | Grafana | 3000 (`observability` profile) |
 
 Swagger UI: `http://localhost:2010/docs`
-LLM proxy metrics: `http://localhost:8081/metrics`
+LLMGuard metrics: `http://localhost:8081/metrics`
 MCP endpoint: `http://localhost:8090/mcp/` · metrics: `http://localhost:8090/metrics/`
 (both are `Mount`s — the **trailing slash matters**, the slashless form 307-redirects)
 

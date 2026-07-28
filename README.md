@@ -33,7 +33,7 @@ multi-agent workflow, and runs on production-grade infrastructure.
 |-------|------|------|
 | Frontend | Next.js 15 / React 19 | 2011 |
 | Backend | FastAPI | 2010 |
-| LLM proxy | Go gateway → Gemini (OpenAI-compatible) | 8081 |
+| LLMGuard | Go gateway → Gemini (OpenAI-compatible) | 8081 |
 | RAG | Qdrant + BAAI reranker | 6333 |
 | Memory | Redis → MongoDB | 6379 / 27017 |
 
@@ -52,7 +52,7 @@ Each message flows: **TopicChecker → MessageAnalysis → LongTermMemory → Ag
 | GET | `/health` | liveness |
 
 **Frontend** (`:2011`) — chat UI + `/api/*` routes proxying the backend.
-**LLM proxy** (`:8081`) — `/v1/*` completions, `/healthz`, `/metrics`.
+**LLMGuard** (`:8081`) — `/v1/*` completions, `/healthz`, `/metrics`.
 
 ## Vector DB benchmark
 

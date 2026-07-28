@@ -100,7 +100,7 @@ func (r *RateLimiter) Acquire(ctx context.Context, key string, maxWait time.Dura
 func (r *RateLimiter) take(ctx context.Context, key string, rate float64) (bool, error) {
 	now := float64(time.Now().UnixNano()) / 1e9
 	res, err := tokenBucketScript.Run(ctx, r.rdb,
-		[]string{"llmproxy:bucket:" + key},
+		[]string{"llmguard:bucket:" + key},
 		r.burst, rate, now,
 	).Int()
 	if err != nil {

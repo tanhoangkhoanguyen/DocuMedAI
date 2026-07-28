@@ -127,7 +127,7 @@ curl -H "Metadata-Flavor: Google" \
 ## 5. Build + start the backend
 
 ```bash
-docker compose up -d --build la-documedai la-llm-proxy
+docker compose up -d --build la-documedai la-llmguard
 ```
 
 Pulls in Qdrant/Mongo/Redis automatically. **First run is slow** — builds images, downloads the model, seeds the `MedicalTerms` collection.
@@ -135,7 +135,7 @@ Pulls in Qdrant/Mongo/Redis automatically. **First run is slow** — builds imag
 ## 6. Verify
 
 ```bash
-docker ps                                   # expect la-documedai/llm-proxy/qdrant/mongo/redis
+docker ps                                   # expect la-documedai/llmguard/qdrant/mongo/redis
 docker compose logs -f la-documedai           # watch the seed finish (may take minutes)
 curl localhost:6333/collections/MedicalTerms  # status "green", points_count > 0
 curl localhost:2010/health                    # 200 once healthy
@@ -195,6 +195,6 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=<anon-key>
 ```bash
 docker compose logs -f la-documedai                       # tail logs
 docker compose restart la-documedai                       # reload app only
-docker compose down && docker compose up -d --build la-documedai la-llm-proxy   # after .env/compose edits
+docker compose down && docker compose up -d --build la-documedai la-llmguard   # after .env/compose edits
 docker compose exec la-documedai printenv | grep GOOGLE   # confirm project, no *_CREDENTIALS
 ```

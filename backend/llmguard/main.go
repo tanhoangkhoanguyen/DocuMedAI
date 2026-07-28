@@ -48,8 +48,8 @@ func main() {
 	proxy := newProxy(cfg, limiter, deduper, metrics, log)
 
 	mux := http.NewServeMux()
-	// All OpenAI-compatible traffic. The backend points its base_url at
-	// http://la-llm-proxy:8081/v1, so requests arrive under /v1/*.
+	// All OpenAI-compatible traffic. Clients point their base_url at
+	// http://la-llmguard:8081/v1, so requests arrive under /v1/*.
 	mux.Handle("/v1/", proxy)
 	// Liveness for docker-compose healthcheck.
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -69,7 +69,7 @@ func main() {
 
 	// Graceful shutdown on SIGINT/SIGTERM so in-flight calls aren't cut off.
 	go func() {
-		log.Info("llm-proxy listening", "port", cfg.Port, "upstream", cfg.UpstreamBase)
+		log.Info("llmguard listening", "port", cfg.Port, "upstream", cfg.UpstreamBase)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Error("server error", "err", err.Error())
 			os.Exit(1)
@@ -88,7 +88,7 @@ func main() {
 }
 
 // runHealthcheck performs a localhost GET /healthz and exits 0 on 200, 1 else.
-// Invoked as `/llm-proxy -healthcheck` by the docker healthcheck.
+// Invoked as `/llmguard -healthcheck` by the docker healthcheck.
 func runHealthcheck() {
 	port := getenv("PROXY_PORT", "8081")
 	client := &http.Client{Timeout: 3 * time.Second}

@@ -1,12 +1,12 @@
-// llm-proxy — an OpenAI-compatible gateway that sits between the DocuMedAI
+// LLMGuard — an OpenAI-compatible gateway that sits between the DocuMedAI
 // Python backend (LangGraph / CrewAI) and the LLM provider (Gemini, via its
 // OpenAI-compatible endpoint). It adds rate limiting, retry/backoff, circuit
 // breaking, in-flight de-duplication and Prometheus metrics so a burst of
 // chat-completion calls never overwhelms the upstream (429/5xx).
 //
-// The backend talks to this proxy using the OpenAI wire format: it only changes
+// Clients talk to LLMGuard using the OpenAI wire format: they only change
 // `base_url` to point here. We inject the real upstream key on the way out.
-module documedai/llm-proxy
+module documedai/llmguard
 
 go 1.23
 

@@ -29,7 +29,7 @@ _LOGGER = get_logger(name = "toolcore", level = "INFO")
 # check is sub-millisecond, a RAG+rerank handler is hundreds of ms to a few seconds.
 _DURATION_BUCKETS = (0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0)
 
-# toolcore_ prefix parallels the Go proxy's llmproxy_. Same label set on both so a counter
+# toolcore_ prefix parallels LLMGuard's llmguard_. Same label set on both so a counter
 # and its timing line up.
 TOOL_CALLS_TOTAL = Counter(
     "toolcore_tool_calls_total",

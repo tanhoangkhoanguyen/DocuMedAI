@@ -7,10 +7,10 @@ import (
 	"time"
 )
 
-// Config holds every tunable knob the proxy reads from the environment.
+// Config holds every tunable knob LLMGuard reads from the environment.
 //
 // In docker-compose these come from `.env` + explicit `environment:` overrides
-// on the `la-llm-proxy` service. Defaults are chosen so the proxy boots with
+// on the `la-llmguard` service. Defaults are chosen so it boots with
 // nothing but OPENAI_API_KEY set.
 type Config struct {
 	// OpenAIKey is the REAL upstream API key. It lives ONLY in the proxy's env;

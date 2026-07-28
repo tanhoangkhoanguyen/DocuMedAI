@@ -52,16 +52,16 @@ services:
       retries: 5
       start_period: 5s
 
-  la-llm-proxy:
-    # OpenAI-compatible gateway in front of Gemini's OpenAI-compat endpoint: rate
-    # limit, retry/backoff, circuit breaker, in-flight dedup, Prometheus metrics.
-    # The backend points its LLM base_url here instead of at Google directly.
-    # See backend/llm-proxy/.
+  la-llmguard:
+    # LLMGuard — OpenAI-compatible gateway in front of Gemini's OpenAI-compat
+    # endpoint: rate limit, retry/backoff, circuit breaker, in-flight dedup,
+    # Prometheus metrics. Clients point their LLM base_url here instead of at
+    # Google directly. See backend/llmguard/.
     build:
-      context: ./backend/llm-proxy
+      context: ./backend/llmguard
       dockerfile: Dockerfile
     restart: unless-stopped
-    container_name: la-llm-proxy-service
+    container_name: la-llmguard-service
     env_file:
       - path: .env                       # provides the REAL GEMINI_API_KEY
     environment:
@@ -80,7 +80,7 @@ services:
       - documedai-net
     healthcheck:
       # distroless image has no shell/curl; use the Go binary's own probe.
-      test: ["CMD", "/llm-proxy", "-healthcheck"]
+      test: ["CMD", "/llmguard", "-healthcheck"]
       interval: 10s
       timeout: 5s
       retries: 5
