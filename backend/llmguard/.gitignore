@@ -1,0 +1,23 @@
+# Compiled Go binaries. None of this belongs in the repo — the Dockerfiles build
+# their own binaries from source, so a checked-in artifact is always stale.
+
+# Everything `make build` / `make build-mock` produces. Both targets write here
+# precisely so a single rule covers them on every OS.
+bin/
+
+# Windows binaries wherever they land. `make build` wrote llm-proxy.exe to the
+# module root before the bin/ change, and one is still sitting on disk.
+*.exe
+
+# Extensionless Linux equivalents, from a direct `go build` without -o.
+/llm-proxy
+/mockupstream.bin
+
+# DO NOT add "/mockupstream" here. That is the SOURCE PACKAGE DIRECTORY for the
+# mock upstream server, and a bare entry would silently exclude the entire
+# package from git — the build target writes to bin/ for exactly this reason.
+
+# Go test and coverage artifacts.
+*.test
+coverage.out
+coverage.html

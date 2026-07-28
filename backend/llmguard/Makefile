@@ -47,6 +47,7 @@ help:
 	@echo "  make run     - run the proxy locally"
 	@echo "  make bench   - run benchmarks"
 	@echo "  make build   - compile the binary"
+	@echo "  make build-mock / run-mock - mock upstream ($(MOCK_ADDR))"
 	@echo "  make tools   - install golangci-lint $(GOLANGCI_LINT_VERSION)"
 	@echo "  make tidy    - go mod tidy"
 
@@ -92,9 +93,33 @@ run:
 bench:
 	$(GO) test -bench=. -benchmem -run '^$$' $(PKGS)
 
+# Compiled binaries go in bin/ rather than the module root. On Linux the mock's
+# binary name ("mockupstream") is identical to its SOURCE PACKAGE DIRECTORY, and
+# `go build -o mockupstream` against an existing directory writes the binary
+# INSIDE it — producing mockupstream/mockupstream, 9MB of build output sitting in
+# the source tree. A single ignorable bin/ avoids that, and avoids a .gitignore
+# rule that would have to name "mockupstream" and thereby ignore the package.
+BIN_DIR ?= bin
+
 .PHONY: build
 build:
-	$(GO) build -o llm-proxy$(GOEXE) .
+	$(GO) build -o $(BIN_DIR)/llm-proxy$(GOEXE) .
+
+# --- mock upstream (see mockupstream/README.md) -----------------------------
+
+MOCK_ADDR ?= :8090
+
+.PHONY: build-mock
+build-mock:
+	$(GO) build -o $(BIN_DIR)/mockupstream$(GOEXE) ./mockupstream/cmd/mockupstream
+
+.PHONY: run-mock
+run-mock:
+	$(GO) run ./mockupstream/cmd/mockupstream -addr $(MOCK_ADDR)
+
+.PHONY: docker-mock
+docker-mock:
+	docker build -f mockupstream/Dockerfile -t la-mockupstream .
 
 .PHONY: tools
 tools:
@@ -108,3 +133,4 @@ tidy:
 clean:
 	$(GO) clean
 	$(GO) clean -testcache
+	rm -rf $(BIN_DIR)
