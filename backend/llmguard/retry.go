@@ -10,20 +10,24 @@ import (
 	"time"
 
 	"github.com/sony/gobreaker"
+
+	"documedai/llmguard/provider"
 )
 
-// upstreamResult is the buffered outcome of one upstream call. We buffer the
-// body (rather than streaming straight to the client) ONLY on the retry path so
-// a failed attempt can be discarded and replayed. Streaming responses bypass
-// this and are handled separately in proxy.go.
+// upstreamResult is the buffered outcome of one upstream call. `body` is the
+// NORMALIZED (OpenAI-shaped) response, already translated by the provider — we
+// buffer it rather than streaming to the client ONLY on the retry path so a
+// failed attempt can be discarded and replayed. Streaming responses bypass this
+// and are handled separately in proxy.go.
 type upstreamResult struct {
 	status int
 	header http.Header
 	body   []byte
+	usage  provider.Usage
 }
 
 // retryStatuses are the HTTP statuses worth retrying — transient upstream
-// problems, not client errors. 429 = rate limited by OpenAI itself.
+// problems, not client errors. 429 = rate limited by the provider itself.
 func isRetryable(status int) bool {
 	switch status {
 	case http.StatusTooManyRequests, // 429
@@ -36,13 +40,13 @@ func isRetryable(status int) bool {
 	return false
 }
 
-// newBreaker builds the circuit breaker that wraps every upstream call
-// (diagram box 4). When OpenAI is failing hard, the breaker OPENS and we fail
-// fast with 503 instead of piling on more doomed requests — protecting both
-// upstream and our own latency.
+// newBreaker builds the circuit breaker that wraps every upstream call. When
+// the provider is failing hard, the breaker OPENS and we fail fast with 503
+// instead of piling on more doomed requests — protecting both upstream and our
+// own latency.
 func newBreaker(cfg Config, m *Metrics) *gobreaker.CircuitBreaker {
 	return gobreaker.NewCircuitBreaker(gobreaker.Settings{
-		Name:    "openai-upstream",
+		Name:    cfg.Provider + "-upstream",
 		Timeout: cfg.CircuitOpenFor, // how long to stay open before half-open probe
 		ReadyToTrip: func(c gobreaker.Counts) bool {
 			if c.Requests < cfg.CircuitMinReqs {
@@ -99,7 +103,7 @@ func doWithRetry(
 		delay := backoffDelay(cfg, attempt, seed)
 		if res != nil {
 			if ra := parseRetryAfter(res.header.Get("Retry-After")); ra > 0 {
-				delay = ra // OpenAI told us exactly how long to wait — respect it
+				delay = ra // upstream told us exactly how long to wait — respect it
 			}
 		}
 		select {
@@ -131,8 +135,8 @@ func backoffDelay(cfg Config, attempt int, seed string) time.Duration {
 	return time.Duration(exp + jitter)
 }
 
-// parseRetryAfter handles the delta-seconds form of Retry-After (the form
-// OpenAI uses). HTTP-date form is ignored (returns 0) — backoff covers it.
+// parseRetryAfter handles the delta-seconds form of Retry-After. HTTP-date form
+// is ignored (returns 0) — backoff covers it.
 func parseRetryAfter(v string) time.Duration {
 	if v == "" {
 		return 0

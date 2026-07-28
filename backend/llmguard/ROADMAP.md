@@ -1,5 +1,13 @@
 # LLMGuard ROADMAP
 
+> **Stale in places.** Written before the Vertex AI migration, so Phase 0's code tour still
+> describes the OpenAI-compat passthrough: `UPSTREAM_API_KEY`, `OPENAI_UPSTREAM_BASE`,
+> `LLM_PROXY_BASE_URL` and `get_llm_base_url()` no longer exist. Those are replaced by
+> `GOOGLE_CLOUD_PROJECT`/`GOOGLE_CLOUD_LOCATION` + ADC, and the passthrough is now a
+> provider adapter (`provider/`). Phase 2's provider abstraction is **implemented**; its
+> first adapter is Vertex. Phase 1 (test scaffold, mock upstream, Go CI) is still open —
+> the adapter has unit tests, but nothing runs them automatically.
+
 This is the single roadmap for `llmguard`. It has two parts:
 
 - **Phase 0 — Learn what exists.** The current code was written fast ("vibe-coded"); first

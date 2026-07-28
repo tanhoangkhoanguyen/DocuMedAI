@@ -10,9 +10,9 @@ import (
 // RateLimiter is a distributed token bucket backed by Redis (diagram box 1).
 //
 // Why Redis and not an in-memory limiter: the bucket state must be shared if the
-// proxy is ever scaled to >1 replica, so every replica throttles against the
-// SAME OpenAI quota. The bucket is keyed per (api-key + model) so a burst on one
-// model doesn't starve another.
+// service is ever scaled to >1 replica, so every replica throttles against the
+// SAME provider quota. The bucket is keyed per (api-key + model) so a burst on
+// one model doesn't starve another.
 //
 // The refill+take is done in a single Lua script so it is ATOMIC under
 // concurrency — no read-modify-write race between competing requests.

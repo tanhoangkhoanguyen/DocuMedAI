@@ -26,34 +26,44 @@ type Metrics struct {
 	tokensUsed *prometheus.CounterVec // labels: model, kind(prompt|completion)
 }
 
+// newMetrics registers the collectors on the DEFAULT registry, which is what
+// /metrics exposes. It can only be called once per process — a second call
+// panics on duplicate registration.
 func newMetrics() *Metrics {
+	return newMetricsWith(prometheus.DefaultRegisterer)
+}
+
+// newMetricsWith registers on a caller-supplied registry. Tests use a private
+// one so each can build a Proxy without colliding on the global registry.
+func newMetricsWith(reg prometheus.Registerer) *Metrics {
+	auto := promauto.With(reg)
 	return &Metrics{
-		requests: promauto.NewCounterVec(prometheus.CounterOpts{
+		requests: auto.NewCounterVec(prometheus.CounterOpts{
 			Name: "llmguard_requests_total",
 			Help: "Total proxied requests by model and HTTP status.",
 		}, []string{"model", "status"}),
-		latency: promauto.NewHistogramVec(prometheus.HistogramOpts{
+		latency: auto.NewHistogramVec(prometheus.HistogramOpts{
 			Name:    "llmguard_request_duration_seconds",
 			Help:    "End-to-end request latency by model.",
 			Buckets: []float64{0.1, 0.25, 0.5, 1, 2, 5, 10, 20, 40, 80},
 		}, []string{"model"}),
-		retries: promauto.NewCounterVec(prometheus.CounterOpts{
+		retries: auto.NewCounterVec(prometheus.CounterOpts{
 			Name: "llmguard_retries_total",
 			Help: "Upstream retry attempts by model.",
 		}, []string{"model"}),
-		rateLimited: promauto.NewCounterVec(prometheus.CounterOpts{
+		rateLimited: auto.NewCounterVec(prometheus.CounterOpts{
 			Name: "llmguard_rate_limited_total",
 			Help: "Requests rejected by the token bucket by model.",
 		}, []string{"model"}),
-		dedupHits: promauto.NewCounter(prometheus.CounterOpts{
+		dedupHits: auto.NewCounter(prometheus.CounterOpts{
 			Name: "llmguard_dedup_hits_total",
 			Help: "Requests served by sharing an in-flight identical call.",
 		}),
-		circuitState: promauto.NewGauge(prometheus.GaugeOpts{
+		circuitState: auto.NewGauge(prometheus.GaugeOpts{
 			Name: "llmguard_circuit_state",
 			Help: "Circuit breaker state: 0=closed, 1=half-open, 2=open.",
 		}),
-		tokensUsed: promauto.NewCounterVec(prometheus.CounterOpts{
+		tokensUsed: auto.NewCounterVec(prometheus.CounterOpts{
 			Name: "llmguard_tokens_total",
 			Help: "Tokens reported by upstream usage, by model and kind.",
 		}, []string{"model", "kind"}),

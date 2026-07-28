@@ -28,8 +28,12 @@ func main() {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	cfg := loadConfig()
-	if cfg.OpenAIKey == "" {
-		log.Error("upstream API key is required (set UPSTREAM_API_KEY, or OPENAI_API_KEY)")
+
+	// Resolve the provider up front: a process that cannot mint credentials
+	// should fail at startup, not on the first request. For Vertex this reaches
+	// out to Application Default Credentials.
+	if err := setupProviders(context.Background(), cfg); err != nil {
+		log.Error("provider setup failed", "provider", cfg.Provider, "err", err.Error())
 		os.Exit(1)
 	}
 
@@ -50,7 +54,7 @@ func main() {
 	mux := http.NewServeMux()
 	// All OpenAI-compatible traffic. Clients point their base_url at
 	// http://la-llmguard:8081/v1, so requests arrive under /v1/*.
-	mux.Handle("/v1/", proxy)
+	mux.Handle("/v1/chat/completions", proxy)
 	// Liveness for docker-compose healthcheck.
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -69,7 +73,7 @@ func main() {
 
 	// Graceful shutdown on SIGINT/SIGTERM so in-flight calls aren't cut off.
 	go func() {
-		log.Info("llmguard listening", "port", cfg.Port, "upstream", cfg.UpstreamBase)
+		log.Info("llmguard listening", "port", cfg.Port, "provider", cfg.Provider)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Error("server error", "err", err.Error())
 			os.Exit(1)

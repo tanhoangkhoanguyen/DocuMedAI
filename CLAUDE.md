@@ -17,7 +17,7 @@ DocuMedAI is a full-stack AI-powered medical document analysis system. Users upl
 | Agent workflow | LangGraph StateGraph | `backend/services/chatbot/` |
 | Multi-agent | CrewAI | `nodes.py` — Agents node |
 | RAG pipeline | Qdrant retrieval + BAAI reranker | `backend/services/chatbot/tools/rag.py` |
-| LLMGuard | Go gateway (rate limit, retry, circuit breaker, dedup) in front of Gemini's OpenAI-compat endpoint | `backend/llmguard/` |
+| LLMGuard | Go gateway (rate limit, retry, circuit breaker, dedup); OpenAI-compatible API → provider adapter → Vertex AI. Standalone; not in the app's request path | `backend/llmguard/` |
 | Memory cache | Redis (TTL 1800s → flush to MongoDB) | `backend/services/utils/redis_client.py` |
 | Persistence | MongoDB | `backend/services/utils/mongo_client.py` |
 | Auth | JWT + Supabase SSR | `backend/services/app/auth_api.py`, `frontend/lib/supabase/` |
@@ -50,7 +50,7 @@ the shared `services.app.auth_deps.decode_bearer_any` (local HS256 + Supabase) a
 `Principal(source="mcp")` for the request scope. Absent token → anonymous (the two unscoped
 tools still work); invalid token → HTTP 401 before any tool runs.
 
-**LLMGuard**: All chat-completion calls route through the Go `la-llmguard` service (port 8081), which forwards to Gemini's OpenAI-compatible endpoint, not to the provider directly. Embeddings and the reranker run locally and bypass it. Each `ChatOpenAI`/`crewai.LLM` is constructed with `base_url=get_llm_base_url()` (`backend/services/chatbot/llm_config.py`), driven by the `LLM_PROXY_BASE_URL` env var. Set `LLM_PROXY_BASE_URL=""` to bypass it. See `backend/llmguard/README.md`.
+**LLMGuard**: A standalone Go gateway (port 8081) that exposes an OpenAI-compatible `/v1/chat/completions` and translates it to Vertex AI's native `generateContent` via a provider adapter (`backend/llmguard/provider/`). It is **not currently in the request path** — `backend/services/` calls Vertex directly with `ChatVertexAI(project=…, location=…)` (`backend/utils/llm_config.py`), and `crewai.LLM` reaches Vertex through litellm's `vertex_ai/` prefix. Embeddings and the reranker run locally. Both LLMGuard and the app read the same `GOOGLE_CLOUD_PROJECT` / `GOOGLE_CLOUD_LOCATION` vars and authenticate via ADC. See `backend/llmguard/README.md`.
 
 ## Common Commands
 

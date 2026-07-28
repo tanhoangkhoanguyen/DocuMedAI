@@ -17,9 +17,3 @@ services:
     command: ["sleep", "infinity"]
     healthcheck:
       disable: true
-
-  # Inject a dummy upstream key so the proxy boots and passes its self-healthcheck.
-  # It's never called, so the value is irrelevant.
-  la-llmguard:
-    environment:
-      UPSTREAM_API_KEY: ci-dummy-key

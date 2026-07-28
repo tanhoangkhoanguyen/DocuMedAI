@@ -3,7 +3,6 @@ package main
 import (
 	"os"
 	"strconv"
-	"strings"
 	"time"
 )
 
@@ -13,20 +12,18 @@ import (
 // on the `la-llmguard` service. Defaults are chosen so it boots with
 // nothing but OPENAI_API_KEY set.
 type Config struct {
-	// OpenAIKey is the REAL upstream API key. It lives ONLY in the proxy's env;
-	// the Python backend sends a dummy key and we swap in this one before
-	// forwarding. The upstream is OpenAI-compatible, so this may be an OpenAI key
-	// OR a Gemini key (Google's OpenAI-compat endpoint accepts it as a Bearer
-	// token). Read from UPSTREAM_API_KEY, falling back to OPENAI_API_KEY.
-	OpenAIKey string
+	// Provider selects the default adapter for models that match no routing
+	// rule. Read from LLMGUARD_PROVIDER.
+	Provider string
 
-	// UpstreamBase is where requests are forwarded. Any OpenAI-compatible endpoint
-	// works: OpenAI itself, or Google's Gemini OpenAI-compat base
-	// (https://generativelanguage.googleapis.com/v1beta/openai), or a local stub
-	// for testing retry/circuit-breaker behavior.
-	UpstreamBase string
+	// VertexProject / VertexLocation configure the Vertex AI adapter. These are
+	// the SAME env vars the Python backend reads (backend/utils/llm_config.py),
+	// so one .env configures both. Auth is Application Default Credentials —
+	// there is no API key: Vertex will not accept one.
+	VertexProject  string
+	VertexLocation string
 
-	// Port the proxy listens on (matches docker-compose + the backend base_url).
+	// Port the proxy listens on (matches docker-compose + the client base_url).
 	Port string
 
 	// RedisURL backs the distributed token bucket and the cross-process dedup
@@ -56,10 +53,11 @@ type Config struct {
 // loadConfig reads the environment and applies sensible production defaults.
 func loadConfig() Config {
 	return Config{
-		OpenAIKey:    getenv("UPSTREAM_API_KEY", os.Getenv("OPENAI_API_KEY")),
-		UpstreamBase: strings.TrimRight(getenv("OPENAI_UPSTREAM_BASE", "https://api.openai.com/v1"), "/"),
-		Port:         getenv("PROXY_PORT", "8081"),
-		RedisURL:     getenv("REDIS_URL", "redis://la-redis:6379/1"),
+		Provider:       getenv("LLMGUARD_PROVIDER", "vertex"),
+		VertexProject:  os.Getenv("GOOGLE_CLOUD_PROJECT"),
+		VertexLocation: getenv("GOOGLE_CLOUD_LOCATION", "us-central1"),
+		Port:           getenv("PROXY_PORT", "8081"),
+		RedisURL:       getenv("REDIS_URL", "redis://la-redis:6379/1"),
 
 		RateLimitRPM:   getenvInt("RATE_LIMIT_RPM", 480),                // 8 req/s sustained
 		RateLimitBurst: getenvInt("RATE_LIMIT_BURST", 60),

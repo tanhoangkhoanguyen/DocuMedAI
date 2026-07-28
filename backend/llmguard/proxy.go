@@ -1,9 +1,10 @@
 package main
 
 import (
-	"bytes"
+	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -11,10 +12,14 @@ import (
 	"time"
 
 	"github.com/sony/gobreaker"
+
+	"documedai/llmguard/provider"
 )
 
-// Proxy is the HTTP handler that forwards OpenAI-compatible requests upstream,
-// applying (in order): rate limit → dedup → circuit breaker → retry/backoff.
+// Proxy is the HTTP handler for /v1/chat/completions. It owns the
+// provider-agnostic concerns — rate limit → dedup → circuit breaker → retry —
+// and delegates every vendor-specific detail (URL, auth, wire format) to a
+// provider.Provider.
 type Proxy struct {
 	cfg     Config
 	client  *http.Client // shared, keep-alive pooled
@@ -26,7 +31,7 @@ type Proxy struct {
 }
 
 func newProxy(cfg Config, limiter *RateLimiter, deduper *Deduper, m *Metrics, log *slog.Logger) *Proxy {
-	// One shared client with a tuned transport so TCP/TLS connections to OpenAI
+	// One shared client with a tuned transport so TCP/TLS connections upstream
 	// are reused across requests instead of re-handshaking every call.
 	transport := &http.Transport{
 		MaxIdleConns:        cfg.MaxIdleConns,
@@ -45,56 +50,74 @@ func newProxy(cfg Config, limiter *RateLimiter, deduper *Deduper, m *Metrics, lo
 	}
 }
 
-// requestMeta is the slice of the request body we care about for routing
-// decisions: which model, and whether the caller asked for a stream.
-type requestMeta struct {
-	Model  string `json:"model"`
-	Stream bool   `json:"stream"`
-}
-
-// ServeHTTP handles every /v1/* path. It buffers the request body once (so it
-// can be replayed on retry and hashed for dedup), then dispatches to the
-// streaming or buffered path.
+// ServeHTTP decodes the OpenAI-shaped request, resolves its provider, and
+// dispatches to the streaming or buffered path.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 
+	if r.Method != http.MethodPost {
+		p.writeError(w, "unknown", start, http.StatusMethodNotAllowed,
+			"method not allowed", "invalid_request_error")
+		return
+	}
+
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		http.Error(w, "failed to read request body", http.StatusBadRequest)
+		p.writeError(w, "unknown", start, http.StatusBadRequest,
+			"failed to read request body", "invalid_request_error")
 		return
 	}
 	_ = r.Body.Close()
 
-	// Peek at model + stream flag. Non-JSON bodies (rare) default to empty meta.
-	var meta requestMeta
-	_ = json.Unmarshal(body, &meta)
-	model := meta.Model
+	var req provider.ChatRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		p.writeError(w, "unknown", start, http.StatusBadRequest,
+			"invalid JSON body", "invalid_request_error")
+		return
+	}
+	model := req.Model
 	if model == "" {
-		model = "unknown"
+		p.writeError(w, "unknown", start, http.StatusBadRequest,
+			"field 'model' is required", "invalid_request_error")
+		return
+	}
+	if len(req.Messages) == 0 {
+		p.writeError(w, model, start, http.StatusBadRequest,
+			"field 'messages' must not be empty", "invalid_request_error")
+		return
+	}
+
+	prov, err := provider.For(model, p.cfg.Provider)
+	if err != nil {
+		p.writeError(w, model, start, http.StatusBadRequest, err.Error(), "invalid_request_error")
+		return
 	}
 
 	// --- Rate limit (token bucket, per key+model) ---
 	rlKey := apiKeyHint(r) + ":" + model
 	if !p.limiter.Acquire(r.Context(), rlKey, p.cfg.RateWaitMax) {
 		p.metrics.rateLimited.WithLabelValues(model).Inc()
-		p.finish(w, model, start, http.StatusTooManyRequests, nil, []byte(`{"error":{"message":"proxy rate limit exceeded","type":"rate_limit"}}`), "json")
+		p.writeError(w, model, start, http.StatusTooManyRequests,
+			"proxy rate limit exceeded", "rate_limit")
 		return
 	}
 
-	// Streaming requests cannot be buffered/deduped/replayed as a unit — we pass
-	// them through with breaker protection but no retry/dedup. (Forward-compat:
-	// the current backend never sets stream=true, see plan.)
-	if meta.Stream {
-		p.serveStreaming(w, r, body, model, start)
+	// Streaming requests cannot be buffered/deduped/replayed as a unit — they
+	// get breaker protection but no retry/dedup.
+	if req.Stream {
+		p.serveStreaming(w, r, prov, &req, start)
 		return
 	}
-
-	p.serveBuffered(w, r, body, model, start)
+	p.serveBuffered(w, r, prov, &req, body, start)
 }
 
 // serveBuffered handles the normal (non-streaming) path: dedup → breaker → retry.
-func (p *Proxy) serveBuffered(w http.ResponseWriter, r *http.Request, body []byte, model string, start time.Time) {
-	key := dedupKey(body)
+func (p *Proxy) serveBuffered(
+	w http.ResponseWriter, r *http.Request,
+	prov provider.Provider, req *provider.ChatRequest, rawBody []byte, start time.Time,
+) {
+	model := req.Model
+	key := dedupKey(rawBody)
 
 	res, shared, err := p.deduper.Do(key, func() (*upstreamResult, error) {
 		// The breaker wraps the WHOLE retry loop: a tripped breaker should stop
@@ -103,7 +126,7 @@ func (p *Proxy) serveBuffered(w http.ResponseWriter, r *http.Request, body []byt
 			return doWithRetry(r.Context(), p.cfg, key,
 				func() { p.metrics.retries.WithLabelValues(model).Inc() },
 				func(ctx context.Context) (*upstreamResult, error) {
-					return p.forwardBuffered(ctx, r, body)
+					return p.forwardBuffered(ctx, prov, req)
 				},
 			)
 		})
@@ -118,134 +141,173 @@ func (p *Proxy) serveBuffered(w http.ResponseWriter, r *http.Request, body []byt
 	}
 
 	if err != nil {
-		// Breaker open or total failure → fail fast with 503.
-		status := http.StatusServiceUnavailable
+		// A translated upstream error carries the vendor's own message and
+		// status; anything else (breaker open, transport failure) is a 503.
+		var ue *provider.UpstreamError
+		if errors.As(err, &ue) {
+			p.writeError(w, model, start, ue.Status, ue.Body.Error.Message, ue.Body.Error.Type)
+			return
+		}
 		p.log.Warn("upstream failed", "model", model, "err", err.Error())
-		p.finish(w, model, start, status, nil, []byte(`{"error":{"message":"upstream unavailable","type":"upstream_error"}}`), "json")
+		p.writeError(w, model, start, http.StatusServiceUnavailable,
+			"upstream unavailable", "upstream_error")
 		return
 	}
 
-	p.recordUsage(model, res.body)
-	p.finish(w, model, start, res.status, res.header, res.body, "passthrough")
+	p.recordUsage(model, res.usage)
+	p.writeJSON(w, model, start, res.status, res.body, "buffered")
 }
 
-// forwardBuffered performs ONE upstream attempt and reads the full response into
-// memory so it can be retried/deduped. Returns a non-nil result even for
-// retryable statuses so the retry loop can inspect Retry-After.
-func (p *Proxy) forwardBuffered(ctx context.Context, r *http.Request, body []byte) (*upstreamResult, error) {
-	req, err := p.buildUpstreamRequest(ctx, r, body)
+// forwardBuffered performs ONE upstream attempt: build → send → translate. The
+// translated response is buffered so it can be retried and deduped.
+func (p *Proxy) forwardBuffered(
+	ctx context.Context, prov provider.Provider, req *provider.ChatRequest,
+) (*upstreamResult, error) {
+	httpReq, err := prov.BuildRequest(ctx, req)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := p.client.Do(req)
+	resp, err := p.client.Do(httpReq)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	nativeBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
-	return &upstreamResult{status: resp.StatusCode, header: resp.Header.Clone(), body: respBody}, nil
+
+	translated, err := prov.TranslateResponse(resp.StatusCode, nativeBody)
+	if err != nil {
+		// Surface the status so the retry loop can decide (429/5xx retryable).
+		var ue *provider.UpstreamError
+		if errors.As(err, &ue) {
+			return &upstreamResult{status: ue.Status, header: resp.Header.Clone()}, err
+		}
+		return nil, err
+	}
+
+	out, err := json.Marshal(translated)
+	if err != nil {
+		return nil, err
+	}
+	return &upstreamResult{
+		status: http.StatusOK,
+		header: resp.Header.Clone(),
+		body:   out,
+		usage:  translated.Usage,
+	}, nil
 }
 
-// serveStreaming pipes an SSE response straight through, flushing each chunk as
-// it arrives (diagram box 6). No retry/dedup — see ServeHTTP note.
-func (p *Proxy) serveStreaming(w http.ResponseWriter, r *http.Request, body []byte, model string, start time.Time) {
+// serveStreaming translates the provider's SSE stream into OpenAI chunks,
+// flushing each as it arrives and terminating with `data: [DONE]`.
+func (p *Proxy) serveStreaming(
+	w http.ResponseWriter, r *http.Request,
+	prov provider.Provider, req *provider.ChatRequest, start time.Time,
+) {
+	model := req.Model
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		p.writeError(w, model, start, http.StatusInternalServerError,
+			"streaming unsupported", "upstream_error")
 		return
 	}
 
+	var usage provider.Usage
 	_, err := p.breaker.Execute(func() (interface{}, error) {
-		req, berr := p.buildUpstreamRequest(r.Context(), r, body)
+		httpReq, berr := prov.BuildRequest(r.Context(), req)
 		if berr != nil {
 			return nil, berr
 		}
-		resp, berr := p.client.Do(req)
+		resp, berr := p.client.Do(httpReq)
 		if berr != nil {
 			return nil, berr
 		}
 		defer resp.Body.Close()
 
-		// Copy status + headers, then stream the body with per-chunk flushes.
-		copyHeaders(w.Header(), resp.Header)
-		w.WriteHeader(resp.StatusCode)
-		p.metrics.requests.WithLabelValues(model, statusLabel(resp.StatusCode)).Inc()
+		if resp.StatusCode < 200 || resp.StatusCode > 299 {
+			nativeBody, _ := io.ReadAll(resp.Body)
+			// Reuse the adapter's error translation: a non-2xx status makes it
+			// return an *UpstreamError carrying the vendor's message.
+			_, terr := prov.TranslateResponse(resp.StatusCode, nativeBody)
+			if terr != nil {
+				return nil, terr
+			}
+			return nil, errors.New("upstream error")
+		}
 
-		buf := make([]byte, 4096)
-		for {
-			n, rerr := resp.Body.Read(buf)
-			if n > 0 {
-				_, _ = w.Write(buf[:n])
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.WriteHeader(http.StatusOK)
+		p.metrics.requests.WithLabelValues(model, statusLabel(http.StatusOK)).Inc()
+
+		// Scan the provider's SSE frames line by line. Vertex sends
+		// `data: {...}` per frame; blank lines separate events.
+		scanner := bufio.NewScanner(resp.Body)
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024) // a frame can be large
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line == "" || !strings.HasPrefix(line, "data:") {
+				continue
+			}
+			payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+			if payload == "[DONE]" {
+				continue // we emit our own terminator
+			}
+
+			chunks, cerr := prov.TranslateStreamChunk(req, []byte(payload))
+			if cerr != nil {
+				p.log.Warn("stream chunk translate failed", "model", model, "err", cerr.Error())
+				continue // a malformed frame shouldn't kill the whole stream
+			}
+			for _, ch := range chunks {
+				if ch.Usage != nil {
+					usage = *ch.Usage
+				}
+				enc, merr := json.Marshal(ch)
+				if merr != nil {
+					continue
+				}
+				_, _ = w.Write([]byte("data: "))
+				_, _ = w.Write(enc)
+				_, _ = w.Write([]byte("\n\n"))
 				flusher.Flush()
 			}
-			if rerr != nil {
-				break // io.EOF on clean end
-			}
 		}
+		if serr := scanner.Err(); serr != nil {
+			return nil, serr
+		}
+
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+		flusher.Flush()
 		return nil, nil
 	})
 	if err != nil {
 		p.log.Warn("streaming upstream failed", "model", model, "err", err.Error())
 	}
+
+	// The streaming path now accounts tokens too — the old byte-pipe could not.
+	p.recordUsage(model, usage)
 	p.metrics.latency.WithLabelValues(model).Observe(time.Since(start).Seconds())
 }
 
-// buildUpstreamRequest clones the inbound request toward upstream, swapping the
-// path under UpstreamBase and injecting the REAL OpenAI key. The backend's own
-// (possibly dummy) Authorization header is discarded.
-func (p *Proxy) buildUpstreamRequest(ctx context.Context, r *http.Request, body []byte) (*http.Request, error) {
-	// r.URL.Path is like "/v1/chat/completions"; UpstreamBase already ends in
-	// "/v1", so strip a leading "/v1" to avoid doubling it.
-	path := strings.TrimPrefix(r.URL.Path, "/v1")
-	url := p.cfg.UpstreamBase + path
-	if r.URL.RawQuery != "" {
-		url += "?" + r.URL.RawQuery
+// recordUsage adds normalized token counts to metrics.
+func (p *Proxy) recordUsage(model string, u provider.Usage) {
+	if u.PromptTokens > 0 {
+		p.metrics.tokensUsed.WithLabelValues(model, "prompt").Add(float64(u.PromptTokens))
 	}
-
-	req, err := http.NewRequestWithContext(ctx, r.Method, url, bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	// Forward content headers; replace auth with the real key.
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+p.cfg.OpenAIKey)
-	if org := r.Header.Get("OpenAI-Organization"); org != "" {
-		req.Header.Set("OpenAI-Organization", org)
-	}
-	return req, nil
-}
-
-// recordUsage parses the `usage` block from a non-streaming completion and adds
-// prompt/completion token counts to metrics. Best-effort; ignores parse errors.
-func (p *Proxy) recordUsage(model string, body []byte) {
-	var parsed struct {
-		Usage struct {
-			PromptTokens     float64 `json:"prompt_tokens"`
-			CompletionTokens float64 `json:"completion_tokens"`
-		} `json:"usage"`
-	}
-	if json.Unmarshal(body, &parsed) != nil {
-		return
-	}
-	if parsed.Usage.PromptTokens > 0 {
-		p.metrics.tokensUsed.WithLabelValues(model, "prompt").Add(parsed.Usage.PromptTokens)
-	}
-	if parsed.Usage.CompletionTokens > 0 {
-		p.metrics.tokensUsed.WithLabelValues(model, "completion").Add(parsed.Usage.CompletionTokens)
+	if u.CompletionTokens > 0 {
+		p.metrics.tokensUsed.WithLabelValues(model, "completion").Add(float64(u.CompletionTokens))
 	}
 }
 
-// finish writes the final response to the caller and records metrics/log.
-func (p *Proxy) finish(w http.ResponseWriter, model string, start time.Time, status int, header http.Header, body []byte, kind string) {
-	if header != nil {
-		copyHeaders(w.Header(), header)
-	} else {
-		w.Header().Set("Content-Type", "application/json")
-	}
+// writeJSON writes a JSON body and records metrics/log.
+func (p *Proxy) writeJSON(
+	w http.ResponseWriter, model string, start time.Time, status int, body []byte, kind string,
+) {
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_, _ = w.Write(body)
 
@@ -259,6 +321,18 @@ func (p *Proxy) finish(w http.ResponseWriter, model string, start time.Time, sta
 	)
 }
 
+// writeError emits the OpenAI-shaped error envelope so clients see one error
+// format regardless of which provider (or LLMGuard itself) produced it.
+func (p *Proxy) writeError(
+	w http.ResponseWriter, model string, start time.Time, status int, msg, typ string,
+) {
+	body, err := json.Marshal(provider.NewErrorEnvelope(msg, typ))
+	if err != nil {
+		body = []byte(`{"error":{"message":"internal error","type":"upstream_error"}}`)
+	}
+	p.writeJSON(w, model, start, status, body, "error")
+}
+
 // --- small helpers ---
 
 // apiKeyHint derives a short, non-secret bucket label from the caller's key so
@@ -270,18 +344,6 @@ func apiKeyHint(r *http.Request) string {
 		return "anon"
 	}
 	return auth[len(auth)-6:] // last 6 chars — stable, low-collision, not the secret
-}
-
-func copyHeaders(dst, src http.Header) {
-	for k, vs := range src {
-		// Hop-by-hop headers shouldn't be copied verbatim.
-		if k == "Connection" || k == "Transfer-Encoding" || k == "Keep-Alive" {
-			continue
-		}
-		for _, v := range vs {
-			dst.Add(k, v)
-		}
-	}
 }
 
 func statusLabel(status int) string {
