@@ -5,14 +5,14 @@ name: LLM Proxy CI
 on:
   pull_request:
     paths:
-      - "backend/llm-proxy/**"
+      - "backend/llmguard/**"
       - ".github/workflows/llm-proxy-ci.yml"
   push:
     branches:
       - main
       - develop
     paths:
-      - "backend/llm-proxy/**"
+      - "backend/llmguard/**"
       - ".github/workflows/llm-proxy-ci.yml"
 
 permissions:
@@ -26,7 +26,7 @@ concurrency:
 
 defaults:
   run:
-    working-directory: backend/llm-proxy
+    working-directory: backend/llmguard
 
 jobs:
   go:
@@ -62,8 +62,8 @@ jobs:
         with:
           # Read the version from go.mod so the toolchain can never drift from
           # what the module declares.
-          go-version-file: backend/llm-proxy/go.mod
-          cache-dependency-path: backend/llm-proxy/go.sum
+          go-version-file: backend/llmguard/go.mod
+          cache-dependency-path: backend/llmguard/go.sum
 
       # `make lint` installs the pinned golangci-lint via `go install` when it is
       # missing. Caching GOBIN keeps that off the clock on every run but the

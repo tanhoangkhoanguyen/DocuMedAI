@@ -17,7 +17,7 @@ import (
 	"syscall"
 	"time"
 
-	"documedai/llm-proxy/mockupstream"
+	"documedai/llmguard/mockupstream"
 )
 
 func main() {
