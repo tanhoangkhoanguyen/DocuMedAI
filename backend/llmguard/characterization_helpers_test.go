@@ -1,0 +1,233 @@
+package main
+
+// Shared harness for the LLMGuard characterization tests.
+//
+// The suite locks in what the proxy does TODAY so the Phase 2 refactor can be
+// shown to be behavior-preserving. It is deliberately descriptive, not
+// prescriptive: where current behavior looks surprising it is pinned as-is and
+// flagged with a QUIRK comment rather than corrected. A test that encodes how
+// something *should* work would let a refactor silently change what it *does*.
+//
+// Everything runs against the in-process mockupstream on a loopback httptest
+// server. No provider credentials, no outbound network. Failure modes are
+// driven through mockupstream's own knobs (error rate, error status, latency,
+// outage window) rather than hand-written responses, so the tests exercise a
+// real HTTP round trip.
+//
+// Thresholds come from the REAL defaults in loadConfig():
+//
+//	RetryMax          4   (1 initial attempt + 3 retries)
+//	CircuitMinReqs   10   (breaker needs 10 observations before it may trip)
+//	CircuitFailRatio  0.6
+//	RateLimitBurst   60
+//
+// Only RetryBaseDly/RetryMaxDly are shortened, and only where a test would
+// otherwise spend seconds asleep. Those are timing knobs — they change how long
+// a retry waits, never how many run or when the breaker trips.
+//
+// The tests themselves live in characterization_<area>_test.go, one file per
+// behavior area (buffered, streaming, retry, circuitbreaker, dedup, ratelimit,
+// usage, errors).
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/redis/go-redis/v9"
+
+	"documedai/llmguard/mockupstream"
+	"documedai/llmguard/provider"
+)
+
+// mockUpstream is a mockupstream instance on a loopback server, plus a counter
+// of how many requests actually reached it. The count is the load-bearing
+// assertion for retry, dedup and breaker: it distinguishes "the proxy returned
+// an error" from "the proxy stopped calling upstream".
+type mockUpstream struct {
+	server *httptest.Server
+	mock   *mockupstream.Server
+	hits   atomic.Int64
+}
+
+func newMockUpstream(t *testing.T, cfg mockupstream.Config) *mockUpstream {
+	t.Helper()
+
+	mu := &mockUpstream{mock: mockupstream.New(cfg)}
+	mu.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Count only provider traffic; /_mock/* control calls are not upstream
+		// requests and would corrupt the counts the assertions depend on.
+		if !strings.HasPrefix(r.URL.Path, "/_mock/") {
+			mu.hits.Add(1)
+		}
+		mu.mock.ServeHTTP(w, r)
+	}))
+	t.Cleanup(mu.server.Close)
+	return mu
+}
+
+func (m *mockUpstream) Hits() int64 { return m.hits.Load() }
+
+// mockProvider is the seam that points the proxy at the mock.
+//
+// The Vertex adapter hardcodes its hostname (region-aiplatform.googleapis.com)
+// and there is no upstream-base setting to override — so a provider that builds
+// its URL against the mock is the only way to exercise the pipeline offline.
+// Response and stream translation delegate to the REAL Vertex adapter, so the
+// proxy sees genuine Vertex-shaped payloads; only URL construction is ours.
+type mockProvider struct {
+	base  string
+	inner provider.Provider
+}
+
+func (p *mockProvider) Name() string { return "mock" }
+
+func (p *mockProvider) BuildRequest(ctx context.Context, req *provider.ChatRequest) (*http.Request, error) {
+	contents := make([]any, 0, len(req.Messages))
+	for _, m := range req.Messages {
+		role := "user"
+		if m.Role == "assistant" {
+			role = "model"
+		}
+		contents = append(contents, map[string]any{
+			"role":  role,
+			"parts": []any{map[string]any{"text": m.Content}},
+		})
+	}
+	body, err := json.Marshal(map[string]any{"contents": contents})
+	if err != nil {
+		return nil, err
+	}
+
+	method, suffix := "generateContent", ""
+	if req.Stream {
+		method, suffix = "streamGenerateContent", "?alt=sse"
+	}
+	url := fmt.Sprintf("%s/v1beta/models/%s:%s%s", p.base, req.Model, method, suffix)
+	return http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+}
+
+func (p *mockProvider) TranslateResponse(status int, body []byte) (*provider.ChatResponse, error) {
+	return p.inner.TranslateResponse(status, body)
+}
+
+func (p *mockProvider) TranslateStreamChunk(req *provider.ChatRequest, raw []byte) ([]provider.StreamChunk, error) {
+	return p.inner.TranslateStreamChunk(req, raw)
+}
+
+// realDefaults mirrors loadConfig()'s production values. Tests start here and
+// override only what they must, so a threshold change in config.go shows up as
+// a test failure rather than passing against a stale copy.
+func realDefaults() Config {
+	return Config{
+		Provider:         "mock",
+		RateLimitRPM:     480,
+		RateLimitBurst:   60,
+		RateWaitMax:      5 * time.Second,
+		RetryMax:         4,
+		RetryBaseDly:     300 * time.Millisecond,
+		RetryMaxDly:      8 * time.Second,
+		CircuitMinReqs:   10,
+		CircuitFailRatio: 0.6,
+		CircuitOpenFor:   20 * time.Second,
+		UpstreamTimeout:  120 * time.Second,
+		MaxIdleConns:     100,
+	}
+}
+
+// offlineLimiter is a rate limiter whose Redis is unreachable.
+//
+// Acquire fails OPEN on a Redis error (ratelimit.go), so every request is
+// admitted — which is what tests that are not about shedding want, without
+// requiring a Redis server. Shedding itself is covered separately against a
+// real Redis, because only a live bucket can return "no token".
+func offlineLimiter() *RateLimiter {
+	rdb := redis.NewClient(&redis.Options{
+		Addr:        "127.0.0.1:1", // reserved, nothing listens
+		DialTimeout: 5 * time.Millisecond,
+		MaxRetries:  -1,
+	})
+	return newRateLimiter(rdb, 480, 60)
+}
+
+type harness struct {
+	proxy   *Proxy
+	metrics *Metrics
+	up      *mockUpstream
+}
+
+func newHarness(t *testing.T, cfg Config, mockCfg mockupstream.Config, limiter *RateLimiter) *harness {
+	t.Helper()
+
+	up := newMockUpstream(t, mockCfg)
+	if limiter == nil {
+		limiter = offlineLimiter()
+	}
+
+	// The provider registry is global; keep tests serial and reset around each.
+	provider.Reset()
+	t.Cleanup(provider.Reset)
+	provider.Register(&mockProvider{base: up.server.URL, inner: &provider.Vertex{}})
+
+	m := newMetricsWith(prometheus.NewRegistry())
+	p := newProxy(cfg, limiter, newDeduper(), m,
+		slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	return &harness{proxy: p, metrics: m, up: up}
+}
+
+func chatBody(model, prompt string, stream bool) string {
+	req := map[string]any{
+		"model":    model,
+		"messages": []any{map[string]any{"role": "user", "content": prompt}},
+	}
+	if stream {
+		req["stream"] = true
+	}
+	b, err := json.Marshal(req)
+	if err != nil {
+		panic(err)
+	}
+	return string(b)
+}
+
+// do issues one request through the full ServeHTTP pipeline.
+func (h *harness) do(t *testing.T, body string, headers map[string]string) *httptest.ResponseRecorder {
+	t.Helper()
+	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	for k, v := range headers {
+		r.Header.Set(k, v)
+	}
+	rec := httptest.NewRecorder()
+	h.proxy.ServeHTTP(rec, r)
+	return rec
+}
+
+func decodeChat(t *testing.T, rec *httptest.ResponseRecorder) provider.ChatResponse {
+	t.Helper()
+	var out provider.ChatResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("response is not a chat completion: %v\nbody: %s", err, rec.Body.String())
+	}
+	return out
+}
+
+func decodeError(t *testing.T, rec *httptest.ResponseRecorder) provider.ErrorEnvelope {
+	t.Helper()
+	var out provider.ErrorEnvelope
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("response is not an error envelope: %v\nbody: %s", err, rec.Body.String())
+	}
+	return out
+}
