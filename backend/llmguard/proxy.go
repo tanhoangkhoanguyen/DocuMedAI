@@ -70,7 +70,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_ = r.Body.Close()
 
 	var req provider.ChatRequest
-	if err := json.Unmarshal(body, &req); err != nil {
+	if decErr := json.Unmarshal(body, &req); decErr != nil {
 		p.writeError(w, "unknown", start, http.StatusBadRequest,
 			"invalid JSON body", "invalid_request_error")
 		return

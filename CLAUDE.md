@@ -243,9 +243,13 @@ Pinecone was removed (its `pinecone-local` emulator can't be made fair). See the
 
 ## CI
 
-GitHub Actions (`.github/workflows/`) — exactly two workflows: `python-ci.yml` and
-`frontend-ci.yml` (`npm run lint` + `npm run build`). `python-ci.yml` has a single `backend`
-job that runs three independent `pytest` steps (App / Vector DB / MCP), each `if: always()`
-so one failure doesn't mask the others. Triggered on PRs and pushes to
+GitHub Actions (`.github/workflows/`) — three workflows: `python-ci.yml`, `frontend-ci.yml`
+(`npm run lint` + `npm run build`) and `llm-proxy-ci.yml`. `python-ci.yml` has a single
+`backend` job that runs three independent `pytest` steps (App / Vector DB / MCP), each
+`if: always()` so one failure doesn't mask the others. Both are triggered on PRs and pushes to
 `main`/`develop`/`feature/Setup-CI`. CI writes a throwaway `.env` with test secrets and sets
 `SKIP_MODEL_PRECACHE=1`; the backend graph is mocked, so no LLM API keys are needed.
+
+`llm-proxy-ci.yml` gates the Go service (`make test` + `make lint`, plus a `go mod tidy`
+check) with a `redis:7-alpine` service container on DB 15. It is **path-filtered** to
+`backend/llmguard/**`, so it stays off the critical path for the other two.
