@@ -5,8 +5,12 @@
 > `LLM_PROXY_BASE_URL` and `get_llm_base_url()` no longer exist. Those are replaced by
 > `GOOGLE_CLOUD_PROJECT`/`GOOGLE_CLOUD_LOCATION` + ADC, and the passthrough is now a
 > provider adapter (`provider/`). Phase 2's provider abstraction is **implemented**; its
-> first adapter is Vertex. Phase 1 (test scaffold, mock upstream, Go CI) is still open —
-> the adapter has unit tests, but nothing runs them automatically.
+> first adapter is Vertex.
+>
+> **Phase 1 is now complete.** `make test` / `make lint` run in CI on every PR touching
+> `backend/llmguard/**`; `mockupstream/` exists with its own tests pinning the determinism
+> Phase 6 depends on; and the proxy pipeline has characterization tests
+> (`characterization_<area>_test.go`). See **Findings** below for what those tests turned up.
 
 This is the single roadmap for `llmguard`. It has two parts:
 
@@ -327,15 +331,32 @@ If you can't build and run it, you can't verify anything. Do this first.
 
 ---
 
-## Findings (fill in as you go)
+## Findings
 
-Log anything that looks wrong, surprising, or worth changing later. Do NOT fix here — just record.
-Example rows:
-- [ ] `<file:line>` — observed behavior vs expected — severity — idea for fix.
+Everything the Phase 1 harness turned up. **Fixed** rows cite the commit; **open** rows name
+the phase that should absorb them. A finding is only "handled" if some phase's acceptance
+criteria actually forces someone to touch that line — several below have no such owner, which
+is why they are written down rather than assumed.
+
+### Fixed
+
+| File | What was wrong | Impact | Fixed in |
+|------|----------------|--------|----------|
+| `retry.go` `doWithRetry` | The non-retryable early exit read `err == nil && !isRetryable(res.status)`, but `TranslateResponse` returns an `*UpstreamError` for **every** non-2xx, so `err` was never nil on failure and the guard was unreachable dead code. | A 400 or 401 burned the full `RetryMax` (4) upstream calls plus 3 backoff sleeps — wasted quota and latency on a request that could never succeed. | `34cda1a` |
+| `retry.go` `newBreaker` | `gobreaker`'s `IsSuccessful` was unset, so its default counted every non-nil error as an upstream failure — including a 400 caused entirely by the caller's own malformed request. | 10 bad requests from one buggy client opened the breaker for **every** user for `CircuitOpenFor` (20s). A client-side bug became a service-wide outage. | `ac0f0ef` |
+| `retry.go` `doWithRetry` | Four distinct information losses: last-error-wins overwrote a vendor error with a later transport failure; the `ctx.Done` exit returned `ctx.Err()` unconditionally; `Retry-After` was uncapped; only the delta-seconds form was parsed. | A real 429 degraded into a generic 503 "upstream unavailable"; `Retry-After: 86400` would park a request for a day holding a singleflight slot; Google's HTTP-date form was ignored. | `c85aac3` |
+| `retry.go` `doWithRetry` | Trailing `errors.New("exhausted retries")` was unreachable — a success returns immediately, so `lastErr` is always set on fall-through. Plus a stale comment describing pre-Vertex behavior. | Dead code implying a failure mode that cannot occur. | `634d05d` |
+
+### Open
 
 | File:Line | What I observed | Expected? | Note / follow-up |
 |-----------|-----------------|-----------|------------------|
-|           |                 |           |                  |
+| `proxy.go:139-141` | `dedupHits` counts **every** flight participant, because `singleflight` reports `shared=true` to the leader that did the work too. 8 concurrent identical requests → 8 hits, though only 7 upstream calls were avoided. Also increments *before* the error check, so coalesced failures count as savings. | No — the metric name promises "calls avoided". | Off by one per flight, and cannot distinguish saved-successful from saved-doomed calls. **Phase 6.3 scenario C charts this number as "cost saved".** Fix: record `callers-1`, or rename the metric. Pinned in `characterization_dedup_test.go`. |
+| `proxy.go:297-299` | On the streaming path an upstream failure only logs. The client receives **HTTP 200 with a completely empty body** — no error envelope, no SSE frames, no `[DONE]`. | No — the buffered path returns a proper error envelope. | Two cases collapse here: a pre-`WriteHeader` failure is recoverable and simply isn't handled; a post-`WriteHeader` one cannot change status at all. The only fix that works mid-stream is an in-band SSE error frame (`data: {"error":{…}}`). **Phase 2 Issue 2.5 rewrites this path** — fix it there. Pinned in `characterization_streaming_test.go`. |
+| `mockupstream/chaos.go:76-78` | `Jitter` changes the **failure verdict**, even though it is correctly excluded from `fingerprint()`. `decide()` draws jitter *conditionally* on `Jitter > 0`, consuming one number from the per-request stream and shifting the failure roll that follows. Measured: **21 of 40 nonces flip** at an unchanged `error_rate=0.5`. | No — the comment at `chaos.go:74-75` claims the fixed draw order prevents exactly this. It only holds for knobs that *always* draw; the error-rate roll already does this correctly (`chaos.go:84`). | **A benchmark arm with jitter enabled is not comparable to one without at the same error rate** — and jitter is what a realistic load profile turns on. Fix: draw jitter unconditionally and discard it when `Jitter == 0`. **Phase 6 must not run mixed-jitter arms until this is fixed.** Pinned by `TestJitterShiftsFailureVerdictQuirk`. |
+| `proxy.go:182`, `proxy.go:240` | `io.ReadAll` on the upstream response body is unbounded. | No. | A broken or hostile provider can balloon proxy memory; the gateway sits in the request path, so this is a denial-of-service vector. Fix: wrap in `io.LimitReader`. No phase's AC would force anyone to revisit this line — Issue 2.5 replaces request *building*, not the body read. |
+| `retry.go:57-100` | The breaker's **trip** is pinned by `characterization_circuitbreaker_test.go`, but its recovery — `CircuitOpenFor` elapsing → half-open probe → closed — is never asserted anywhere. | Incomplete coverage, not a bug. | `internal/testutil.Eventually` / `RequireEventually` were written for exactly this and are currently **unused**. **Phase 6.3 scenario B charts "breaker trip → fail-fast → recovery"** — it would be charting untested behavior. |
+| `provider/vertex.go` | Buffered completions ship with `id: ""` and `created: 0`; the Vertex adapter never populates them. | No — OpenAI clients that key off response id see an empty string. | Cosmetic but contract-visible. **Phase 2 Issues 2.1-2.3** rebuild this layer with golden-file tests; fix there. Pinned in `characterization_buffered_test.go`. |
 
 ---
 
