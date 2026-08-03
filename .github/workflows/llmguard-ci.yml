@@ -1,4 +1,4 @@
-name: LLM Proxy CI
+name: LLMGuard CI
 
 # Scoped to the Go service by path so it stays off the critical path for the
 # Python and frontend workflows, which never touch this code.
@@ -6,14 +6,15 @@ on:
   pull_request:
     paths:
       - "backend/llmguard/**"
-      - ".github/workflows/llm-proxy-ci.yml"
+      - ".github/workflows/llmguard-ci.yml"
   push:
     branches:
       - main
       - develop
+      - feature/Setup-CI
     paths:
       - "backend/llmguard/**"
-      - ".github/workflows/llm-proxy-ci.yml"
+      - ".github/workflows/llmguard-ci.yml"
 
 permissions:
   contents: read
@@ -21,7 +22,7 @@ permissions:
 # A new push to the same PR cancels the previous run — this workflow gates a
 # small service and there is no value in finishing a superseded run.
 concurrency:
-  group: llm-proxy-ci-${{ github.ref }}
+  group: llmguard-ci-${{ github.ref }}
   cancel-in-progress: true
 
 defaults:

@@ -1,9 +1,9 @@
 # Mock upstream LLM provider.
 #
 # BUILD CONTEXT IS THE PARENT DIRECTORY, not this one — the package is part of
-# the llm-proxy module and needs go.mod/go.sum at the module root:
+# the LLMGuard module and needs go.mod/go.sum at the module root:
 #
-#   docker build -f mockupstream/Dockerfile -t la-mockupstream backend/llm-proxy
+#   docker build -f mockupstream/Dockerfile -t la-mockupstream backend/llmguard
 #
 # --- build stage ---
 # Pinned to 1.23 to match the go directive in go.mod. CGO off → a fully static

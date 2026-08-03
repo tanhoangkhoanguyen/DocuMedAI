@@ -95,23 +95,22 @@ degrades to sane behavior instead of silently disabling a knob.
 ## Running
 
 ```bash
-# from backend/llm-proxy/
+# from backend/llmguard/
 make build-mock            # -> ./bin/mockupstream(.exe)
 make run-mock              # listens on :8090
 
 go run ./mockupstream/cmd/mockupstream -addr :8090 -latency 200ms -jitter 100ms
 ```
 
-Point the proxy at it:
-
-```bash
-OPENAI_UPSTREAM_BASE=http://127.0.0.1:8090/v1 UPSTREAM_API_KEY=dummy make run
-```
+Point the proxy at it: there is no upstream-base setting — the Vertex adapter
+builds its own hostname — so an in-process test supplies a `provider.Provider`
+whose `BuildRequest` targets the mock instead. See `mockProvider` in
+`characterization_helpers_test.go`.
 
 Docker — note the context is the **parent** directory:
 
 ```bash
-docker build -f mockupstream/Dockerfile -t la-mockupstream backend/llm-proxy
+docker build -f mockupstream/Dockerfile -t la-mockupstream backend/llmguard
 docker run --rm -p 8090:8090 la-mockupstream -error-rate 0.25 -latency 150ms
 ```
 

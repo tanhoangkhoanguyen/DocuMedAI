@@ -1,11 +1,10 @@
-# llm-proxy — developer task runner.
+# LLMGuard — developer task runner.
 #
 # Phase 1 test harness: `make test` and `make lint` are the two commands CI runs
-# (.github/workflows/llm-proxy-ci.yml) and both are expected to pass on a clean
-# checkout even though the service currently has zero tests.
+# (.github/workflows/llmguard-ci.yml).
 #
-# Run from backend/llm-proxy/:
-#   make test    run the Go test suite (exits 0 when there are no tests yet)
+# Run from backend/llmguard/:
+#   make test    run the Go test suite
 #   make lint    go vet + golangci-lint
 #   make run     build and run the proxy locally
 #   make bench   run Go benchmarks
@@ -41,7 +40,7 @@ TESTFLAGS ?= $(RACE) -count=1
 
 .PHONY: help
 help:
-	@echo "llm-proxy targets:"
+	@echo "LLMGuard targets:"
 	@echo "  make test    - run tests ($(if $(RACE),race detector on,race detector off: cgo disabled))"
 	@echo "  make lint    - go vet + golangci-lint"
 	@echo "  make run     - run the proxy locally"
@@ -53,8 +52,6 @@ help:
 
 # --- the two targets CI gates on -------------------------------------------
 
-# Passes with "no test files" until the first _test.go lands; that is the
-# intended Phase 1 state, not a misconfiguration.
 .PHONY: test
 test:
 	$(GO) test $(TESTFLAGS) $(PKGS)
@@ -103,7 +100,7 @@ BIN_DIR ?= bin
 
 .PHONY: build
 build:
-	$(GO) build -o $(BIN_DIR)/llm-proxy$(GOEXE) .
+	$(GO) build -o $(BIN_DIR)/llmguard$(GOEXE) .
 
 # --- mock upstream (see mockupstream/README.md) -----------------------------
 
