@@ -90,8 +90,21 @@ func doWithRetry(
 		}
 
 		res, err := call(ctx)
-		if err == nil && !isRetryable(res.status) {
-			return res, nil // success (or a non-retryable client error like 400/401)
+		if err == nil {
+			return res, nil // success
+		}
+
+		// A translated upstream error carries the vendor's status. When that
+		// status is not retryable — 400, 401, 404 — the request will fail
+		// identically on every attempt, so retrying only burns quota and
+		// latency. Bail out and let the caller surface the vendor's own error.
+		//
+		// Anything else (transport failure, BuildRequest, marshal) carries no
+		// status and IS worth retrying: a dropped connection is exactly the
+		// case retry exists for.
+		var ue *provider.UpstreamError
+		if errors.As(err, &ue) && !isRetryable(ue.Status) {
+			return res, err
 		}
 		last, lastErr = res, err
 

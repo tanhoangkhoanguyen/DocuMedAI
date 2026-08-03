@@ -125,6 +125,42 @@ disabled) and mounts the repo at `/workspace`, so tests run via `exec` rather th
 prod entrypoint. The graph is mocked in `ci_tests/conftest.py` (`_build_graph` patched),
 so backend API tests don't call OpenAI.
 
+### LLMGuard (Go) tests
+
+Run from `backend/llmguard/` — plain `go test`, no Docker, no provider credentials:
+
+```bash
+make test              # go test -race -count=1 ./...  (race auto-disabled when cgo is off, e.g. Windows)
+make lint              # go vet + pinned golangci-lint (auto-installs via `make tools`)
+make bench             # benchmarks only, with -benchmem
+go test -run TestRetry ./...              # single test
+go test -run TestX -count=1 .             # single test, root package only
+make run-mock          # standalone mockupstream on :8090
+```
+
+The suite is **characterization tests** (`characterization_<area>_test.go`, one file per area:
+buffered, streaming, retry, circuitbreaker, dedup, ratelimit, usage, errors) sharing a harness in
+`characterization_helpers_test.go`. Two rules matter when editing them:
+
+- They pin what the proxy does **today**, not what it should do. Surprising behavior is locked
+  in as-is with a `QUIRK` comment. Don't "fix" a test to encode intended behavior — that would
+  let a refactor silently change actual behavior.
+- Thresholds come from the real `loadConfig()` defaults (`RetryMax=4`, `CircuitMinReqs=10`,
+  `CircuitFailRatio=0.6`, `RateLimitBurst=60`). Only the retry *delay* knobs are shortened.
+
+Failure modes are driven through `mockupstream`'s knobs (error rate, status, latency, outage
+window) over a real loopback socket rather than hand-written responses. `mockupstream` is a
+**package** with a thin `cmd/` binary so the in-process fake
+(`httptest.NewServer(mockupstream.New(...))`) is byte-identical to the standalone process.
+Responses are deterministic: content is a pure function of the request, chaos is seeded per
+request from the request bytes (not a package-level RNG), and content/chaos draw from separately
+seeded streams. Identical request bodies therefore share one error-rate verdict — set
+`X-Mock-Nonce` (or `X-Request-Id`) to vary it. See `mockupstream/README.md`.
+
+Redis-backed tests (the rate limiter's Lua token bucket) use **DB 15** via
+`internal/testutil.RequireRedis`, and **skip** rather than fail when Redis is unreachable, so
+`make test` stays green on a laptop. Override with `TEST_REDIS_URL`.
+
 ## Service Ports
 
 | Service | Port |
@@ -253,3 +289,27 @@ GitHub Actions (`.github/workflows/`) — three workflows: `python-ci.yml`, `fro
 `llm-proxy-ci.yml` gates the Go service (`make test` + `make lint`, plus a `go mod tidy`
 check) with a `redis:7-alpine` service container on DB 15. It is **path-filtered** to
 `backend/llmguard/**`, so it stays off the critical path for the other two.
+
+## Cursor Rules (`.cursor/rules/`)
+
+The repo carries Cursor rules that apply to work here regardless of which assistant is running.
+
+`agents-conduct.mdc` (`alwaysApply: true`) — the load-bearing one:
+- Inspect actual repo state before proposing changes; don't assume unseen code. Start from the
+  modified files and any file the user names.
+- Build on existing patterns; prefer a cleaner approach only when it stays inside the request.
+- **Minimal fix**: implement only what was asked — no extra features, helpers, or drive-by
+  refactors.
+- Short, direct replies. If the user's intuition is wrong, say so and ask — don't assume and
+  start writing.
+
+`patterns/client-wrapper-pattern.mdc` (globs `backend/**/*_client.py`) — new or edited
+`*_client.py` SDK wrappers must mirror `backend/vector_database_tests/utils/qdrant_client.py`:
+one primary wrapper class; SDK client and heavy deps constructed in `__init__` and stored on
+`self.__private` / `self._protected`; snake_case type-hinted public methods; external I/O wrapped
+in `try / except Exception as e` logging `LOGGER.error(f"<short context>\n\t{str(e)}")`. Retrieval
+methods log and return a safe sentinel (`[]`, `False`) on failure; **mutations log then `raise`**
+so a failed write never looks like a success.
+
+`cursor-rules.mdc` and `self-improvement.mdc` are meta-rules about where rule files live and when
+to add new ones — relevant only when editing the rules themselves.
