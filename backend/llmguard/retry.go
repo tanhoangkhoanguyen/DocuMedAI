@@ -27,8 +27,9 @@ type upstreamResult struct {
 	usage  provider.Usage
 }
 
-// retryStatuses are the HTTP statuses worth retrying — transient upstream
-// problems, not client errors. 429 = rate limited by the provider itself.
+// isRetryable reports whether a status is worth another attempt — a transient
+// upstream problem, not a client error. 429 = rate limited by the provider
+// itself. Also decides what may trip the circuit breaker; see newBreaker.
 func isRetryable(status int) bool {
 	switch status {
 	case http.StatusTooManyRequests, // 429
@@ -188,10 +189,9 @@ func doWithRetry(
 		case <-time.After(delay):
 		}
 	}
-	if lastErr != nil {
-		return last, lastErr
-	}
-	return last, errors.New("exhausted retries")
+	// Every attempt failed — reaching here requires it, since a success returns
+	// immediately — so lastErr is always set.
+	return last, lastErr
 }
 
 // backoffDelay = base * 2^attempt, capped, plus deterministic jitter derived
