@@ -55,6 +55,26 @@ func newBreaker(cfg Config, m *Metrics) *gobreaker.CircuitBreaker {
 			ratio := float64(c.TotalFailures) / float64(c.Requests)
 			return ratio >= cfg.CircuitFailRatio
 		},
+		// Decide what counts as an upstream failure. Without this, gobreaker's
+		// default treats EVERY non-nil error as one — including a 400 caused
+		// entirely by the caller's own malformed request. A single buggy client
+		// could then open the breaker for every other user for CircuitOpenFor.
+		//
+		// The breaker exists to detect a sick PROVIDER, so only the statuses
+		// retry already treats as transient (429/5xx) may trip it. A
+		// non-retryable status means the request was bad, not the upstream.
+		IsSuccessful: func(err error) bool {
+			if err == nil {
+				return true
+			}
+			var ue *provider.UpstreamError
+			if errors.As(err, &ue) {
+				return !isRetryable(ue.Status)
+			}
+			// No status to judge — a transport failure, timeout or context
+			// cancellation. That IS an upstream problem.
+			return false
+		},
 		OnStateChange: func(_ string, _ gobreaker.State, to gobreaker.State) {
 			// Surface breaker state as a gauge for dashboards/alerts.
 			switch to {

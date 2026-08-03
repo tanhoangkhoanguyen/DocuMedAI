@@ -4,6 +4,7 @@ package main
 // Harness and thresholds live in characterization_helpers_test.go.
 
 import (
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -63,5 +64,58 @@ func TestCharacterizeCircuitBreakerTrips(t *testing.T) {
 	}
 	if got := testutil.CounterValue(t, h.metrics.circuitState); got != 2 {
 		t.Errorf("circuitState gauge = %v, want 2 (open)", got)
+	}
+}
+
+// Client errors must NOT trip the breaker. The breaker's job is to detect a
+// sick provider; a 400 means the CALLER sent something bad, and shedding
+// everyone else's traffic because one client is misbehaving is a self-inflicted
+// outage.
+//
+// Without gobreaker's IsSuccessful set, its default counts every non-nil error
+// as a failure — so this many 400s would have opened the breaker and started
+// answering unrelated requests with 503.
+func TestCharacterizeCircuitBreakerIgnoresClientErrors(t *testing.T) {
+	const requests = 15 // comfortably past CircuitMinReqs=10
+
+	cfg := realDefaults()
+	cfg.RetryBaseDly = time.Millisecond // timing only
+	cfg.RetryMaxDly = 5 * time.Millisecond
+
+	mcfg := mockupstream.DefaultConfig()
+	mcfg.ErrorRate = 1.0
+	mcfg.ErrorStatus = http.StatusBadRequest
+	h := newHarness(t, cfg, mcfg, nil)
+
+	// Distinct bodies so each request is its own singleflight flight, and so
+	// every one is a separate breaker observation.
+	for i := 1; i <= requests; i++ {
+		rec := h.do(t, chatBody("gemini-2.5-flash", fmt.Sprintf("bad request %d", i), false), nil)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("request %d: status = %d, want 400 — the breaker must stay closed "+
+				"and keep surfacing the vendor's own error", i, rec.Code)
+		}
+	}
+
+	// Closed throughout: 0 is the gauge's initial value and its closed value,
+	// so the load-bearing assertion is that it never became 2 (open).
+	if got := testutil.CounterValue(t, h.metrics.circuitState); got == 2 {
+		t.Errorf("circuitState gauge = %v — %d client errors must not open the breaker",
+			got, requests)
+	}
+
+	// Every request reached upstream exactly once: not retried (commit 1) and
+	// never shed by an open breaker.
+	if got := h.up.Hits(); got != requests {
+		t.Errorf("upstream hits = %d, want %d (one attempt each, none shed)", got, requests)
+	}
+
+	// A subsequent request still gets through rather than a breaker-open 503.
+	rec := h.do(t, chatBody("gemini-2.5-flash", "still open", false), nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 — the breaker should still be closed", rec.Code)
+	}
+	if env := decodeError(t, rec); env.Error.Message == "upstream unavailable" {
+		t.Error("got the breaker-open message; the breaker tripped on client errors")
 	}
 }
