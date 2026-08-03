@@ -58,6 +58,11 @@ type mockUpstream struct {
 	server *httptest.Server
 	mock   *mockupstream.Server
 	hits   atomic.Int64
+
+	// intercept, when set, runs INSTEAD of the mock and may delegate to it.
+	// Assigned before the first request, read on every one — see
+	// newHarnessWithHandler.
+	intercept func(mock http.Handler, w http.ResponseWriter, r *http.Request)
 }
 
 func newMockUpstream(t *testing.T, cfg mockupstream.Config) *mockUpstream {
@@ -69,6 +74,10 @@ func newMockUpstream(t *testing.T, cfg mockupstream.Config) *mockUpstream {
 		// requests and would corrupt the counts the assertions depend on.
 		if !strings.HasPrefix(r.URL.Path, "/_mock/") {
 			mu.hits.Add(1)
+		}
+		if mu.intercept != nil {
+			mu.intercept(mu.mock, w, r)
+			return
 		}
 		mu.mock.ServeHTTP(w, r)
 	}))
@@ -168,8 +177,23 @@ type harness struct {
 
 func newHarness(t *testing.T, cfg Config, mockCfg mockupstream.Config, limiter *RateLimiter) *harness {
 	t.Helper()
+	return newHarnessWithHandler(t, cfg, mockCfg, limiter, nil)
+}
+
+// newHarnessWithHandler is newHarness with a hook in front of the mock, for the
+// few tests that need a failure the mock cannot express — a hijacked connection,
+// a truncated body. `intercept` receives the mock as an http.Handler and may
+// either delegate to it or answer itself. A nil intercept is plain newHarness.
+func newHarnessWithHandler(
+	t *testing.T, cfg Config, mockCfg mockupstream.Config, limiter *RateLimiter,
+	intercept func(mock http.Handler, w http.ResponseWriter, r *http.Request),
+) *harness {
+	t.Helper()
 
 	up := newMockUpstream(t, mockCfg)
+	if intercept != nil {
+		up.intercept = intercept
+	}
 	if limiter == nil {
 		limiter = offlineLimiter()
 	}

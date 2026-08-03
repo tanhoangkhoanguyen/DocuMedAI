@@ -145,6 +145,12 @@ func (p *Proxy) serveBuffered(
 		// status; anything else (breaker open, transport failure) is a 503.
 		var ue *provider.UpstreamError
 		if errors.As(err, &ue) {
+			// Pass the provider's pacing hint through. Without it a client
+			// facing a 429 has to guess when to come back, which is how a
+			// thundering herd re-forms the moment quota frees up.
+			if ue.RetryAfter != "" {
+				w.Header().Set("Retry-After", ue.RetryAfter)
+			}
 			p.writeError(w, model, start, ue.Status, ue.Body.Error.Message, ue.Body.Error.Type)
 			return
 		}
@@ -183,6 +189,10 @@ func (p *Proxy) forwardBuffered(
 		// Surface the status so the retry loop can decide (429/5xx retryable).
 		var ue *provider.UpstreamError
 		if errors.As(err, &ue) {
+			// TranslateResponse only sees (status, body), so the header has to
+			// be attached here. The error is what survives the breaker and
+			// deduper on the failure path; the result below is not.
+			ue.RetryAfter = resp.Header.Get("Retry-After")
 			return &upstreamResult{status: ue.Status, header: resp.Header.Clone()}, err
 		}
 		return nil, err

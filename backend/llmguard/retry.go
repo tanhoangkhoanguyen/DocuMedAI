@@ -7,6 +7,7 @@ import (
 	"math"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/sony/gobreaker"
@@ -38,6 +39,14 @@ func isRetryable(status int) bool {
 		return true
 	}
 	return false
+}
+
+// isUpstreamErr reports whether err is a translated upstream error — one that
+// carries the vendor's own status and message. Anything else (transport
+// failure, timeout, encode error) says only "the call did not complete".
+func isUpstreamErr(err error) bool {
+	var ue *provider.UpstreamError
+	return errors.As(err, &ue)
 }
 
 // newBreaker builds the circuit breaker that wraps every upstream call. When
@@ -126,7 +135,18 @@ func doWithRetry(
 		if errors.As(err, &ue) && !isRetryable(ue.Status) {
 			return res, err
 		}
-		last, lastErr = res, err
+
+		// Remember the most INFORMATIVE failure, not simply the most recent.
+		//
+		// An upstream error names what the vendor actually said ("quota
+		// exceeded", 429); a transport error only says the call didn't finish.
+		// Plain last-wins would let a dropped connection on the final attempt
+		// erase a real 429 from an earlier one, and serveBuffered's errors.As
+		// would then miss — downgrading a precise vendor error into a generic
+		// 503 "upstream unavailable".
+		if lastErr == nil || !isUpstreamErr(lastErr) || isUpstreamErr(err) {
+			last, lastErr = res, err
+		}
 
 		// Don't sleep after the final attempt.
 		if attempt == cfg.RetryMax-1 {
@@ -136,11 +156,34 @@ func doWithRetry(
 		delay := backoffDelay(cfg, attempt, seed)
 		if res != nil {
 			if ra := parseRetryAfter(res.header.Get("Retry-After")); ra > 0 {
-				delay = ra // upstream told us exactly how long to wait — respect it
+				// Upstream told us exactly how long to wait — respect it, but
+				// never unconditionally. A buggy or hostile provider sending
+				// "Retry-After: 86400" would otherwise park this request for a
+				// day, holding a connection and a singleflight slot. Cap it at
+				// the same ceiling backoffDelay already honors.
+				if ra > cfg.RetryMaxDly {
+					ra = cfg.RetryMaxDly
+				}
+				delay = ra
 			}
 		}
 		select {
 		case <-ctx.Done():
+			// Giving up mid-backoff must not throw away what we already
+			// learned. Preserving the error through the loop (above) is
+			// pointless if this exit replaces it with "context canceled".
+			//
+			// The two cancellation causes are NOT equivalent:
+			//   - Canceled: the client hung up. Nobody is waiting for a
+			//     response, and ctx.Err() is the honest description of why we
+			//     stopped, so report that.
+			//   - DeadlineExceeded: we ran out of time, but a caller IS still
+			//     listening. The vendor's own 429/5xx is strictly better
+			//     information than "deadline exceeded", and serveBuffered's
+			//     errors.As needs the *UpstreamError to surface a real status.
+			if !errors.Is(ctx.Err(), context.Canceled) && isUpstreamErr(lastErr) {
+				return last, lastErr
+			}
 			return last, ctx.Err()
 		case <-time.After(delay):
 		}
@@ -168,14 +211,26 @@ func backoffDelay(cfg Config, attempt int, seed string) time.Duration {
 	return time.Duration(exp + jitter)
 }
 
-// parseRetryAfter handles the delta-seconds form of Retry-After. HTTP-date form
-// is ignored (returns 0) — backoff covers it.
+// parseRetryAfter handles both Retry-After forms: delta-seconds ("120") and
+// HTTP-date ("Wed, 21 Oct 2026 07:28:00 GMT"). Google emits the date form.
+//
+// Anything unusable returns <= 0, which the caller reads as "no hint" and
+// falls back to normal backoff.
 func parseRetryAfter(v string) time.Duration {
-	if v == "" {
-		return 0
-	}
-	if secs, err := strconv.Atoi(v); err == nil && secs >= 0 {
+	v = strings.TrimSpace(v)
+
+	// delta-seconds.
+	if secs, err := strconv.Atoi(v); err == nil {
+		if secs <= 0 {
+			return 0
+		}
 		return time.Duration(secs) * time.Second
+	}
+
+	// HTTP-date, e.g. "Wed, 21 Oct 2026 07:28:00 GMT". A date already in the
+	// past yields a negative duration, which the caller treats as "no hint".
+	if when, err := http.ParseTime(v); err == nil {
+		return time.Until(when)
 	}
 	return 0
 }
