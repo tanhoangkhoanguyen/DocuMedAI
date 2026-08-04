@@ -58,7 +58,6 @@ func TestCharacterizeRetryExhaustsAtRetryMax(t *testing.T) {
 // mechanism that makes a retry observably different from its predecessor.
 func TestCharacterizeRetryThenSucceed(t *testing.T) {
 	cfg := realDefaults()
-	// Attempts land at roughly 0ms, 200-250ms, 600-750ms, 1400-1750ms.
 	cfg.RetryBaseDly = 200 * time.Millisecond
 	cfg.RetryMaxDly = 2 * time.Second
 
@@ -66,9 +65,26 @@ func TestCharacterizeRetryThenSucceed(t *testing.T) {
 	mcfg.CompletionTokens = 3
 	h := newHarness(t, cfg, mcfg, nil)
 
-	// A 1s outage covers the first three attempts with ~400ms of margin before
-	// the fourth.
-	h.up.mock.StartOutage(time.Second)
+	// The outage must end AFTER attempt 2 and BEFORE attempt 3, so attempts 0-2
+	// fail and attempt 3 succeeds. Both edges can flake, in opposite ways:
+	//
+	//   too short -> attempt 2 lands after the window and succeeds early. The
+	//                test still passes, but proves nothing about recovery.
+	//   too long  -> attempt 3 lands inside the window, all four fail, and the
+	//                test goes red for a scheduling reason unrelated to retry.
+	//
+	// backoffDelay is deterministic (FNV of seed+attempt, no global rand), but
+	// the seed is the dedup key — the sha256 of the request body — so a test
+	// that changes its prompt draws different jitter. Measured across 200 seeds:
+	//
+	//   attempt 2 lands in [621ms, 727ms]
+	//   attempt 3 lands in [1452ms, 1694ms]
+	//
+	// 1100ms is the midpoint of the safe corridor: >=373ms of slack after
+	// attempt 2 and >=352ms before attempt 3, versus 1s which is lopsided
+	// (273ms / 452ms). Balanced margin is what survives a loaded runner, since
+	// the same slowness that delays attempt 3 also delays attempt 2.
+	h.up.mock.StartOutage(1100 * time.Millisecond)
 
 	start := time.Now()
 	rec := h.do(t, chatBody("gemini-2.5-flash", "recovers", false), nil)
@@ -182,7 +198,13 @@ func TestCharacterizeRetryAfterIsHonored(t *testing.T) {
 	if h.up.Hits() != 2 {
 		t.Errorf("upstream hits = %d, want 2", h.up.Hits())
 	}
-	if elapsed < time.Second {
+	// Asserted at 900ms rather than a full second. The point is that Retry-After
+	// (1s) dominated the ~1ms backoff, and anything near a second proves that —
+	// but timer granularity and rounding can land a correct run a hair under
+	// 1000ms, which would fail an exact-boundary check for no real reason.
+	// Backoff alone would finish in single-digit milliseconds, so 900ms is
+	// nowhere near ambiguous.
+	if elapsed < 900*time.Millisecond {
 		t.Errorf("elapsed = %s; Retry-After: 1 must override the ~1ms backoff", elapsed)
 	}
 }

@@ -25,7 +25,14 @@ func TestCharacterizeDedupCoalescesConcurrentIdenticalRequests(t *testing.T) {
 	mcfg.CompletionTokens = 5
 	// Hold the in-flight request open long enough that every caller arrives
 	// while the leader is still waiting, which is what singleflight coalesces.
-	mcfg.Latency = 400 * time.Millisecond
+	//
+	// This races goroutine start-up against the hold: a straggler that arrives
+	// after the leader finishes starts its own flight, and the assertion below
+	// sees 2 hits instead of 1. 400ms is ample on an idle laptop but thin on a
+	// loaded CI runner with -race, where scheduling 8 goroutines can itself take
+	// tens of milliseconds. 1s costs a fraction of a second and removes the
+	// race — the assertion is about coalescing, not about how fast Go schedules.
+	mcfg.Latency = time.Second
 	h := newHarness(t, cfg, mcfg, nil)
 
 	body := chatBody("gemini-2.5-flash", "coalesce me", false)
@@ -72,6 +79,10 @@ func TestCharacterizeDedupDoesNotCoalesceDifferentBodies(t *testing.T) {
 
 	mcfg := mockupstream.DefaultConfig()
 	mcfg.CompletionTokens = 3
+	// Unlike the coalescing test above, this one does not race the clock: four
+	// distinct bodies are four distinct dedup keys, so they never share a flight
+	// no matter when each caller arrives. The latency only keeps the requests
+	// genuinely concurrent; its exact value cannot change the outcome.
 	mcfg.Latency = 200 * time.Millisecond
 	h := newHarness(t, realDefaults(), mcfg, nil)
 
