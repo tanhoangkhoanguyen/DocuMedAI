@@ -163,3 +163,70 @@ func TestCharacterizeUpstreamErrorPassthrough(t *testing.T) {
 		})
 	}
 }
+
+// --- oversized upstream response ---------------------------------------------
+
+// The buffered path reads the whole provider response into memory so a failed
+// attempt can be replayed, so an unbounded body is a memory-exhaustion vector.
+// readUpstreamBody caps it at maxUpstreamBody.
+//
+// The cap must produce an ERROR, not a truncated body: a silently cut-off
+// response would reach TranslateResponse and surface as a confusing JSON syntax
+// error rather than the real problem. As an error it also stays a failed
+// attempt, so nothing nonsensical is cached or handed to dedup waiters.
+func TestOversizedUpstreamResponseIsRejected(t *testing.T) {
+	cases := []struct {
+		name     string
+		size     int
+		wantCode int
+	}{
+		// Just under the cap still has to work — the guard must not clip
+		// legitimate traffic.
+		{name: "just under the cap is served", size: maxUpstreamBody - (1 << 16), wantCode: http.StatusOK},
+		{name: "over the cap is rejected", size: maxUpstreamBody + (1 << 16), wantCode: http.StatusServiceUnavailable},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := realDefaults()
+			cfg.RetryBaseDly = time.Millisecond
+			cfg.RetryMaxDly = 5 * time.Millisecond
+
+			// A valid Vertex response whose text part is padded to the target
+			// size, so the only thing under test is total body length.
+			h := newHarnessWithHandler(t, cfg, mockupstream.DefaultConfig(), nil,
+				func(_ http.Handler, w http.ResponseWriter, _ *http.Request) {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusOK)
+					_, _ = w.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"`))
+					_, _ = w.Write([]byte(strings.Repeat("a", tc.size)))
+					_, _ = w.Write([]byte(`"}],"role":"model"},"finishReason":"STOP","index":0}],` +
+						`"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":1,"totalTokenCount":2}}`))
+				})
+
+			rec := h.do(t, chatBody("gemini-2.5-flash", "big response", false), nil)
+
+			if rec.Code != tc.wantCode {
+				t.Fatalf("status = %d, want %d", rec.Code, tc.wantCode)
+			}
+
+			if tc.wantCode == http.StatusOK {
+				// The oversized case is what this test is about; for the
+				// under-cap case just prove the body survived intact.
+				got := decodeChat(t, rec)
+				if len(got.Choices) != 1 || got.Choices[0].Message.Content == "" {
+					t.Errorf("a response under the cap must pass through intact, got %+v", got)
+				}
+				return
+			}
+
+			// Oversized is a transport-class failure: no vendor status to
+			// report, so it surfaces as the generic 503 rather than a
+			// pass-through of the upstream's own (here 200) status.
+			env := decodeError(t, rec)
+			if env.Error.Message != "upstream unavailable" {
+				t.Errorf("error.message = %q, want %q", env.Error.Message, "upstream unavailable")
+			}
+		})
+	}
+}

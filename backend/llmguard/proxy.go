@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -15,6 +16,38 @@ import (
 
 	"documedai/llmguard/provider"
 )
+
+// maxUpstreamBody caps how much of a provider's response we will buffer.
+//
+// The buffered path reads the whole body into memory so a failed attempt can be
+// discarded and replayed, which means a provider that streams an unbounded
+// response — broken, misconfigured or hostile — can exhaust the gateway's
+// memory. LLMGuard sits in the request path, so that is a denial-of-service
+// vector rather than a hypothetical.
+//
+// 10 MiB is roughly two orders of magnitude above the largest plausible chat
+// completion (a 128k-token reply is well under 1 MiB of JSON), so a legitimate
+// response never approaches it.
+const maxUpstreamBody = 10 << 20 // 10 MiB
+
+// readUpstreamBody reads r with a hard ceiling, distinguishing "exactly at the
+// cap" from "over the cap".
+//
+// A bare io.LimitReader would silently TRUNCATE: the caller would hand a cut-off
+// body to TranslateResponse and get a confusing JSON syntax error instead of the
+// real problem. Reading one byte past the limit makes an oversized response a
+// clear, named failure — and because it is an error rather than a short read, the
+// retry loop treats it as a failed attempt instead of caching nonsense.
+func readUpstreamBody(r io.Reader) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(r, maxUpstreamBody+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > maxUpstreamBody {
+		return nil, fmt.Errorf("upstream response exceeds %d bytes", maxUpstreamBody)
+	}
+	return body, nil
+}
 
 // Proxy is the HTTP handler for /v1/chat/completions. It owns the
 // provider-agnostic concerns — rate limit → dedup → circuit breaker → retry —
@@ -179,7 +212,7 @@ func (p *Proxy) forwardBuffered(
 	}
 	defer resp.Body.Close()
 
-	nativeBody, err := io.ReadAll(resp.Body)
+	nativeBody, err := readUpstreamBody(resp.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -237,7 +270,11 @@ func (p *Proxy) serveStreaming(
 		defer resp.Body.Close()
 
 		if resp.StatusCode < 200 || resp.StatusCode > 299 {
-			nativeBody, _ := io.ReadAll(resp.Body)
+			// An oversized error body is not worth its own failure mode here —
+			// the status alone already tells us the request failed — so a read
+			// error degrades to an empty body and TranslateResponse still
+			// produces an *UpstreamError carrying the status.
+			nativeBody, _ := readUpstreamBody(resp.Body)
 			// Reuse the adapter's error translation: a non-2xx status makes it
 			// return an *UpstreamError carrying the vendor's message.
 			_, terr := prov.TranslateResponse(resp.StatusCode, nativeBody)
