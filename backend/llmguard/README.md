@@ -67,22 +67,32 @@ compose is the only supported build path.
 
 | File | Responsibility |
 |------|----------------|
-| `main.go` | Wiring, HTTP server, graceful shutdown, `-healthcheck` |
-| `config.go` | Env-driven config + defaults |
-| `providers.go` | Adapter construction + model routing rules |
-| `proxy.go` | Rate limit → dedup → breaker → retry; SSE translation loop |
-| `ratelimit.go` | Redis token bucket (atomic Lua) |
-| `retry.go` | Backoff + jitter + Retry-After + circuit breaker |
-| `dedup.go` | In-flight de-duplication (singleflight) |
-| `metrics.go` | Prometheus collectors |
+| `main.go` | Composition root: wiring, HTTP server, graceful shutdown, `-healthcheck` |
+| `internal/gateway/gateway.go` | The package's entire exported surface — what `main` may call |
+| `internal/gateway/config.go` | Env-driven config + defaults |
+| `internal/gateway/providers.go` | Adapter construction + model routing rules |
+| `internal/gateway/proxy.go` | Rate limit → dedup → breaker → retry; SSE translation loop |
+| `internal/gateway/ratelimit.go` | Redis token bucket (atomic Lua) |
+| `internal/gateway/retry.go` | Backoff + jitter + Retry-After + circuit breaker |
+| `internal/gateway/dedup.go` | In-flight de-duplication (singleflight) |
+| `internal/gateway/metrics.go` | Prometheus collectors |
 | `provider/` | Normalized schema, `Provider` interface + registry, Vertex adapter |
+| `mockupstream/` | Deterministic fake provider used by every test (and the benchmark) |
+| `internal/testutil/redis.go` | Live-Redis gate for the Lua token-bucket tests |
+| `internal/testutil/polling.go` | `Eventually` — waits on state that settles asynchronously |
+| `internal/testutil/metrics.go` | Prometheus readers, so tests can assert on instrumentation |
+
+The pipeline sits under `internal/` so nothing outside this module can depend on
+it, leaving it free to change shape. Only `gateway.go` is exported; everything
+else in the package is unexported, and tests live beside the code they exercise
+so no identifier is exported merely to be testable.
 
 ## Adding a provider
 
 Implement `provider.Provider` (4 methods: `Name`, `BuildRequest`,
 `TranslateResponse`, `TranslateStreamChunk`), then register it in
-`providers.go` with a `RouteModel` prefix rule. Nothing in `proxy.go` or the
-client contract changes.
+`internal/gateway/providers.go` with a `RouteModel` prefix rule. Nothing in
+`internal/gateway/proxy.go` or the client contract changes.
 
 ## Notes
 
@@ -92,4 +102,5 @@ client contract changes.
 
 ## Deferred
 
-- Cross-replica dedup via Redis marker (extension point in `dedup.go`).
+- Cross-replica dedup via Redis marker (extension point in
+  `internal/gateway/dedup.go`).

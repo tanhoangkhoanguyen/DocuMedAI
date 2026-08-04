@@ -105,7 +105,7 @@ go run ./mockupstream/cmd/mockupstream -addr :8090 -latency 200ms -jitter 100ms
 Point the proxy at it: there is no upstream-base setting — the Vertex adapter
 builds its own hostname — so an in-process test supplies a `provider.Provider`
 whose `BuildRequest` targets the mock instead. See `mockProvider` in
-`characterization_helpers_test.go`.
+`harness_test.go`.
 
 Docker — note the context is the **parent** directory:
 

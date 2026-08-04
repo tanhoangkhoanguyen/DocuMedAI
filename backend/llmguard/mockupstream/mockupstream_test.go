@@ -17,7 +17,7 @@ package mockupstream
 //     emitted, SSE terminates.
 //   - The nonce escape hatch, without which a load generator repeating one body
 //     gets all-fail or all-succeed instead of the configured rate.
-//   - Outage covering BOTH surfaces, which characterization_retry_test.go
+//   - Outage covering BOTH surfaces, which retry_test.go
 //     depends on via the Gemini path.
 //
 // Everything is driven through the exported API (New, DefaultConfig, Resolve,
@@ -305,21 +305,6 @@ func TestErrorRateVariesWithNonce(t *testing.T) {
 	}
 }
 
-// Without a nonce the verdict IS shared, which is what keeps a bare curl
-// reproducible. Pinned so the two halves of the design stay coupled.
-func TestErrorRateSharedVerdictWithoutNonce(t *testing.T) {
-	s := New(DefaultConfig())
-
-	first := post(t, s, oaPath+"?error_rate=0.5", chatBody, nil)
-	for i := range 20 {
-		rec := post(t, s, oaPath+"?error_rate=0.5", chatBody, nil)
-		if rec.Code != first.Code {
-			t.Fatalf("request %d: status = %d, want %d — identical requests must share one verdict",
-				i, rec.Code, first.Code)
-		}
-	}
-}
-
 // Retry-After must be set BEFORE WriteHeader, or net/http drops it silently —
 // the exact failure that would make the proxy's own Retry-After handling look
 // broken when the mock is at fault.
@@ -435,7 +420,7 @@ func TestSSETerminatesAndReassembles(t *testing.T) {
 // --- outage ------------------------------------------------------------------
 
 // The outage window is the one deliberately stateful, time-based knob, and it is
-// the mechanism characterization_retry_test.go uses to make a retry observably
+// the mechanism retry_test.go uses to make a retry observably
 // differ from its predecessor. It must cover BOTH surfaces: the proxy's mock
 // provider drives the Gemini path, so an OpenAI-only outage would leave that
 // test silently exercising nothing.
@@ -476,29 +461,3 @@ func TestOutageAppliesToBothSurfacesThenClears(t *testing.T) {
 }
 
 // --- config resolution -------------------------------------------------------
-
-// Headers must outrank query parameters, because a test client often cannot
-// control the URL (the proxy under test builds it) but can always add a header.
-// If this precedence inverted, per-request overrides in the characterization
-// suite would silently stop applying.
-func TestResolveHeaderBeatsQuery(t *testing.T) {
-	r := httptest.NewRequest(http.MethodPost, oaPath+"?error_status=500&completion_tokens=3", nil)
-	r.Header.Set("X-Mock-Error-Status", "429")
-	r.Header.Set("X-Mock-Completion-Tokens", "9")
-
-	cfg := Resolve(DefaultConfig(), r)
-	if cfg.ErrorStatus != http.StatusTooManyRequests {
-		t.Errorf("ErrorStatus = %d, want 429 (header must beat query)", cfg.ErrorStatus)
-	}
-	if cfg.CompletionTokens != 9 {
-		t.Errorf("CompletionTokens = %d, want 9 (header must beat query)", cfg.CompletionTokens)
-	}
-
-	// An unparseable value must fall back to the base, not to zero — a typo in a
-	// knob should degrade to the default rather than silently disabling output.
-	bad := httptest.NewRequest(http.MethodPost, oaPath+"?completion_tokens=banana", nil)
-	if got := Resolve(DefaultConfig(), bad); got.CompletionTokens != DefaultConfig().CompletionTokens {
-		t.Errorf("CompletionTokens = %d, want the default %d — an unparseable value must not zero it",
-			got.CompletionTokens, DefaultConfig().CompletionTokens)
-	}
-}

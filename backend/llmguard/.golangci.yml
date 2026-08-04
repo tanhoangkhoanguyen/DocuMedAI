@@ -13,19 +13,20 @@
 # Line numbers were refreshed after the Vertex migration; if they drift again,
 # `grep` for the construct rather than trusting the number:
 #
-#   errcheck         proxy.go:180, proxy.go:237 — `defer resp.Body.Close()`.
+#   errcheck         internal/gateway/proxy.go:213, :270 — `defer resp.Body.Close()`.
 #                    Also the discarded `w.Write` returns in serveStreaming: a
 #                    write failure there means the client hung up, which the
 #                    scanner loop discovers on its own.
-#   forcetypeassert  dedup.go:35  — singleflight `v.(*upstreamResult)`
-#                    proxy.go:136 — gobreaker  `v.(*upstreamResult)`
+#   forcetypeassert  internal/gateway/dedup.go:35 — singleflight `v.(*upstreamResult)`
+#                    internal/gateway/proxy.go:169 — gobreaker `v.(*upstreamResult)`
 #                    Both are unchecked-by-design: the only producer of these
 #                    values is the callback immediately above them. NOTE the
 #                    gobreaker one is safe ONLY because of the `if berr != nil`
 #                    guard on the line before — on the breaker-open path `v` is
 #                    nil and the assertion would panic. Do not remove that guard.
-#   nilnil           proxy.go:295 — the streaming breaker callback returns
-#                    (nil, nil) because it has already written the response.
+#   nilnil           internal/gateway/proxy.go:332 — the streaming breaker
+#                    callback returns (nil, nil) because it has already written
+#                    the response.
 #
 # Formatting linters (gofmt/gofumpt/goimports) are intentionally absent. The
 # repo has core.autocrlf=true, so Go sources are LF in git but CRLF in a Windows
@@ -61,7 +62,8 @@ linters:
     misspell:
       # Locale is deliberately left unset (neutral). Forcing `locale: US` turns
       # misspell into a British/American style check, which flags existing prose
-      # such as "labelled" in metrics.go:12 — a spelling preference, not a typo.
+      # such as "labelled" in internal/gateway/metrics.go:12 — a spelling
+      # preference, not a typo.
       # Neutral still catches genuine misspellings, which is the useful part.
       ignore-rules: []
 

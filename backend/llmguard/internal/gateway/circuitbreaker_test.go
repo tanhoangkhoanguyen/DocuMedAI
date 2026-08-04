@@ -1,7 +1,7 @@
-package main
+package gateway
 
 // Characterization: the circuit breaker.
-// Harness and thresholds live in characterization_helpers_test.go.
+// Harness and thresholds live in harness_test.go.
 
 import (
 	"fmt"
@@ -16,7 +16,7 @@ import (
 // Pins CircuitMinReqs=10 and CircuitFailRatio=0.6. The breaker wraps the WHOLE
 // retry loop, so one client request is ONE breaker observation regardless of how
 // many upstream attempts it burns.
-func TestCharacterizeCircuitBreakerTrips(t *testing.T) {
+func TestCircuitBreakerTrips(t *testing.T) {
 	cfg := realDefaults()
 	cfg.RetryBaseDly = time.Millisecond // timing only
 	cfg.RetryMaxDly = 5 * time.Millisecond
@@ -75,7 +75,7 @@ func TestCharacterizeCircuitBreakerTrips(t *testing.T) {
 // Without gobreaker's IsSuccessful set, its default counts every non-nil error
 // as a failure — so this many 400s would have opened the breaker and started
 // answering unrelated requests with 503.
-func TestCharacterizeCircuitBreakerIgnoresClientErrors(t *testing.T) {
+func TestCircuitBreakerIgnoresClientErrors(t *testing.T) {
 	const requests = 15 // comfortably past CircuitMinReqs=10
 
 	cfg := realDefaults()

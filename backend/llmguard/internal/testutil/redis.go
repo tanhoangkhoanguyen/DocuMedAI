@@ -1,13 +1,14 @@
 package testutil
 
+// Redis fixtures for tests that need a live server — the rate limiter's token
+// bucket lives in a Lua script and cannot be exercised without one.
+
 import (
 	"context"
 	"os"
 	"testing"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -60,55 +61,6 @@ func RequireRedis(t *testing.T) *redis.Client {
 		_ = client.Close()
 	})
 	return client
-}
-
-// Eventually polls cond until it returns true or timeout elapses.
-//
-// The proxy is full of state that settles asynchronously — the circuit breaker
-// reopening after its timeout, a metric incremented on a background goroutine —
-// and a bare sleep is either flaky or slow. Returns true if cond ever held.
-func Eventually(timeout, interval time.Duration, cond func() bool) bool {
-	if interval <= 0 {
-		interval = 10 * time.Millisecond
-	}
-	deadline := time.Now().Add(timeout)
-	for {
-		if cond() {
-			return true
-		}
-		if time.Now().After(deadline) {
-			return false
-		}
-		time.Sleep(interval)
-	}
-}
-
-// RequireEventually is Eventually with a failure attached, for the common case
-// where the condition not holding means the test failed.
-func RequireEventually(t *testing.T, timeout, interval time.Duration, cond func() bool, msg string) {
-	t.Helper()
-	if !Eventually(timeout, interval, cond) {
-		t.Fatalf("testutil: condition never held within %s: %s", timeout, msg)
-	}
-}
-
-// CounterValue reads the current value of a single (non-vector) counter or
-// gauge, so tests can assert on the proxy's Prometheus instrumentation —
-// dedup hits, retries burned, breaker state — instead of only on HTTP output.
-func CounterValue(t *testing.T, c prometheus.Collector) float64 {
-	t.Helper()
-	return testutil.ToFloat64(c)
-}
-
-// LabeledCounterValue reads one labeled child out of a CounterVec, matching
-// the label order declared when the vector was created.
-func LabeledCounterValue(t *testing.T, vec *prometheus.CounterVec, labels ...string) float64 {
-	t.Helper()
-	counter, err := vec.GetMetricWithLabelValues(labels...)
-	if err != nil {
-		t.Fatalf("testutil: bad labels %v: %v", labels, err)
-	}
-	return testutil.ToFloat64(counter)
 }
 
 // FreeRedisDB is a convenience for tests that want an isolated keyspace without

@@ -1,7 +1,7 @@
-package main
+package gateway
 
 // Characterization: rate-limit shedding.
-// Harness and thresholds live in characterization_helpers_test.go.
+// Harness and thresholds live in harness_test.go.
 
 import (
 	"net/http"
@@ -16,7 +16,7 @@ import (
 // "no token". With Redis unreachable the limiter fails OPEN and never sheds,
 // so this path cannot be reached offline. Skips when Redis is absent; CI
 // provides one.
-func TestCharacterizeRateLimitShedding(t *testing.T) {
+func TestRateLimitShedding(t *testing.T) {
 	rdb := testutil.RequireRedis(t)
 
 	cfg := realDefaults()

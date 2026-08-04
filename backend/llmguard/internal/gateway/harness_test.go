@@ -1,4 +1,4 @@
-package main
+package gateway
 
 // Shared harness for the LLMGuard characterization tests.
 //
@@ -25,9 +25,11 @@ package main
 // otherwise spend seconds asleep. Those are timing knobs — they change how long
 // a retry waits, never how many run or when the breaker trips.
 //
-// The tests themselves live in characterization_<area>_test.go, one file per
-// behavior area (buffered, streaming, retry, circuitbreaker, dedup, ratelimit,
-// usage, errors).
+// The tests themselves sit beside the source file they exercise —
+// retry_test.go, dedup_test.go, ratelimit_test.go, circuitbreaker_test.go — with
+// proxy.go's larger surface split by path: proxy_buffered_test.go,
+// proxy_streaming_test.go, proxy_errors_test.go, plus usage_test.go for token
+// accounting. A new behavior area gets a new <source>_test.go next to its code.
 
 import (
 	"bytes"

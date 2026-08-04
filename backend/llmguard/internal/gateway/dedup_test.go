@@ -1,7 +1,7 @@
-package main
+package gateway
 
 // Characterization: singleflight request dedup.
-// Harness and thresholds live in characterization_helpers_test.go.
+// Harness and thresholds live in harness_test.go.
 
 import (
 	"fmt"
@@ -16,7 +16,7 @@ import (
 
 // Identical concurrent requests coalesce into ONE upstream call and all callers
 // receive the same response.
-func TestCharacterizeDedupCoalescesConcurrentIdenticalRequests(t *testing.T) {
+func TestDedupCoalescesConcurrentIdenticalRequests(t *testing.T) {
 	const callers = 8
 
 	cfg := realDefaults()
@@ -74,7 +74,7 @@ func TestCharacterizeDedupCoalescesConcurrentIdenticalRequests(t *testing.T) {
 }
 
 // A different body is a different dedup key, so nothing coalesces.
-func TestCharacterizeDedupDoesNotCoalesceDifferentBodies(t *testing.T) {
+func TestDedupDoesNotCoalesceDifferentBodies(t *testing.T) {
 	const callers = 4
 
 	mcfg := mockupstream.DefaultConfig()

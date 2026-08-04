@@ -1,4 +1,4 @@
-package main
+package gateway
 
 import (
 	"crypto/sha256"

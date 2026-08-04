@@ -1,7 +1,7 @@
-package main
+package gateway
 
 // Characterization: the retry loop — attempt count, recovery, and Retry-After.
-// Harness and thresholds live in characterization_helpers_test.go.
+// Harness and thresholds live in harness_test.go.
 
 import (
 	"context"
@@ -19,7 +19,7 @@ import (
 
 // Pins RetryMax=4: a permanently failing upstream is called exactly four times
 // (1 initial + 3 retries), then the vendor's error is surfaced to the caller.
-func TestCharacterizeRetryExhaustsAtRetryMax(t *testing.T) {
+func TestRetryExhaustsAtRetryMax(t *testing.T) {
 	cfg := realDefaults()
 	cfg.RetryBaseDly = time.Millisecond // timing only; attempt COUNT is the real 4
 	cfg.RetryMaxDly = 5 * time.Millisecond
@@ -56,7 +56,7 @@ func TestCharacterizeRetryExhaustsAtRetryMax(t *testing.T) {
 // succeeds. Retries are NOT a fresh request as far as the mock is concerned —
 // an identical body yields an identical verdict — so a time-boxed outage is the
 // mechanism that makes a retry observably different from its predecessor.
-func TestCharacterizeRetryThenSucceed(t *testing.T) {
+func TestRetryThenSucceed(t *testing.T) {
 	cfg := realDefaults()
 	cfg.RetryBaseDly = 200 * time.Millisecond
 	cfg.RetryMaxDly = 2 * time.Second
@@ -117,7 +117,7 @@ func TestCharacterizeRetryThenSucceed(t *testing.T) {
 // overwrite attempt 1's translated 500, serveBuffered's errors.As would find no
 // *UpstreamError, and the caller would get a generic 503 "upstream unavailable"
 // instead of the vendor's actual status and message.
-func TestCharacterizeRetryKeepsMostInformativeError(t *testing.T) {
+func TestRetryKeepsMostInformativeError(t *testing.T) {
 	cfg := realDefaults()
 	cfg.RetryBaseDly = time.Millisecond // timing only
 	cfg.RetryMaxDly = 5 * time.Millisecond
@@ -170,7 +170,7 @@ func TestCharacterizeRetryKeepsMostInformativeError(t *testing.T) {
 }
 
 // Retry-After from the upstream is honored in place of exponential backoff.
-func TestCharacterizeRetryAfterIsHonored(t *testing.T) {
+func TestRetryAfterIsHonored(t *testing.T) {
 	cfg := realDefaults()
 	// Backoff would be ~1ms per gap; Retry-After: 1 should dominate, making the
 	// whole call take at least a second.
@@ -212,7 +212,7 @@ func TestCharacterizeRetryAfterIsHonored(t *testing.T) {
 // Retry-After is capped at RetryMaxDly. An upstream asking for a day must not
 // be able to park the request for one, holding a connection and a singleflight
 // slot the whole time.
-func TestCharacterizeRetryAfterIsCapped(t *testing.T) {
+func TestRetryAfterIsCapped(t *testing.T) {
 	cfg := realDefaults()
 	cfg.RetryBaseDly = time.Millisecond
 	cfg.RetryMaxDly = 50 * time.Millisecond // the ceiling under test
@@ -289,7 +289,7 @@ func TestParseRetryAfterForms(t *testing.T) {
 // *UpstreamError because that is the only thing surviving the breaker and
 // deduper on the failure path — the upstreamResult holding the response headers
 // is discarded there.
-func TestCharacterizeRetryAfterIsForwardedToClient(t *testing.T) {
+func TestRetryAfterIsForwardedToClient(t *testing.T) {
 	cfg := realDefaults()
 	cfg.RetryBaseDly = time.Millisecond
 	cfg.RetryMaxDly = 5 * time.Millisecond
@@ -312,7 +312,7 @@ func TestCharacterizeRetryAfterIsForwardedToClient(t *testing.T) {
 }
 
 // A 429 with no Retry-After must not grow one.
-func TestCharacterizeNoRetryAfterHeaderWhenUpstreamSendsNone(t *testing.T) {
+func TestNoRetryAfterHeaderWhenUpstreamSendsNone(t *testing.T) {
 	cfg := realDefaults()
 	cfg.RetryBaseDly = time.Millisecond
 	cfg.RetryMaxDly = 5 * time.Millisecond
@@ -341,7 +341,7 @@ func TestCharacterizeNoRetryAfterHeaderWhenUpstreamSendsNone(t *testing.T) {
 // two causes differ: a client that hung up (Canceled) gets ctx.Err(), but a
 // deadline still has a caller listening, and the vendor's 429 is strictly
 // better information than "deadline exceeded".
-func TestCharacterizeDeadlineKeepsUpstreamError(t *testing.T) {
+func TestDeadlineKeepsUpstreamError(t *testing.T) {
 	cfg := realDefaults()
 	// Backoff far longer than the deadline, so the deadline fires mid-sleep.
 	cfg.RetryBaseDly = 500 * time.Millisecond
@@ -375,7 +375,7 @@ func TestCharacterizeDeadlineKeepsUpstreamError(t *testing.T) {
 
 // A client that hangs up gets context.Canceled: nobody is waiting for a
 // response, so why we stopped is the honest answer.
-func TestCharacterizeClientCancelReportsCancellation(t *testing.T) {
+func TestClientCancelReportsCancellation(t *testing.T) {
 	cfg := realDefaults()
 	cfg.RetryBaseDly = 500 * time.Millisecond
 	cfg.RetryMaxDly = 2 * time.Second

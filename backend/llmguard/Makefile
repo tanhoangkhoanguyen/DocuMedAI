@@ -78,8 +78,9 @@ golangci:
 
 # --- everyday development ---------------------------------------------------
 
-# Targets "." rather than $(PKGS): ./... now also matches internal/testutil, and
-# `go run` against a package set containing non-main packages is ambiguous.
+# Targets "." rather than $(PKGS): the module root holds `main`, while ./...
+# also matches internal/gateway, internal/testutil and provider — and `go run`
+# against a package set containing non-main packages is ambiguous.
 .PHONY: run
 run:
 	$(GO) run .

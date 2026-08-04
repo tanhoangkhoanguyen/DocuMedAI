@@ -1,7 +1,7 @@
-package main
+package gateway
 
 // Characterization: the buffered (non-streaming) happy path.
-// Harness and thresholds live in characterization_helpers_test.go.
+// Harness and thresholds live in harness_test.go.
 
 import (
 	"net/http"
@@ -10,7 +10,7 @@ import (
 	"documedai/llmguard/mockupstream"
 )
 
-func TestCharacterizeBufferedHappyPath(t *testing.T) {
+func TestBufferedHappyPath(t *testing.T) {
 	cases := []struct {
 		name     string
 		body     string

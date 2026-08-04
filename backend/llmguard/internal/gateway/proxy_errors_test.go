@@ -1,8 +1,8 @@
-package main
+package gateway
 
 // Characterization: the request-validation guards in front of the pipeline, and
 // upstream error passthrough on the buffered path.
-// Harness and thresholds live in characterization_helpers_test.go.
+// Harness and thresholds live in harness_test.go.
 
 import (
 	"net/http"
@@ -15,7 +15,7 @@ import (
 	"documedai/llmguard/mockupstream"
 )
 
-func TestCharacterizeRequestValidation(t *testing.T) {
+func TestRequestValidation(t *testing.T) {
 	cases := []struct {
 		name     string
 		method   string
@@ -100,7 +100,7 @@ func TestCharacterizeRequestValidation(t *testing.T) {
 // non-retryable status exits after ONE attempt. Retryable statuses (429/5xx)
 // are unchanged. Every status code and error type below is exactly what the
 // client saw before — only the upstream attempt COUNT changed.
-func TestCharacterizeUpstreamErrorPassthrough(t *testing.T) {
+func TestUpstreamErrorPassthrough(t *testing.T) {
 	cases := []struct {
 		name        string
 		mockStatus  int

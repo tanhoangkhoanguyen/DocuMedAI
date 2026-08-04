@@ -1,7 +1,7 @@
-package main
+package gateway
 
 // Characterization: the SSE streaming path — happy path and its silent-failure
-// quirk. Harness and thresholds live in characterization_helpers_test.go.
+// quirk. Harness and thresholds live in harness_test.go.
 
 import (
 	"encoding/json"
@@ -13,7 +13,7 @@ import (
 	"documedai/llmguard/provider"
 )
 
-func TestCharacterizeStreamingHappyPath(t *testing.T) {
+func TestStreamingHappyPath(t *testing.T) {
 	mcfg := mockupstream.DefaultConfig()
 	mcfg.CompletionTokens = 4
 	h := newHarness(t, realDefaults(), mcfg, nil)
@@ -78,7 +78,7 @@ func TestCharacterizeStreamingHappyPath(t *testing.T) {
 // proxy logs and returns without ever writing a status or body. The client sees
 // HTTP 200 with a completely empty payload — no error envelope, no SSE frames.
 // The buffered path, by contrast, returns a proper error envelope.
-func TestCharacterizeStreamingUpstreamErrorIsSilent(t *testing.T) {
+func TestStreamingUpstreamErrorIsSilent(t *testing.T) {
 	mcfg := mockupstream.DefaultConfig()
 	mcfg.ErrorRate = 1.0
 	mcfg.ErrorStatus = http.StatusInternalServerError

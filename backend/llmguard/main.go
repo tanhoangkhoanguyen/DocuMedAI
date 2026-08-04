@@ -12,6 +12,8 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
+
+	"documedai/llmguard/internal/gateway"
 )
 
 func main() {
@@ -27,12 +29,12 @@ func main() {
 	// Structured JSON logging so logs are grep/Loki-friendly.
 	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
-	cfg := loadConfig()
+	cfg := gateway.LoadConfig()
 
 	// Resolve the provider up front: a process that cannot mint credentials
 	// should fail at startup, not on the first request. For Vertex this reaches
 	// out to Application Default Credentials.
-	if err := setupProviders(context.Background(), cfg); err != nil {
+	if err := gateway.SetupProviders(context.Background(), cfg); err != nil {
 		log.Error("provider setup failed", "provider", cfg.Provider, "err", err.Error())
 		os.Exit(1)
 	}
@@ -46,10 +48,10 @@ func main() {
 	}
 	rdb := redis.NewClient(opt)
 
-	metrics := newMetrics()
-	limiter := newRateLimiter(rdb, cfg.RateLimitRPM, cfg.RateLimitBurst)
-	deduper := newDeduper()
-	proxy := newProxy(cfg, limiter, deduper, metrics, log)
+	metrics := gateway.NewMetrics()
+	limiter := gateway.NewRateLimiter(rdb, cfg.RateLimitRPM, cfg.RateLimitBurst)
+	deduper := gateway.NewDeduper()
+	proxy := gateway.NewProxy(cfg, limiter, deduper, metrics, log)
 
 	mux := http.NewServeMux()
 	// All OpenAI-compatible traffic. Clients point their base_url at
@@ -94,7 +96,7 @@ func main() {
 // runHealthcheck performs a localhost GET /healthz and exits 0 on 200, 1 else.
 // Invoked as `/llmguard -healthcheck` by the docker healthcheck.
 func runHealthcheck() {
-	port := getenv("PROXY_PORT", "8081")
+	port := gateway.Getenv("PROXY_PORT", "8081")
 	client := &http.Client{Timeout: 3 * time.Second}
 	resp, err := client.Get("http://127.0.0.1:" + port + "/healthz")
 	if err != nil || resp.StatusCode != http.StatusOK {

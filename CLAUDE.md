@@ -138,9 +138,16 @@ go test -run TestX -count=1 .             # single test, root package only
 make run-mock          # standalone mockupstream on :8090
 ```
 
-The suite is **characterization tests** (`characterization_<area>_test.go`, one file per area:
-buffered, streaming, retry, circuitbreaker, dedup, ratelimit, usage, errors) sharing a harness in
-`characterization_helpers_test.go`. Two rules matter when editing them:
+The pipeline lives in `internal/gateway/` (config, proxy, retry, dedup, ratelimit, metrics);
+`main.go` at the module root is a thin composition root, and `internal/gateway/gateway.go` is the
+entire exported surface between them. Everything else in the package stays unexported, and tests
+sit beside the code they exercise so nothing is exported merely to be testable.
+
+The suite is **characterization tests**, each sitting beside the source file it exercises
+(`retry_test.go`, `dedup_test.go`, `ratelimit_test.go`, `circuitbreaker_test.go`; `proxy.go`'s
+larger surface is split into `proxy_buffered_test.go`, `proxy_streaming_test.go`,
+`proxy_errors_test.go`, plus `usage_test.go`) and sharing a harness in `harness_test.go`. `mockupstream/` has its own tests pinning
+the determinism the Phase 6 benchmark depends on. Two rules matter when editing them:
 
 - They pin what the proxy does **today**, not what it should do. Surprising behavior is locked
   in as-is with a `QUIRK` comment. Don't "fix" a test to encode intended behavior — that would

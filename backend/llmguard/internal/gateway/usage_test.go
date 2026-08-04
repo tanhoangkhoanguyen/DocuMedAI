@@ -1,7 +1,7 @@
-package main
+package gateway
 
 // Characterization: usage-token extraction, buffered and streaming.
-// Harness and thresholds live in characterization_helpers_test.go.
+// Harness and thresholds live in harness_test.go.
 
 import (
 	"net/http"
@@ -11,7 +11,7 @@ import (
 	"documedai/llmguard/mockupstream"
 )
 
-func TestCharacterizeUsageTokenExtraction(t *testing.T) {
+func TestUsageTokenExtraction(t *testing.T) {
 	const completionTokens = 9
 
 	mcfg := mockupstream.DefaultConfig()
@@ -45,7 +45,7 @@ func TestCharacterizeUsageTokenExtraction(t *testing.T) {
 }
 
 // Usage is also accounted on the streaming path, from the finishing chunk.
-func TestCharacterizeUsageTokenExtractionStreaming(t *testing.T) {
+func TestUsageTokenExtractionStreaming(t *testing.T) {
 	const completionTokens = 7
 
 	mcfg := mockupstream.DefaultConfig()
