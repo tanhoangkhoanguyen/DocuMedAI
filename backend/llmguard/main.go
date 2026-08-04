@@ -12,6 +12,8 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
+
+	"documedai/llmguard/internal/gateway"
 )
 
 func main() {
@@ -27,9 +29,13 @@ func main() {
 	// Structured JSON logging so logs are grep/Loki-friendly.
 	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
-	cfg := loadConfig()
-	if cfg.OpenAIKey == "" {
-		log.Error("upstream API key is required (set UPSTREAM_API_KEY, or OPENAI_API_KEY)")
+	cfg := gateway.LoadConfig()
+
+	// Resolve the provider up front: a process that cannot mint credentials
+	// should fail at startup, not on the first request. For Vertex this reaches
+	// out to Application Default Credentials.
+	if err := gateway.SetupProviders(context.Background(), cfg); err != nil {
+		log.Error("provider setup failed", "provider", cfg.Provider, "err", err.Error())
 		os.Exit(1)
 	}
 
@@ -42,15 +48,15 @@ func main() {
 	}
 	rdb := redis.NewClient(opt)
 
-	metrics := newMetrics()
-	limiter := newRateLimiter(rdb, cfg.RateLimitRPM, cfg.RateLimitBurst)
-	deduper := newDeduper()
-	proxy := newProxy(cfg, limiter, deduper, metrics, log)
+	metrics := gateway.NewMetrics()
+	limiter := gateway.NewRateLimiter(rdb, cfg.RateLimitRPM, cfg.RateLimitBurst)
+	deduper := gateway.NewDeduper()
+	proxy := gateway.NewProxy(cfg, limiter, deduper, metrics, log)
 
 	mux := http.NewServeMux()
-	// All OpenAI-compatible traffic. The backend points its base_url at
-	// http://la-llm-proxy:8081/v1, so requests arrive under /v1/*.
-	mux.Handle("/v1/", proxy)
+	// All OpenAI-compatible traffic. Clients point their base_url at
+	// http://la-llmguard:8081/v1, so requests arrive under /v1/*.
+	mux.Handle("/v1/chat/completions", proxy)
 	// Liveness for docker-compose healthcheck.
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -69,7 +75,7 @@ func main() {
 
 	// Graceful shutdown on SIGINT/SIGTERM so in-flight calls aren't cut off.
 	go func() {
-		log.Info("llm-proxy listening", "port", cfg.Port, "upstream", cfg.UpstreamBase)
+		log.Info("llmguard listening", "port", cfg.Port, "provider", cfg.Provider)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Error("server error", "err", err.Error())
 			os.Exit(1)
@@ -88,9 +94,9 @@ func main() {
 }
 
 // runHealthcheck performs a localhost GET /healthz and exits 0 on 200, 1 else.
-// Invoked as `/llm-proxy -healthcheck` by the docker healthcheck.
+// Invoked as `/llmguard -healthcheck` by the docker healthcheck.
 func runHealthcheck() {
-	port := getenv("PROXY_PORT", "8081")
+	port := gateway.Getenv("PROXY_PORT", "8081")
 	client := &http.Client{Timeout: 3 * time.Second}
 	resp, err := client.Get("http://127.0.0.1:" + port + "/healthz")
 	if err != nil || resp.StatusCode != http.StatusOK {

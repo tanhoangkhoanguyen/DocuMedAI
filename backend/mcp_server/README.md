@@ -145,7 +145,7 @@ docker compose up -d --build la-mcp-server                 # exposes /metrics
 docker compose --profile observability up -d la-prometheus la-grafana
 ```
 
-- Prometheus: `http://localhost:9090` (scrapes `la-mcp-server` + `la-llm-proxy`).
+- Prometheus: `http://localhost:9090` (scrapes `la-mcp-server` + `la-llmguard`).
 - Grafana: `http://localhost:3000` (anonymous admin) → **DocuMedAI — MCP Observability**:
   per-tool P50/P95/P99, MCP success rate by method, internal-vs-MCP overhead, error taxonomy.
 

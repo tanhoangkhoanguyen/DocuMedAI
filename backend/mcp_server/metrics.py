@@ -4,7 +4,7 @@ metrics (toolcore/observability.py). This counts JSON-RPC *methods* (initialize 
 / tools/call) and their outcome, so protocol success rates are visible independent of which
 tool ran.
 
-`mcp_` prefix mirrors the Go proxy's `llmproxy_`; the outcome label set is the shared
+`mcp_` prefix mirrors LLMGuard's `llmguard_`; the outcome label set is the shared
 taxonomy (success | input_error | auth_error | upstream_error | not_found).
 """
 from prometheus_client import Counter

@@ -10,7 +10,7 @@ scrape_configs:
     static_configs:
       - targets: ["la-mcp-server:8090"]
 
-  - job_name: llm-proxy
-    # Go gateway metrics (llmproxy_*).
+  - job_name: llmguard
+    # Go gateway metrics (llmguard_*).
     static_configs:
-      - targets: ["la-llm-proxy:8081"]
+      - targets: ["la-llmguard:8081"]

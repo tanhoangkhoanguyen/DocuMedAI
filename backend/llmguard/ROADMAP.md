@@ -1,6 +1,19 @@
-# llm-proxy ROADMAP
+# LLMGuard ROADMAP
 
-This is the single roadmap for `llm-proxy`. It has two parts:
+> **Stale in places.** Written before the Vertex AI migration, so Phase 0's code tour still
+> describes the OpenAI-compat passthrough: `UPSTREAM_API_KEY`, `OPENAI_UPSTREAM_BASE`,
+> `LLM_PROXY_BASE_URL` and `get_llm_base_url()` no longer exist. Those are replaced by
+> `GOOGLE_CLOUD_PROJECT`/`GOOGLE_CLOUD_LOCATION` + ADC, and the passthrough is now a
+> provider adapter (`provider/`). Phase 2's provider abstraction is **implemented**; its
+> first adapter is Vertex.
+>
+> **Phase 1 is now complete.** `make test` / `make lint` run in CI on every PR touching
+> `backend/llmguard/**`; `mockupstream/` exists with its own tests pinning the determinism
+> Phase 6 depends on; and the proxy pipeline has characterization tests sitting beside
+> the code they exercise (`retry_test.go`, `dedup_test.go`, `proxy_*_test.go`, …). See
+> **Findings** below for what those tests turned up.
+
+This is the single roadmap for `llmguard`. It has two parts:
 
 - **Phase 0 — Learn what exists.** The current code was written fast ("vibe-coded"); first
   **understand, verify, and learn** it — a guided tour of the code that already exists, broken into
@@ -68,9 +81,9 @@ If you can't build and run it, you can't verify anything. Do this first.
     (static binary, so it runs in a shell-less image) and why the healthcheck is a `-healthcheck` flag
     (distroless has no `curl`).
 - **Verify (hands-on):**
-  - `cd backend/llm-proxy && go build ./...` — it compiles.
+  - `cd backend/llmguard && go build ./...` — it compiles.
   - `go run . -healthcheck` with nothing running → exits non-zero. Understand why (nothing on :8081).
-  - Bring the stack up (`docker compose up -d la-redis la-llm-proxy`) and `curl http://localhost:8081/healthz`
+  - Bring the stack up (`docker compose up -d la-redis la-llmguard`) and `curl http://localhost:8081/healthz`
     → `{"status":"ok"}`.
 - **Done when:** you can build locally, and explain what each Dockerfile stage produces and why it's split.
 
@@ -160,11 +173,11 @@ If you can't build and run it, you can't verify anything. Do this first.
   - `Acquire` (`ratelimit.go:70-98`) — the **poll-until-token-or-deadline** loop, and the crucial
     **fail-open** on Redis error (`:77-80`, returns `true`). Understand the trade-off: availability over
     strict limiting when Redis is down.
-  - `take` (`ratelimit.go:100-110`) — builds the key `llmproxy:bucket:<key>` and runs the script.
+  - `take` (`ratelimit.go:100-110`) — builds the key `llmguard:bucket:<key>` and runs the script.
 - **Verify (hands-on):**
   - Set `RATE_LIMIT_RPM=6 RATE_LIMIT_BURST=2 RATE_WAIT_MAX=1s` and fire ~10 rapid curls; observe some
-    return the 429 body from `proxy.go:80`. Watch `llmproxy_rate_limited_total` climb in `/metrics`.
-  - In `redis-cli` (DB 1): `HGETALL llmproxy:bucket:anon:<model>` right after a burst to see `tokens`/`ts`.
+    return the 429 body from `proxy.go:80`. Watch `llmguard_rate_limited_total` climb in `/metrics`.
+  - In `redis-cli` (DB 1): `HGETALL llmguard:bucket:anon:<model>` right after a burst to see `tokens`/`ts`.
   - **Break-on-purpose:** stop Redis, send a request → it still goes through (fail-open). Explain why
     that's the chosen behavior.
 - **Done when:** you can explain lazy refill, why the script is atomic, and what fail-open protects against.
@@ -185,7 +198,7 @@ If you can't build and run it, you can't verify anything. Do this first.
   - Write a tiny throwaway `dedup_test.go`: call `d.Do("k", fn)` from ~5 goroutines where `fn` sleeps
     100ms and increments a counter; assert the counter == 1 and that 4 calls report `shared==true`.
     (This is your first real Go test — `go test ./...`.) Delete it after, or keep it as a learning artifact.
-  - Send two identical slow requests concurrently and watch `llmproxy_dedup_hits_total` go up by 1.
+  - Send two identical slow requests concurrently and watch `llmguard_dedup_hits_total` go up by 1.
 - **Done when:** you can explain what singleflight guarantees, why the SHA-256 of the body is a valid
   identity, and why this dedup does NOT work across multiple replicas.
 
@@ -201,7 +214,7 @@ If you can't build and run it, you can't verify anything. Do this first.
     before you even start retrying. Understand that ordering.
 - **Verify (hands-on):**
   - Point the proxy at a stub that always 500s (set `OPENAI_UPSTREAM_BASE` to a tiny local server, or
-    use an unroutable base). Send > `CIRCUIT_MIN_REQUESTS` requests; watch `llmproxy_circuit_state` go
+    use an unroutable base). Send > `CIRCUIT_MIN_REQUESTS` requests; watch `llmguard_circuit_state` go
     from 0 → 2, and subsequent requests fail *fast* (503 immediately, no long wait). After
     `CIRCUIT_OPEN_FOR`, watch it probe (1) then recover or re-open.
 - **Done when:** you can state the two trip conditions and explain why the breaker wraps retry (not the reverse).
@@ -306,12 +319,12 @@ If you can't build and run it, you can't verify anything. Do this first.
 - **Goal:** connect the proxy to its one real client, so you see the full loop.
 - **What to check:**
   - `backend/services/chatbot/tools/llm_config.py::get_llm_base_url()` — returns
-    `http://la-llm-proxy:8081/v1`, driven by `LLM_PROXY_BASE_URL`.
+    `http://la-llmguard:8081/v1`, driven by `LLM_PROXY_BASE_URL`.
   - The `ChatOpenAI(..., base_url=get_llm_base_url())` construction sites in
     `backend/services/chatbot/nodes.py` and `tools/rag.py`, and the `crewai.LLM` one in `nodes.py`.
-  - `docker-compose.yml` — the `la-llm-proxy` service (image, port 8081, `UPSTREAM_API_KEY`,
+  - `docker-compose.yml` — the `la-llmguard` service (image, port 8081, `UPSTREAM_API_KEY`,
     `OPENAI_UPSTREAM_BASE`, `REDIS_URL` on DB 1, healthcheck) and the `la-documedai` env
-    (`LLM_PROXY_BASE_URL`, `depends_on: la-llm-proxy: service_healthy`).
+    (`LLM_PROXY_BASE_URL`, `depends_on: la-llmguard: service_healthy`).
 - **Verify (hands-on):** bring up the full stack, send a chat message through the app UI/API, then check
   `/metrics` on the proxy incremented — proving the app's traffic really flows through your proxy.
 - **Done when:** you can trace one chat message from the Python `ChatOpenAI` call → proxy `/v1/chat/completions`
@@ -319,15 +332,32 @@ If you can't build and run it, you can't verify anything. Do this first.
 
 ---
 
-## Findings (fill in as you go)
+## Findings
 
-Log anything that looks wrong, surprising, or worth changing later. Do NOT fix here — just record.
-Example rows:
-- [ ] `<file:line>` — observed behavior vs expected — severity — idea for fix.
+Everything the Phase 1 harness turned up. **Fixed** rows cite the commit; **open** rows name
+the phase that should absorb them. A finding is only "handled" if some phase's acceptance
+criteria actually forces someone to touch that line — several below have no such owner, which
+is why they are written down rather than assumed.
+
+### Fixed
+
+| File | What was wrong | Impact | Fixed in |
+|------|----------------|--------|----------|
+| `retry.go` `doWithRetry` | The non-retryable early exit read `err == nil && !isRetryable(res.status)`, but `TranslateResponse` returns an `*UpstreamError` for **every** non-2xx, so `err` was never nil on failure and the guard was unreachable dead code. | A 400 or 401 burned the full `RetryMax` (4) upstream calls plus 3 backoff sleeps — wasted quota and latency on a request that could never succeed. | `34cda1a` |
+| `retry.go` `newBreaker` | `gobreaker`'s `IsSuccessful` was unset, so its default counted every non-nil error as an upstream failure — including a 400 caused entirely by the caller's own malformed request. | 10 bad requests from one buggy client opened the breaker for **every** user for `CircuitOpenFor` (20s). A client-side bug became a service-wide outage. | `ac0f0ef` |
+| `retry.go` `doWithRetry` | Four distinct information losses: last-error-wins overwrote a vendor error with a later transport failure; the `ctx.Done` exit returned `ctx.Err()` unconditionally; `Retry-After` was uncapped; only the delta-seconds form was parsed. | A real 429 degraded into a generic 503 "upstream unavailable"; `Retry-After: 86400` would park a request for a day holding a singleflight slot; Google's HTTP-date form was ignored. | `c85aac3` |
+| `retry.go` `doWithRetry` | Trailing `errors.New("exhausted retries")` was unreachable — a success returns immediately, so `lastErr` is always set on fall-through. Plus a stale comment describing pre-Vertex behavior. | Dead code implying a failure mode that cannot occur. | `634d05d` |
+| `proxy.go` `forwardBuffered`, `serveStreaming` | `io.ReadAll` on the upstream response body was unbounded. The buffered path holds the whole body in memory so a failed attempt can be replayed. | A broken, misconfigured or hostile provider could exhaust the gateway's memory — a denial-of-service vector on a service that sits in the request path. | this PR — `readUpstreamBody` caps at 10 MiB and reads one byte past the limit so an oversized response is a named error rather than a silent truncation |
+
+### Open
 
 | File:Line | What I observed | Expected? | Note / follow-up |
 |-----------|-----------------|-----------|------------------|
-|           |                 |           |                  |
+| `proxy.go:139-141` | `dedupHits` counts **every** flight participant, because `singleflight` reports `shared=true` to the leader that did the work too. 8 concurrent identical requests → 8 hits, though only 7 upstream calls were avoided. Also increments *before* the error check, so coalesced failures count as savings. | No — the metric name promises "calls avoided". | Off by one per flight, and cannot distinguish saved-successful from saved-doomed calls. **Phase 6.3 scenario C charts this number as "cost saved".** Fix: record `callers-1`, or rename the metric. Pinned in `dedup_test.go`. |
+| `proxy.go:297-299` | On the streaming path an upstream failure only logs. The client receives **HTTP 200 with a completely empty body** — no error envelope, no SSE frames, no `[DONE]`. | No — the buffered path returns a proper error envelope. | Two cases collapse here: a pre-`WriteHeader` failure is recoverable and simply isn't handled; a post-`WriteHeader` one cannot change status at all. The only fix that works mid-stream is an in-band SSE error frame (`data: {"error":{…}}`). **Phase 2 Issue 2.5 rewrites this path** — fix it there. Pinned in `proxy_streaming_test.go`. |
+| `mockupstream/chaos.go:76-78` | `Jitter` changes the **failure verdict**, even though it is correctly excluded from `fingerprint()`. `decide()` draws jitter *conditionally* on `Jitter > 0`, consuming one number from the per-request stream and shifting the failure roll that follows. Measured: **21 of 40 nonces flip** at an unchanged `error_rate=0.5`. | No — the comment at `chaos.go:74-75` claims the fixed draw order prevents exactly this. It only holds for knobs that *always* draw; the error-rate roll already does this correctly (`chaos.go:84`). | **A benchmark arm with jitter enabled is not comparable to one without at the same error rate** — and jitter is what a realistic load profile turns on. Fix: draw jitter unconditionally and discard it when `Jitter == 0`. **Phase 6 must not run mixed-jitter arms until this is fixed.** Pinned by `TestJitterShiftsFailureVerdictQuirk`. |
+| `retry.go:57-100` | The breaker's **trip** is pinned by `circuitbreaker_test.go`, but its recovery — `CircuitOpenFor` elapsing → half-open probe → closed — is never asserted anywhere. | Incomplete coverage, not a bug. | `internal/testutil.Eventually` / `RequireEventually` were written for exactly this and are currently **unused**. **Phase 6.3 scenario B charts "breaker trip → fail-fast → recovery"** — it would be charting untested behavior. |
+| `provider/vertex.go` | Buffered completions ship with `id: ""` and `created: 0`; the Vertex adapter never populates them. | No — OpenAI clients that key off response id see an empty string. | Cosmetic but contract-visible. **Phase 2 Issues 2.1-2.3** rebuild this layer with golden-file tests; fix there. Pinned in `proxy_buffered_test.go`. |
 
 ---
 
@@ -362,7 +392,7 @@ cannot *understand* whether a change broke behavior. This phase changes no runti
 - **AC:**
   - `make test` runs and exits 0 (even with zero tests initially).
   - `make lint` runs clean on the existing code.
-  - CI (a new `llm-proxy-ci.yml` GitHub Action) runs `test` + `lint` on PRs touching `backend/llm-proxy/**`.
+  - CI (a new `llmguard-ci.yml` GitHub Action) runs `test` + `lint` on PRs touching `backend/llmguard/**`.
 
 ### Issue 1.2 — Build a configurable mock upstream
 - **Goal:** a fake LLM server you fully control — the foundation for every resilience test and the

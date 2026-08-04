@@ -52,23 +52,25 @@ services:
       retries: 5
       start_period: 5s
 
-  la-llm-proxy:
-    # OpenAI-compatible gateway in front of Gemini's OpenAI-compat endpoint: rate
-    # limit, retry/backoff, circuit breaker, in-flight dedup, Prometheus metrics.
-    # The backend points its LLM base_url here instead of at Google directly.
-    # See backend/llm-proxy/.
+  la-llmguard:
+    # LLMGuard — OpenAI-compatible gateway with an internal provider adapter:
+    # rate limit, retry/backoff, circuit breaker, in-flight dedup, Prometheus
+    # metrics. Clients speak the OpenAI wire format; the Vertex adapter
+    # translates to Google's native generateContent API. See backend/llmguard/.
     build:
-      context: ./backend/llm-proxy
+      context: ./backend/llmguard
       dockerfile: Dockerfile
     restart: unless-stopped
-    container_name: la-llm-proxy-service
+    container_name: la-llmguard-service
     env_file:
-      - path: .env                       # provides the REAL GEMINI_API_KEY
+      - path: .env
     environment:
-      # Google's OpenAI-compatible Gemini endpoint. The proxy strips the leading
-      # /v1 from inbound paths, so this base must NOT end in /v1.
-      OPENAI_UPSTREAM_BASE: https://generativelanguage.googleapis.com/v1beta/openai
-      UPSTREAM_API_KEY: ${GEMINI_API_KEY}  # injected as the upstream Bearer token
+      LLMGUARD_PROVIDER: ${LLMGUARD_PROVIDER:-vertex}
+      # Same vars la-documedai reads — one .env configures both.
+      GOOGLE_CLOUD_PROJECT: ${GOOGLE_CLOUD_PROJECT}
+      GOOGLE_CLOUD_LOCATION: ${GOOGLE_CLOUD_LOCATION:-us-central1}
+      # ADC: service-account key mounted read-only below. Vertex takes no API key.
+      # GOOGLE_APPLICATION_CREDENTIALS: /secrets/gcp-sa.json            # Vertex AI ADC. Comment out in deployment
       PROXY_PORT: "8081"
       REDIS_URL: redis://la-redis:6379/1 # DB 1 — separate from the app cache on DB 0
     depends_on:
@@ -78,9 +80,11 @@ services:
       - "8081:8081"                      # expose for local /metrics + smoke tests
     networks:
       - documedai-net
+    # volumes:
+    #   - ${GOOGLE_SA_KEY_PATH:-./gcp-sa.json}:/secrets/gcp-sa.json:ro  # Vertex AI ADC. Comment out in deployment
     healthcheck:
       # distroless image has no shell/curl; use the Go binary's own probe.
-      test: ["CMD", "/llm-proxy", "-healthcheck"]
+      test: ["CMD", "/llmguard", "-healthcheck"]
       interval: 10s
       timeout: 5s
       retries: 5

@@ -17,7 +17,7 @@ DocuMedAI is a full-stack AI-powered medical document analysis system. Users upl
 | Agent workflow | LangGraph StateGraph | `backend/services/chatbot/` |
 | Multi-agent | CrewAI | `nodes.py` — Agents node |
 | RAG pipeline | Qdrant retrieval + BAAI reranker | `backend/services/chatbot/tools/rag.py` |
-| LLM proxy | Go gateway (rate limit, retry, circuit breaker, dedup) in front of Gemini's OpenAI-compat endpoint | `backend/llm-proxy/` |
+| LLMGuard | Go gateway (rate limit, retry, circuit breaker, dedup); OpenAI-compatible API → provider adapter → Vertex AI. Standalone; not in the app's request path | `backend/llmguard/` |
 | Memory cache | Redis (TTL 1800s → flush to MongoDB) | `backend/services/utils/redis_client.py` |
 | Persistence | MongoDB | `backend/services/utils/mongo_client.py` |
 | Auth | JWT + Supabase SSR | `backend/services/app/auth_api.py`, `frontend/lib/supabase/` |
@@ -50,7 +50,7 @@ the shared `services.app.auth_deps.decode_bearer_any` (local HS256 + Supabase) a
 `Principal(source="mcp")` for the request scope. Absent token → anonymous (the two unscoped
 tools still work); invalid token → HTTP 401 before any tool runs.
 
-**LLM proxy**: All chat-completion calls route through the Go `la-llm-proxy` service (port 8081), which forwards to Gemini's OpenAI-compatible endpoint, not to the provider directly. Embeddings and the reranker run locally and bypass it. Each `ChatOpenAI`/`crewai.LLM` is constructed with `base_url=get_llm_base_url()` (`backend/services/chatbot/llm_config.py`), driven by the `LLM_PROXY_BASE_URL` env var. Set `LLM_PROXY_BASE_URL=""` to bypass the proxy. See `backend/llm-proxy/README.md`.
+**LLMGuard**: A standalone Go gateway (port 8081) that exposes an OpenAI-compatible `/v1/chat/completions` and translates it to Vertex AI's native `generateContent` via a provider adapter (`backend/llmguard/provider/`). It is **not currently in the request path** — `backend/services/` calls Vertex directly with `ChatVertexAI(project=…, location=…)` (`backend/utils/llm_config.py`), and `crewai.LLM` reaches Vertex through litellm's `vertex_ai/` prefix. Embeddings and the reranker run locally. Both LLMGuard and the app read the same `GOOGLE_CLOUD_PROJECT` / `GOOGLE_CLOUD_LOCATION` vars and authenticate via ADC. See `backend/llmguard/README.md`.
 
 ## Common Commands
 
@@ -125,6 +125,49 @@ disabled) and mounts the repo at `/workspace`, so tests run via `exec` rather th
 prod entrypoint. The graph is mocked in `ci_tests/conftest.py` (`_build_graph` patched),
 so backend API tests don't call OpenAI.
 
+### LLMGuard (Go) tests
+
+Run from `backend/llmguard/` — plain `go test`, no Docker, no provider credentials:
+
+```bash
+make test              # go test -race -count=1 ./...  (race auto-disabled when cgo is off, e.g. Windows)
+make lint              # go vet + pinned golangci-lint (auto-installs via `make tools`)
+make bench             # benchmarks only, with -benchmem
+go test -run TestRetry ./...              # single test
+go test -run TestX -count=1 .             # single test, root package only
+make run-mock          # standalone mockupstream on :8090
+```
+
+The pipeline lives in `internal/gateway/` (config, proxy, retry, dedup, ratelimit, metrics);
+`main.go` at the module root is a thin composition root, and `internal/gateway/gateway.go` is the
+entire exported surface between them. Everything else in the package stays unexported, and tests
+sit beside the code they exercise so nothing is exported merely to be testable.
+
+The suite is **characterization tests**, each sitting beside the source file it exercises
+(`retry_test.go`, `dedup_test.go`, `ratelimit_test.go`, `circuitbreaker_test.go`; `proxy.go`'s
+larger surface is split into `proxy_buffered_test.go`, `proxy_streaming_test.go`,
+`proxy_errors_test.go`, plus `usage_test.go`) and sharing a harness in `harness_test.go`. `mockupstream/` has its own tests pinning
+the determinism the Phase 6 benchmark depends on. Two rules matter when editing them:
+
+- They pin what the proxy does **today**, not what it should do. Surprising behavior is locked
+  in as-is with a `QUIRK` comment. Don't "fix" a test to encode intended behavior — that would
+  let a refactor silently change actual behavior.
+- Thresholds come from the real `loadConfig()` defaults (`RetryMax=4`, `CircuitMinReqs=10`,
+  `CircuitFailRatio=0.6`, `RateLimitBurst=60`). Only the retry *delay* knobs are shortened.
+
+Failure modes are driven through `mockupstream`'s knobs (error rate, status, latency, outage
+window) over a real loopback socket rather than hand-written responses. `mockupstream` is a
+**package** with a thin `cmd/` binary so the in-process fake
+(`httptest.NewServer(mockupstream.New(...))`) is byte-identical to the standalone process.
+Responses are deterministic: content is a pure function of the request, chaos is seeded per
+request from the request bytes (not a package-level RNG), and content/chaos draw from separately
+seeded streams. Identical request bodies therefore share one error-rate verdict — set
+`X-Mock-Nonce` (or `X-Request-Id`) to vary it. See `mockupstream/README.md`.
+
+Redis-backed tests (the rate limiter's Lua token bucket) use **DB 15** via
+`internal/testutil.RequireRedis`, and **skip** rather than fail when Redis is unreachable, so
+`make test` stays green on a laptop. Override with `TEST_REDIS_URL`.
+
 ## Service Ports
 
 | Service | Port |
@@ -134,13 +177,13 @@ so backend API tests don't call OpenAI.
 | Qdrant | 6333 |
 | MongoDB | 27017 |
 | Redis | 6379 |
-| LLM proxy (Go) | 8081 |
+| LLMGuard (Go) | 8081 |
 | MCP server | 8090 (`observability` scrape target; always available) |
 | Prometheus | 9090 (`observability` profile) |
 | Grafana | 3000 (`observability` profile) |
 
 Swagger UI: `http://localhost:2010/docs`
-LLM proxy metrics: `http://localhost:8081/metrics`
+LLMGuard metrics: `http://localhost:8081/metrics`
 MCP endpoint: `http://localhost:8090/mcp/` · metrics: `http://localhost:8090/metrics/`
 (both are `Mount`s — the **trailing slash matters**, the slashless form 307-redirects)
 
@@ -243,9 +286,37 @@ Pinecone was removed (its `pinecone-local` emulator can't be made fair). See the
 
 ## CI
 
-GitHub Actions (`.github/workflows/`) — exactly two workflows: `python-ci.yml` and
-`frontend-ci.yml` (`npm run lint` + `npm run build`). `python-ci.yml` has a single `backend`
-job that runs three independent `pytest` steps (App / Vector DB / MCP), each `if: always()`
-so one failure doesn't mask the others. Triggered on PRs and pushes to
+GitHub Actions (`.github/workflows/`) — three workflows: `python-ci.yml`, `frontend-ci.yml`
+(`npm run lint` + `npm run build`) and `llmguard-ci.yml`. `python-ci.yml` has a single
+`backend` job that runs three independent `pytest` steps (App / Vector DB / MCP), each
+`if: always()` so one failure doesn't mask the others. Both are triggered on PRs and pushes to
 `main`/`develop`/`feature/Setup-CI`. CI writes a throwaway `.env` with test secrets and sets
 `SKIP_MODEL_PRECACHE=1`; the backend graph is mocked, so no LLM API keys are needed.
+
+`llmguard-ci.yml` gates the Go service (`make test` + `make lint`, plus a `go mod tidy`
+check) with a `redis:7-alpine` service container on DB 15. It is **path-filtered** to
+`backend/llmguard/**`, so it stays off the critical path for the other two.
+
+## Cursor Rules (`.cursor/rules/`)
+
+The repo carries Cursor rules that apply to work here regardless of which assistant is running.
+
+`agents-conduct.mdc` (`alwaysApply: true`) — the load-bearing one:
+- Inspect actual repo state before proposing changes; don't assume unseen code. Start from the
+  modified files and any file the user names.
+- Build on existing patterns; prefer a cleaner approach only when it stays inside the request.
+- **Minimal fix**: implement only what was asked — no extra features, helpers, or drive-by
+  refactors.
+- Short, direct replies. If the user's intuition is wrong, say so and ask — don't assume and
+  start writing.
+
+`patterns/client-wrapper-pattern.mdc` (globs `backend/**/*_client.py`) — new or edited
+`*_client.py` SDK wrappers must mirror `backend/vector_database_tests/utils/qdrant_client.py`:
+one primary wrapper class; SDK client and heavy deps constructed in `__init__` and stored on
+`self.__private` / `self._protected`; snake_case type-hinted public methods; external I/O wrapped
+in `try / except Exception as e` logging `LOGGER.error(f"<short context>\n\t{str(e)}")`. Retrieval
+methods log and return a safe sentinel (`[]`, `False`) on failure; **mutations log then `raise`**
+so a failed write never looks like a success.
+
+`cursor-rules.mdc` and `self-improvement.mdc` are meta-rules about where rule files live and when
+to add new ones — relevant only when editing the rules themselves.

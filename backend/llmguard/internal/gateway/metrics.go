@@ -1,4 +1,4 @@
-package main
+package gateway
 
 import (
 	"github.com/prometheus/client_golang/prometheus"
@@ -26,35 +26,45 @@ type Metrics struct {
 	tokensUsed *prometheus.CounterVec // labels: model, kind(prompt|completion)
 }
 
+// newMetrics registers the collectors on the DEFAULT registry, which is what
+// /metrics exposes. It can only be called once per process — a second call
+// panics on duplicate registration.
 func newMetrics() *Metrics {
+	return newMetricsWith(prometheus.DefaultRegisterer)
+}
+
+// newMetricsWith registers on a caller-supplied registry. Tests use a private
+// one so each can build a Proxy without colliding on the global registry.
+func newMetricsWith(reg prometheus.Registerer) *Metrics {
+	auto := promauto.With(reg)
 	return &Metrics{
-		requests: promauto.NewCounterVec(prometheus.CounterOpts{
-			Name: "llmproxy_requests_total",
+		requests: auto.NewCounterVec(prometheus.CounterOpts{
+			Name: "llmguard_requests_total",
 			Help: "Total proxied requests by model and HTTP status.",
 		}, []string{"model", "status"}),
-		latency: promauto.NewHistogramVec(prometheus.HistogramOpts{
-			Name:    "llmproxy_request_duration_seconds",
+		latency: auto.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "llmguard_request_duration_seconds",
 			Help:    "End-to-end request latency by model.",
 			Buckets: []float64{0.1, 0.25, 0.5, 1, 2, 5, 10, 20, 40, 80},
 		}, []string{"model"}),
-		retries: promauto.NewCounterVec(prometheus.CounterOpts{
-			Name: "llmproxy_retries_total",
+		retries: auto.NewCounterVec(prometheus.CounterOpts{
+			Name: "llmguard_retries_total",
 			Help: "Upstream retry attempts by model.",
 		}, []string{"model"}),
-		rateLimited: promauto.NewCounterVec(prometheus.CounterOpts{
-			Name: "llmproxy_rate_limited_total",
+		rateLimited: auto.NewCounterVec(prometheus.CounterOpts{
+			Name: "llmguard_rate_limited_total",
 			Help: "Requests rejected by the token bucket by model.",
 		}, []string{"model"}),
-		dedupHits: promauto.NewCounter(prometheus.CounterOpts{
-			Name: "llmproxy_dedup_hits_total",
+		dedupHits: auto.NewCounter(prometheus.CounterOpts{
+			Name: "llmguard_dedup_hits_total",
 			Help: "Requests served by sharing an in-flight identical call.",
 		}),
-		circuitState: promauto.NewGauge(prometheus.GaugeOpts{
-			Name: "llmproxy_circuit_state",
+		circuitState: auto.NewGauge(prometheus.GaugeOpts{
+			Name: "llmguard_circuit_state",
 			Help: "Circuit breaker state: 0=closed, 1=half-open, 2=open.",
 		}),
-		tokensUsed: promauto.NewCounterVec(prometheus.CounterOpts{
-			Name: "llmproxy_tokens_total",
+		tokensUsed: auto.NewCounterVec(prometheus.CounterOpts{
+			Name: "llmguard_tokens_total",
 			Help: "Tokens reported by upstream usage, by model and kind.",
 		}, []string{"model", "kind"}),
 	}

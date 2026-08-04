@@ -8,13 +8,13 @@ WORKDIR /src
 # go.sum is generated here (no local Go toolchain on the dev machine).
 COPY . .
 RUN go mod tidy
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/llm-proxy .
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/llmguard .
 
 # --- runtime stage ---
 # distroless/static: tiny, no shell, no package manager → small attack surface.
 FROM gcr.io/distroless/static-debian12:nonroot
 WORKDIR /
-COPY --from=builder /out/llm-proxy /llm-proxy
+COPY --from=builder /out/llmguard /llmguard
 EXPOSE 8081
 USER nonroot:nonroot
-ENTRYPOINT ["/llm-proxy"]
+ENTRYPOINT ["/llmguard"]
