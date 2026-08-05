@@ -169,10 +169,6 @@ func (p *Proxy) serveBuffered(
 		return v.(*upstreamResult), nil
 	})
 
-	if shared {
-		p.metrics.dedupHits.Inc()
-	}
-
 	if err != nil {
 		// A translated upstream error carries the vendor's own message and
 		// status; anything else (breaker open, transport failure) is a 503.
@@ -191,6 +187,19 @@ func (p *Proxy) serveBuffered(
 		p.writeError(w, model, start, http.StatusServiceUnavailable,
 			"upstream unavailable", "upstream_error")
 		return
+	}
+
+	// Counted only once the flight has produced a real response. Every error
+	// branch above returns, so reaching here means the shared result was
+	// actually usable.
+	//
+	// A coalesced FAILURE is not a dedup hit. The counter answers "did a
+	// thundering herd collapse into one upstream call" — a reliability signal —
+	// and a flight that ended in a breaker-open 503 or a transport error
+	// delivered nothing to share. Counting it would report the herd as absorbed
+	// when in fact every caller failed.
+	if shared {
+		p.metrics.dedupHits.Inc()
 	}
 
 	p.recordUsage(model, res.usage)
