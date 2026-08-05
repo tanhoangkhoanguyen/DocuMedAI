@@ -89,6 +89,19 @@ func (r *RateLimiter) Acquire(ctx context.Context, key string, maxWait time.Dura
 		if wait < 20*time.Millisecond {
 			wait = 20 * time.Millisecond
 		}
+		// Never sleep past the deadline. The check above runs BEFORE the sleep,
+		// so without this clamp Acquire can return up to one full poll interval
+		// after maxWait — and maxWait is precisely the knob an operator turns to
+		// bound tail latency. At the default 480 RPM the interval is 31ms and the
+		// overshoot is invisible; at 12 RPM it is 1.25s on a 5s budget.
+		//
+		// Clamped after the floor so the floor cannot re-inflate it past the
+		// deadline. A non-positive remainder needs no special case: the sleep
+		// returns immediately and the deadline check at the top of the next
+		// iteration returns false, which is the correct outcome.
+		if remaining := time.Until(deadline); wait > remaining {
+			wait = remaining
+		}
 		select {
 		case <-ctx.Done():
 			return false
