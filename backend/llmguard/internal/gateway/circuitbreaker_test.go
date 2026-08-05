@@ -6,6 +6,8 @@ package gateway
 import (
 	"fmt"
 	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -64,6 +66,108 @@ func TestCircuitBreakerTrips(t *testing.T) {
 	}
 	if got := testutil.CounterValue(t, h.metrics.circuitState); got != 2 {
 		t.Errorf("circuitState gauge = %v, want 2 (open)", got)
+	}
+}
+
+// The breaker RECOVERS: open → half-open after CircuitOpenFor → closed once a
+// probe succeeds, and real traffic flows again.
+//
+// Previously only the trip and the fail-fast were pinned; CircuitOpenFor was
+// asserted nowhere. A breaker that opens and never closes is an outage, not a
+// protection, and it fails in exactly the same way as a working one for the
+// first 20 seconds — so the untested leg is the one that hides the worse bug.
+//
+// CircuitOpenFor is shortened here. That is a TIMING knob, the same category as
+// the already-shortened RetryBaseDly/RetryMaxDly: it changes how long the
+// breaker stays open, never what opens it or what closes it. The guard below
+// keeps realDefaults honest so shortening it here cannot hide a change to the
+// production default.
+func TestCircuitBreakerRecovers(t *testing.T) {
+	if got := realDefaults().CircuitOpenFor; got != 20*time.Second {
+		t.Fatalf("realDefaults().CircuitOpenFor = %v, want 20s — this test shortens the "+
+			"knob deliberately, so it must also assert what production actually uses", got)
+	}
+
+	const openFor = 200 * time.Millisecond
+
+	cfg := realDefaults()
+	cfg.RetryBaseDly = time.Millisecond // timing only
+	cfg.RetryMaxDly = 5 * time.Millisecond
+	cfg.CircuitOpenFor = openFor
+
+	// healthy flips the upstream from "always fails" to "always works" WITHOUT
+	// rebuilding the harness. mockupstream.Config is captured at New time, so a
+	// second harness would mean a second breaker — and one breaker instance
+	// living through both regimes is the entire point of a recovery test.
+	var healthy atomic.Bool
+	failing := mockupstream.New(func() mockupstream.Config {
+		c := mockupstream.DefaultConfig()
+		c.ErrorRate = 1.0
+		c.ErrorStatus = http.StatusInternalServerError
+		return c
+	}())
+	h := newHarnessWithHandler(t, cfg, mockupstream.DefaultConfig(), nil,
+		func(mock http.Handler, w http.ResponseWriter, r *http.Request) {
+			if healthy.Load() {
+				mock.ServeHTTP(w, r) // the harness's own mock: default config, no errors
+				return
+			}
+			failing.ServeHTTP(w, r)
+		})
+
+	body := chatBody("gemini-2.5-flash", "sustained failure", false)
+
+	// --- Trip it, exactly as TestCircuitBreakerTrips does ---
+	for i := 1; i <= 10; i++ {
+		if rec := h.do(t, body, nil); rec.Code != http.StatusInternalServerError {
+			t.Fatalf("request %d: status = %d, want 500 while the breaker is still closed",
+				i, rec.Code)
+		}
+	}
+	if rec := h.do(t, body, nil); rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status after trip = %d, want 503 — the breaker must be open before "+
+			"recovery means anything", rec.Code)
+	}
+	if got := testutil.CounterValue(t, h.metrics.circuitState); got != 2 {
+		t.Fatalf("circuitState gauge = %v, want 2 (open)", got)
+	}
+
+	hitsWhileOpen := h.up.Hits()
+
+	// --- Heal the upstream and wait out CircuitOpenFor ---
+	healthy.Store(true)
+
+	// gobreaker moves to half-open lazily, on the first request after the timeout
+	// expires, not on a timer — so the gauge cannot change until traffic arrives.
+	// Poll by SENDING requests: each is both the probe and the observation.
+	//
+	// A generous timeout against a 200ms window, since the assertion is that
+	// recovery happens at all, not that it happens fast.
+	var recovered *httptest.ResponseRecorder
+	testutil.RequireEventually(t, 5*time.Second, openFor/4, func() bool {
+		rec := h.do(t, body, nil)
+		if rec.Code == http.StatusOK {
+			recovered = rec
+			return true
+		}
+		return false
+	}, "the breaker never closed after CircuitOpenFor elapsed with a healthy upstream")
+
+	// --- The gauge alone does not prove traffic flows; check the response ---
+	if got := testutil.CounterValue(t, h.metrics.circuitState); got != 0 {
+		t.Errorf("circuitState gauge = %v, want 0 (closed) after a successful probe", got)
+	}
+	if got := decodeChat(t, recovered); len(got.Choices) == 0 || got.Choices[0].Message.Content == "" {
+		t.Errorf("recovered response carries no content: %+v", got)
+	}
+	if got := h.up.Hits(); got <= hitsWhileOpen {
+		t.Errorf("upstream hits = %d, want > %d — a closed breaker must dispatch again",
+			got, hitsWhileOpen)
+	}
+
+	// And it stays closed: the next request is served without another probe cycle.
+	if rec := h.do(t, body, nil); rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200 — the breaker must stay closed once recovered", rec.Code)
 	}
 }
 
