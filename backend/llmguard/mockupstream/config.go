@@ -22,6 +22,11 @@
 //  2. Randomized BEHAVIOR (the error-rate roll, latency jitter) uses a
 //     per-request RNG seeded from a hash of the request itself, not a shared
 //     generator. See seedFor in chaos.go for why that survives concurrency.
+//
+// The guarantee is WITHIN a config, not across configs. Changing Jitter shifts
+// the chaos stream and so changes which requests fail (see decide in chaos.go),
+// which means two benchmark arms differing only in jitter run against different
+// failure sets. Hold Jitter fixed across arms of a comparison.
 package mockupstream
 
 import (

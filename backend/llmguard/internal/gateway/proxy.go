@@ -169,10 +169,6 @@ func (p *Proxy) serveBuffered(
 		return v.(*upstreamResult), nil
 	})
 
-	if shared {
-		p.metrics.dedupHits.Inc()
-	}
-
 	if err != nil {
 		// A translated upstream error carries the vendor's own message and
 		// status; anything else (breaker open, transport failure) is a 503.
@@ -191,6 +187,19 @@ func (p *Proxy) serveBuffered(
 		p.writeError(w, model, start, http.StatusServiceUnavailable,
 			"upstream unavailable", "upstream_error")
 		return
+	}
+
+	// Counted only once the flight has produced a real response. Every error
+	// branch above returns, so reaching here means the shared result was
+	// actually usable.
+	//
+	// A coalesced FAILURE is not a dedup hit. The counter answers "did a
+	// thundering herd collapse into one upstream call" — a reliability signal —
+	// and a flight that ended in a breaker-open 503 or a transport error
+	// delivered nothing to share. Counting it would report the herd as absorbed
+	// when in fact every caller failed.
+	if shared {
+		p.metrics.dedupHits.Inc()
 	}
 
 	p.recordUsage(model, res.usage)
@@ -258,6 +267,10 @@ func (p *Proxy) serveStreaming(
 	}
 
 	var usage provider.Usage
+	// Whether WriteHeader has gone out. Past that point the status is locked in
+	// and everything already flushed belongs to the client, so a failure can only
+	// be APPENDED to the stream — never rewritten as an error envelope.
+	var wroteHeader bool
 	_, err := p.breaker.Execute(func() (interface{}, error) {
 		httpReq, berr := prov.BuildRequest(r.Context(), req)
 		if berr != nil {
@@ -288,6 +301,7 @@ func (p *Proxy) serveStreaming(
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
 		w.WriteHeader(http.StatusOK)
+		wroteHeader = true
 		p.metrics.requests.WithLabelValues(model, statusLabel(http.StatusOK)).Inc()
 
 		// Scan the provider's SSE frames line by line. Vertex sends
@@ -333,6 +347,46 @@ func (p *Proxy) serveStreaming(
 	})
 	if err != nil {
 		p.log.Warn("streaming upstream failed", "model", model, "err", err.Error())
+
+		if !wroteHeader {
+			// Nothing has reached the client, so the buffered path's error
+			// envelope is still available. Previously this fell straight through
+			// and the client got HTTP 200 with zero bytes — indistinguishable
+			// from a successful empty completion.
+			//
+			// The return matters: writeError routes through writeJSON, which
+			// already records requests and latency. Falling through to the tail
+			// would observe latency twice for one request.
+			var ue *provider.UpstreamError
+			if errors.As(err, &ue) {
+				// Same reasoning as the buffered path: a 429 without a pacing
+				// hint is how a thundering herd re-forms.
+				if ue.RetryAfter != "" {
+					w.Header().Set("Retry-After", ue.RetryAfter)
+				}
+				p.writeError(w, model, start, ue.Status, ue.Body.Error.Message, ue.Body.Error.Type)
+				return
+			}
+			p.writeError(w, model, start, http.StatusServiceUnavailable,
+				"upstream unavailable", "upstream_error")
+			return
+		}
+
+		// The header is out and frames are on the wire. The status cannot be
+		// changed and the text the client already has must not be discarded, so
+		// the error goes out IN BAND, appended to what was delivered: the client
+		// keeps its partial answer and still learns the stream ended badly
+		// instead of seeing a truncation it cannot distinguish from a clean end.
+		enc, merr := json.Marshal(provider.NewErrorEnvelope("upstream stream failed", "upstream_error"))
+		if merr == nil {
+			_, _ = w.Write([]byte("data: "))
+			_, _ = w.Write(enc)
+			_, _ = w.Write([]byte("\n\n"))
+		}
+		// [DONE] regardless, so a client's read loop terminates normally rather
+		// than hanging on a stream that never says it is finished.
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+		flusher.Flush()
 	}
 
 	// The streaming path now accounts tokens too — the old byte-pipe could not.

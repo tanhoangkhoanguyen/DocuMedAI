@@ -43,6 +43,34 @@ Content and chaos draw from **separately seeded** streams. If they shared one,
 turning jitter on would shift the stream position and silently change the words
 in the reply — a latency knob altering response bytes.
 
+### Jitter shifts the failure verdict — hold it fixed across a comparison
+
+Determinism holds *within* a config: the same request under the same config is
+always reproducible. What does **not** hold is comparability *across* configs
+that differ only in `Jitter`.
+
+`decide()` draws in a fixed order — jitter, then the failure roll — but the
+jitter draw is **conditional** on `Jitter > 0` ([chaos.go:76-78](chaos.go)).
+Turning jitter on consumes one number from the per-request chaos stream and
+shifts the roll that follows, so the same request flips verdict at an unchanged
+`error_rate`. Measured: **21 of 40 nonces flip** at `error_rate=0.5`. The fixed
+draw order only protects knobs that draw *unconditionally* — which is why the
+error-rate roll always draws, even at `ErrorRate >= 1`.
+
+**The rule: hold `Jitter` fixed across arms of any comparison.** Two arms that
+differ in jitter are running against **different failure sets**, so a latency
+delta between them is partly a different mix of retried requests, not the effect
+of jitter. That is a benchmark conclusion that looks clean and is wrong.
+
+If you need to vary jitter and keep the failure set, vary the nonce set
+deliberately (`X-Mock-Nonce`) and compare distributions rather than per-request
+verdicts.
+
+Fixing this means drawing jitter unconditionally and discarding it when
+`Jitter == 0`. That changes every existing seeded value, so it invalidates any
+baseline already captured — a decision about baselines, not a bug fix. Pinned
+as-is by `TestJitterShiftsFailureVerdictQuirk`.
+
 ### The nonce escape hatch
 
 Because identical requests share a verdict, `error_rate=0.5` against one
@@ -79,7 +107,7 @@ Every knob is settable three ways, in increasing precedence: **env → query →
 | Knob | Env | Query | Header |
 |---|---|---|---|
 | Fixed latency | `MOCK_LATENCY` | `latency=500ms` | `X-Mock-Latency` |
-| Jitter width | `MOCK_JITTER` | `jitter=800ms` | `X-Mock-Jitter` |
+| Jitter width | `MOCK_JITTER` | `jitter=800ms` | `X-Mock-Jitter` — also shifts the failure verdict; see [above](#jitter-shifts-the-failure-verdict--hold-it-fixed-across-a-comparison) |
 | Inter-chunk delay | `MOCK_CHUNK_DELAY` | `chunk_delay=20ms` | `X-Mock-Chunk-Delay` |
 | Error rate `[0,1]` | `MOCK_ERROR_RATE` | `error_rate=1.0` | `X-Mock-Error-Rate` |
 | Error status | `MOCK_ERROR_STATUS` | `error_status=429` | `X-Mock-Error-Status` |

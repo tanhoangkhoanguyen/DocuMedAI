@@ -72,6 +72,17 @@ func decide(cfg Config, r *http.Request, body []byte) chaos {
 
 	// Draw in a FIXED order — jitter, then failure — so adding a knob later
 	// cannot silently reshuffle existing verdicts.
+	//
+	// CAVEAT: that only holds for knobs which draw UNCONDITIONALLY. The jitter
+	// draw below is guarded on Jitter > 0, so turning jitter on consumes a number
+	// and shifts the failure roll that follows — 21 of 40 nonces flip verdict at
+	// an unchanged error_rate=0.5. The error-rate roll gets this right by always
+	// drawing, even at ErrorRate >= 1.
+	//
+	// Left as-is: a fix changes every seeded value and invalidates any captured
+	// baseline. The consequence for callers — hold Jitter fixed across arms of a
+	// comparison, or the arms run against different failure sets — is documented
+	// in README.md and pinned by TestJitterShiftsFailureVerdictQuirk.
 	delay := cfg.Latency
 	if cfg.Jitter > 0 {
 		delay += time.Duration(rng.Int64N(int64(cfg.Jitter) + 1))

@@ -205,10 +205,18 @@ func TestDeterminismContentIndependentOfTimingKnobs(t *testing.T) {
 // unconditionally and discard it when Jitter == 0, mirroring how the error-rate
 // roll already always draws (chaos.go:84).
 //
-// Pinned rather than fixed: this is Phase 1 (characterize, don't change
-// behavior), and it matters for Phase 6 — a benchmark arm that enables jitter is
-// NOT comparable to one that does not at the same error_rate. Logged in
-// ROADMAP.md Findings.
+// Pinned rather than fixed, and now carrying a documented constraint instead of
+// sitting as an unowned bug: determinism still holds WITHIN a config, so what a
+// fix would buy is comparability ACROSS configs that differ only in jitter.
+// Drawing jitter unconditionally changes every existing seeded value and
+// invalidates any captured baseline, which makes it a Phase 6 decision about
+// baselines rather than a Phase 1 bug fix.
+//
+// The rule that follows from it — HOLD Jitter FIXED ACROSS ARMS OF A COMPARISON,
+// since two arms differing in jitter run against different failure sets — is
+// stated where a reader will actually meet it: mockupstream/README.md
+// ("Jitter shifts the failure verdict"), as a precondition on ROADMAP Issue 6.3,
+// and in the ROADMAP Findings row.
 func TestJitterShiftsFailureVerdictQuirk(t *testing.T) {
 	jittered := DefaultConfig()
 	jittered.Jitter = 5 * time.Millisecond

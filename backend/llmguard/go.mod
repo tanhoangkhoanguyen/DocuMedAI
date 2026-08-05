@@ -11,6 +11,7 @@ go 1.23
 
 require (
 	github.com/prometheus/client_golang v1.20.5 // Prometheus /metrics
+	github.com/prometheus/client_model v0.6.1 // reading histograms back in tests
 	github.com/redis/go-redis/v9 v9.7.0 // Redis-backed rate limit + dedup state
 	github.com/sony/gobreaker v1.0.0 // circuit breaker around upstream
 	golang.org/x/oauth2 v0.24.0 // ADC / OAuth2 tokens for Vertex AI
@@ -25,7 +26,6 @@ require (
 	github.com/klauspost/compress v1.17.9 // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
-	github.com/prometheus/client_model v0.6.1 // indirect
 	github.com/prometheus/common v0.55.0 // indirect
 	github.com/prometheus/procfs v0.15.1 // indirect
 	golang.org/x/sys v0.22.0 // indirect

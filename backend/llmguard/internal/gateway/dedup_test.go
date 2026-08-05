@@ -65,11 +65,79 @@ func TestDedupCoalescesConcurrentIdenticalRequests(t *testing.T) {
 		}
 	}
 
-	// QUIRK (pinned, not fixed): singleflight reports shared=true to EVERY
-	// participant including the leader that did the work, so the dedup-hit
-	// counter records all 8 callers rather than the 7 that piggy-backed.
+	// The leader is counted alongside the 7 callers that piggy-backed, because
+	// singleflight reports shared=true to every participant including the one
+	// that did the work.
+	//
+	// That is accepted, not merely tolerated. The counter is a COALESCING SIGNAL
+	// — "did a thundering herd collapse into one upstream call" — not a cost
+	// meter, and LLMGuard's concern is reliability rather than spend. Deriving an
+	// exact callers-saved figure would mean tracking waiters per key in a map,
+	// buying arithmetic precision nobody reads with a mutex on the hot path and a
+	// map that grows one entry per distinct request body.
 	if got := testutil.CounterValue(t, h.metrics.dedupHits); got != float64(callers) {
-		t.Errorf("dedupHits = %v, want %d (today the leader is counted too)", got, callers)
+		t.Errorf("dedupHits = %v, want %d (every participant counts, leader included)",
+			got, callers)
+	}
+}
+
+// A coalesced FAILURE is not a dedup hit.
+//
+// WAS A BUG, NOW FIXED: the counter was incremented before the error check, so
+// callers that shared a flight which ended in a 500 — or a breaker-open 503, or
+// a dropped connection — were all recorded as dedup hits. Nothing was shared
+// except the failure.
+//
+// The counter reports that a thundering herd collapsed into one upstream call.
+// A flight that produced no usable response absorbed nothing, and counting it
+// would show the herd as handled while every caller was in fact failing.
+func TestDedupDoesNotCountCoalescedFailure(t *testing.T) {
+	const callers = 8
+
+	cfg := realDefaults()
+	cfg.RetryBaseDly = time.Millisecond // timing only
+	cfg.RetryMaxDly = 5 * time.Millisecond
+
+	mcfg := mockupstream.DefaultConfig()
+	mcfg.ErrorRate = 1.0
+	mcfg.ErrorStatus = http.StatusInternalServerError
+	// Same reasoning as the coalescing test above: hold the flight open long
+	// enough that every caller arrives while the leader is still in it.
+	mcfg.Latency = time.Second
+	h := newHarness(t, cfg, mcfg, nil)
+
+	body := chatBody("gemini-2.5-flash", "coalesce this failure", false)
+
+	var wg sync.WaitGroup
+	codes := make([]int, callers)
+	for i := range callers {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			codes[idx] = h.do(t, body, nil).Code
+		}(i)
+	}
+	wg.Wait()
+
+	// Precondition: the callers really did share one flight. Without this the
+	// dedupHits assertion below would pass trivially.
+	//
+	// The expected count is RetryMax, not 1: Hits() counts upstream ATTEMPTS,
+	// and 500 is retryable, so the single shared flight burns its whole retry
+	// budget inside doWithRetry. Eight independent flights would be 32.
+	if got, want := h.up.Hits(), int64(cfg.RetryMax); got != want {
+		t.Fatalf("upstream hits = %d, want %d (one shared flight x RetryMax) — the "+
+			"callers must share one flight for this test to mean anything", got, want)
+	}
+	for i := range callers {
+		if codes[i] != http.StatusInternalServerError {
+			t.Errorf("caller %d: status = %d, want 500", i, codes[i])
+		}
+	}
+
+	if got := testutil.CounterValue(t, h.metrics.dedupHits); got != 0 {
+		t.Errorf("dedupHits = %v, want 0 — a shared flight that failed delivered "+
+			"nothing to share", got)
 	}
 }
 
