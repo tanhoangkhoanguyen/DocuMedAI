@@ -5,8 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
@@ -27,6 +30,24 @@ type Vertex struct {
 	project  string
 	location string
 	tokens   oauth2.TokenSource
+
+	// now supplies the `created` timestamp. It is a field so golden tests can
+	// pin it: generateContent returns no timestamp, so the only alternative to a
+	// clock is baking a wall-clock value into every fixture.
+	now func() time.Time
+}
+
+// timestamp is the `created` value for a translated response.
+//
+// It tolerates a nil clock because a zero-value &Vertex{} is a legitimate way to
+// construct the adapter for translation-only use — internal/gateway's test
+// harness does exactly that — and a nil-func panic there would be a landmine
+// under code that never touches the network.
+func (v *Vertex) timestamp() int64 {
+	if v.now == nil {
+		return time.Now().Unix()
+	}
+	return v.now().Unix()
 }
 
 // NewVertex builds the adapter and resolves Application Default Credentials.
@@ -80,13 +101,59 @@ func (v *Vertex) endpoint(model string, stream bool) string {
 
 // --- native wire types ---
 
+// vertexFunctionCall is the model asking to invoke a function. Args is a JSON
+// OBJECT here, where OpenAI uses a JSON string — kept raw so the upstream's key
+// order survives into the translated `arguments` string. Decoding to a map would
+// let encoding/json re-sort the keys.
+type vertexFunctionCall struct {
+	Name string          `json:"name"`
+	Args json.RawMessage `json:"args,omitempty"`
+}
+
+// vertexFunctionResponse carries a function's result back to the model. Response
+// is an object, so a non-JSON tool result has to be wrapped before it fits.
+type vertexFunctionResponse struct {
+	Name     string          `json:"name"`
+	Response json.RawMessage `json:"response,omitempty"`
+}
+
+// vertexPart is a oneof: exactly one field may be set. Text therefore carries
+// `omitempty` — emitting `"text":""` alongside a functionCall would make the part
+// ambiguous.
 type vertexPart struct {
-	Text string `json:"text"`
+	Text             string                  `json:"text,omitempty"`
+	FunctionCall     *vertexFunctionCall     `json:"functionCall,omitempty"`
+	FunctionResponse *vertexFunctionResponse `json:"functionResponse,omitempty"`
 }
 
 type vertexContent struct {
 	Role  string       `json:"role,omitempty"` // user | model ("system" is not a role)
 	Parts []vertexPart `json:"parts"`
+}
+
+// vertexFunctionDeclaration is one callable function advertised to the model.
+// Parameters is the caller's JSON Schema, passed through untouched.
+type vertexFunctionDeclaration struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	Parameters  json.RawMessage `json:"parameters,omitempty"`
+}
+
+// vertexTool groups function declarations. Gemini nests them one level deeper
+// than OpenAI: a single tool entry holding every declaration, rather than one
+// entry per function.
+type vertexTool struct {
+	FunctionDeclarations []vertexFunctionDeclaration `json:"functionDeclarations,omitempty"`
+}
+
+// vertexFunctionCallingConfig is Gemini's equivalent of OpenAI's tool_choice.
+type vertexFunctionCallingConfig struct {
+	Mode                 string   `json:"mode,omitempty"` // AUTO | ANY | NONE
+	AllowedFunctionNames []string `json:"allowedFunctionNames,omitempty"`
+}
+
+type vertexToolConfig struct {
+	FunctionCallingConfig *vertexFunctionCallingConfig `json:"functionCallingConfig,omitempty"`
 }
 
 type vertexGenerationConfig struct {
@@ -100,6 +167,8 @@ type vertexRequest struct {
 	Contents          []vertexContent         `json:"contents"`
 	SystemInstruction *vertexContent          `json:"systemInstruction,omitempty"`
 	GenerationConfig  *vertexGenerationConfig `json:"generationConfig,omitempty"`
+	Tools             []vertexTool            `json:"tools,omitempty"`
+	ToolConfig        *vertexToolConfig       `json:"toolConfig,omitempty"`
 }
 
 type vertexCandidate struct {
@@ -131,30 +200,216 @@ type vertexErrorBody struct {
 
 // --- translation: request ---
 
+// toolCallID synthesizes the id OpenAI requires and Gemini does not provide.
+//
+// Position is the only property guaranteed unique within one message — two calls
+// to the same function with the same arguments are legal — so the id is derived
+// from position and name and nothing else. Being a pure function of those two
+// keeps golden fixtures stable.
+func toolCallID(index int, name string) string {
+	return "call_" + strconv.Itoa(index) + "_" + name
+}
+
+// functionNameFromCallID recovers the function name from an id produced by
+// toolCallID, for the case where no assistant turn in the request declared it.
+// Returns "" when the id has some other shape.
+func functionNameFromCallID(id string) string {
+	rest, ok := strings.CutPrefix(id, "call_")
+	if !ok {
+		return ""
+	}
+	index, name, ok := strings.Cut(rest, "_")
+	if !ok {
+		return ""
+	}
+	if _, err := strconv.Atoi(index); err != nil {
+		return ""
+	}
+	return name
+}
+
+// argsObject converts OpenAI's `arguments` JSON string into the object Gemini
+// expects, preserving the caller's bytes verbatim.
+//
+// Anything that is not a JSON object degrades to `{}`: toNative has no error
+// channel, and sending malformed args would fail the upstream call with a less
+// obvious message than an empty argument set.
+func argsObject(arguments string) json.RawMessage {
+	trimmed := strings.TrimSpace(arguments)
+	if trimmed == "" {
+		return json.RawMessage("{}")
+	}
+	if !json.Valid([]byte(trimmed)) {
+		return json.RawMessage("{}")
+	}
+	return json.RawMessage(trimmed)
+}
+
+// toolResultPayload converts a role:"tool" message's content into the object
+// Gemini's functionResponse requires.
+//
+// A tool that already returned a JSON object passes through untouched. Anything
+// else — a bare string, a number, a JSON array — is wrapped under "result",
+// because functionResponse.response must be an object and dropping the value
+// would silently discard the tool's answer.
+func toolResultPayload(content string) json.RawMessage {
+	trimmed := strings.TrimSpace(content)
+	if trimmed != "" && json.Valid([]byte(trimmed)) && strings.HasPrefix(trimmed, "{") {
+		return json.RawMessage(trimmed)
+	}
+	wrapped, err := json.Marshal(map[string]string{"result": content})
+	if err != nil {
+		return json.RawMessage("{}")
+	}
+	return json.RawMessage(wrapped)
+}
+
+// messageParts renders one non-system message as Gemini parts: its text, then a
+// functionCall part per tool call.
+//
+// The empty text part is kept when the message has no tool calls, preserving the
+// pre-tool behavior exactly; it is dropped only when a functionCall would
+// otherwise share the part with it, which the oneof forbids.
+func messageParts(m Message) []vertexPart {
+	var parts []vertexPart
+	if m.Content != "" || len(m.ToolCalls) == 0 {
+		parts = append(parts, vertexPart{Text: m.Content})
+	}
+	for _, tc := range m.ToolCalls {
+		parts = append(parts, vertexPart{FunctionCall: &vertexFunctionCall{
+			Name: tc.Function.Name,
+			Args: argsObject(tc.Function.Arguments),
+		}})
+	}
+	return parts
+}
+
+// toolNamesByCallID indexes every tool call the conversation already declared,
+// so a later role:"tool" message can be matched back to its function name.
+//
+// Gemini's functionResponse is keyed by NAME, while OpenAI's tool result is keyed
+// by call ID, and the id is opaque — a client replaying a real OpenAI transcript
+// sends ids we never minted. Reading the assistant turns is therefore the only
+// reliable mapping; parsing our own id format is just a fallback.
+func toolNamesByCallID(messages []Message) map[string]string {
+	names := make(map[string]string)
+	for _, m := range messages {
+		for _, tc := range m.ToolCalls {
+			if tc.ID != "" {
+				names[tc.ID] = tc.Function.Name
+			}
+		}
+	}
+	return names
+}
+
+// toolChoiceConfig maps OpenAI's tool_choice onto Gemini's
+// functionCallingConfig. Returns nil when unset or unrecognized, leaving Gemini
+// on its default.
+//
+// The union is decoded here rather than in the schema: "none" | "auto" |
+// "required" as a bare string, or {"type":"function","function":{"name":…}}
+// pinning one function.
+func toolChoiceConfig(raw json.RawMessage) *vertexToolConfig {
+	if len(raw) == 0 {
+		return nil
+	}
+
+	var mode string
+	if err := json.Unmarshal(raw, &mode); err == nil {
+		switch mode {
+		case "none":
+			return &vertexToolConfig{FunctionCallingConfig: &vertexFunctionCallingConfig{Mode: "NONE"}}
+		case "auto":
+			return &vertexToolConfig{FunctionCallingConfig: &vertexFunctionCallingConfig{Mode: "AUTO"}}
+		case "required":
+			return &vertexToolConfig{FunctionCallingConfig: &vertexFunctionCallingConfig{Mode: "ANY"}}
+		default:
+			return nil
+		}
+	}
+
+	var pinned struct {
+		Function struct {
+			Name string `json:"name"`
+		} `json:"function"`
+	}
+	if err := json.Unmarshal(raw, &pinned); err != nil || pinned.Function.Name == "" {
+		return nil
+	}
+	// ANY forces a call; allowedFunctionNames narrows it to the one named.
+	return &vertexToolConfig{FunctionCallingConfig: &vertexFunctionCallingConfig{
+		Mode:                 "ANY",
+		AllowedFunctionNames: []string{pinned.Function.Name},
+	}}
+}
+
+// toNativeTools flattens OpenAI's one-entry-per-function array into Gemini's
+// single tool holding every declaration.
+func toNativeTools(tools []Tool) []vertexTool {
+	if len(tools) == 0 {
+		return nil
+	}
+	decls := make([]vertexFunctionDeclaration, 0, len(tools))
+	for _, t := range tools {
+		if t.Function.Name == "" {
+			continue // unnamed function is uncallable; Gemini rejects the request
+		}
+		decls = append(decls, vertexFunctionDeclaration{
+			Name:        t.Function.Name,
+			Description: t.Function.Description,
+			Parameters:  t.Function.Parameters,
+		})
+	}
+	if len(decls) == 0 {
+		return nil
+	}
+	return []vertexTool{{FunctionDeclarations: decls}}
+}
+
 // toNative converts a normalized request to Vertex's body.
 //
 // Role mapping: OpenAI "assistant" is Vertex "model"; "user" passes through.
 // "system" is NOT a role in Vertex — those messages are hoisted into
 // systemInstruction. Consecutive system messages are joined with a blank line.
+// "tool" is not a role either: a tool result becomes a functionResponse part on a
+// "user" content, which is how Google's own SDKs return results to the model.
 func toNative(req *ChatRequest) *vertexRequest {
 	out := &vertexRequest{}
+	names := toolNamesByCallID(req.Messages)
 
 	var systemParts []string
 	for _, m := range req.Messages {
-		if m.Role == "system" {
+		switch m.Role {
+		case "system":
 			if m.Content != "" {
 				systemParts = append(systemParts, m.Content)
 			}
-			continue
+
+		case "tool":
+			name := names[m.ToolCallID]
+			if name == "" {
+				name = functionNameFromCallID(m.ToolCallID)
+			}
+			out.Contents = append(out.Contents, vertexContent{
+				Role: "user",
+				Parts: []vertexPart{{FunctionResponse: &vertexFunctionResponse{
+					Name:     name,
+					Response: toolResultPayload(m.Content),
+				}}},
+			})
+
+		default:
+			role := "user"
+			if m.Role == "assistant" {
+				role = "model"
+			}
+			parts := messageParts(m)
+			if len(parts) == 0 {
+				continue // nothing to say; an empty parts array is invalid
+			}
+			out.Contents = append(out.Contents, vertexContent{Role: role, Parts: parts})
 		}
-		role := "user"
-		if m.Role == "assistant" {
-			role = "model"
-		}
-		out.Contents = append(out.Contents, vertexContent{
-			Role:  role,
-			Parts: []vertexPart{{Text: m.Content}},
-		})
 	}
 
 	if len(systemParts) > 0 {
@@ -171,6 +426,9 @@ func toNative(req *ChatRequest) *vertexRequest {
 			StopSequences:   req.Stop,
 		}
 	}
+
+	out.Tools = toNativeTools(req.Tools)
+	out.ToolConfig = toolChoiceConfig(req.ToolChoice)
 	return out
 }
 
@@ -218,6 +476,9 @@ func finishReason(v string) string {
 
 // joinParts concatenates a candidate's text parts. Vertex may split one logical
 // message across several parts; OpenAI has a single content string.
+//
+// functionCall parts contribute nothing here — their Text is empty and they are
+// translated separately by toolCalls.
 func joinParts(parts []vertexPart) string {
 	if len(parts) == 1 {
 		return parts[0].Text
@@ -227,6 +488,88 @@ func joinParts(parts []vertexPart) string {
 		b.WriteString(p.Text)
 	}
 	return b.String()
+}
+
+// toolCalls translates a candidate's functionCall parts into OpenAI tool calls.
+//
+// Arguments crosses a type boundary: Gemini sends an object, OpenAI expects a
+// JSON string, so the raw bytes are carried across as-is rather than re-encoded.
+// An absent args becomes "{}" — OpenAI clients parse this field, and "" is not
+// valid JSON.
+func toolCalls(parts []vertexPart) []ToolCall {
+	var calls []ToolCall
+	for _, p := range parts {
+		if p.FunctionCall == nil {
+			continue
+		}
+		args := "{}"
+		if len(p.FunctionCall.Args) > 0 {
+			args = string(p.FunctionCall.Args)
+		}
+		calls = append(calls, ToolCall{
+			ID:   toolCallID(len(calls), p.FunctionCall.Name),
+			Type: "function",
+			Function: FunctionCall{
+				Name:      p.FunctionCall.Name,
+				Arguments: args,
+			},
+		})
+	}
+	return calls
+}
+
+// finishReasonFor applies OpenAI's rule that a turn ending in tool calls reports
+// "tool_calls", which Gemini does not do — it reports STOP and lets the presence
+// of functionCall parts speak for itself.
+//
+// A non-stop reason wins: MAX_TOKENS while emitting a partial call is still a
+// truncation, and reporting "tool_calls" there would hide it.
+func finishReasonFor(native string, calls int) string {
+	mapped := finishReason(native)
+	if calls > 0 && (mapped == "stop" || mapped == "") {
+		return "tool_calls"
+	}
+	return mapped
+}
+
+// toolCallDeltas renders complete tool calls as stream fragments.
+//
+// OpenAI splits a call across frames and expects the client to concatenate the
+// `arguments` fragments. Gemini does not fragment: a functionCall arrives whole
+// in one frame. So each call is emitted as a single, already-complete delta —
+// valid under OpenAI's contract, since one fragment is a legal fragmentation.
+//
+// QUIRK: Index is the call's position WITHIN THIS FRAME. TranslateStreamChunk is
+// stateless per frame, so if Gemini ever splits functionCalls of one turn across
+// frames, indices would restart at 0 and a client would merge distinct calls.
+// Not observed today — Gemini emits them together — and fixing it properly means
+// giving the interface per-turn state, which belongs with the proxy.
+func toolCallDeltas(calls []ToolCall) []ToolCallDelta {
+	if len(calls) == 0 {
+		return nil
+	}
+	deltas := make([]ToolCallDelta, 0, len(calls))
+	for i, c := range calls {
+		deltas = append(deltas, ToolCallDelta{
+			Index: i,
+			ID:    c.ID,
+			Type:  c.Type,
+			Function: &FunctionCallDelta{
+				Name:      c.Function.Name,
+				Arguments: c.Function.Arguments,
+			},
+		})
+	}
+	return deltas
+}
+
+// responseID synthesizes the id OpenAI requires. generateContent returns none,
+// so it is derived from the response bytes: deterministic, which keeps golden
+// fixtures stable, at the cost of two byte-identical responses sharing an id.
+func responseID(body []byte) string {
+	h := fnv.New64a()
+	_, _ = h.Write(body)
+	return fmt.Sprintf("chatcmpl-%016x", h.Sum64())
 }
 
 // toUsage converts Vertex token accounting.
@@ -262,7 +605,9 @@ func (v *Vertex) TranslateResponse(status int, body []byte) (*ChatResponse, erro
 	}
 
 	out := &ChatResponse{
+		ID:      responseID(body),
 		Object:  "chat.completion",
+		Created: v.timestamp(),
 		Model:   native.ModelVersion,
 		Choices: make([]Choice, 0, len(native.Candidates)),
 		Usage:   toUsage(native.UsageMetadata),
@@ -272,10 +617,15 @@ func (v *Vertex) TranslateResponse(status int, body []byte) (*ChatResponse, erro
 		if idx == 0 {
 			idx = i
 		}
+		calls := toolCalls(c.Content.Parts)
 		out.Choices = append(out.Choices, Choice{
-			Index:        idx,
-			Message:      Message{Role: "assistant", Content: joinParts(c.Content.Parts)},
-			FinishReason: finishReason(c.FinishReason),
+			Index: idx,
+			Message: Message{
+				Role:      "assistant",
+				Content:   joinParts(c.Content.Parts),
+				ToolCalls: calls,
+			},
+			FinishReason: finishReasonFor(c.FinishReason, len(calls)),
 		})
 	}
 	return out, nil
@@ -338,10 +688,14 @@ func (v *Vertex) TranslateStreamChunk(req *ChatRequest, raw []byte) ([]StreamChu
 		if idx == 0 {
 			idx = i
 		}
+		calls := toolCalls(c.Content.Parts)
 		chunk.Choices = append(chunk.Choices, ChunkChoice{
-			Index:        idx,
-			Delta:        Delta{Content: joinParts(c.Content.Parts)},
-			FinishReason: finishReason(c.FinishReason),
+			Index: idx,
+			Delta: Delta{
+				Content:   joinParts(c.Content.Parts),
+				ToolCalls: toolCallDeltas(calls),
+			},
+			FinishReason: finishReasonFor(c.FinishReason, len(calls)),
 		})
 	}
 

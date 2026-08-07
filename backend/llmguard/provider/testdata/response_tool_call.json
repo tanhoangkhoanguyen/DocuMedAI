@@ -1,0 +1,31 @@
+{
+  "id": "chatcmpl-a6dadf51aec90ebf",
+  "object": "chat.completion",
+  "created": 1735689600,
+  "model": "gemini-2.5-flash-002",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+          {
+            "id": "call_0_get_weather",
+            "type": "function",
+            "function": {
+              "name": "get_weather",
+              "arguments": "{\"city\": \"Hanoi\", \"unit\": \"celsius\"}"
+            }
+          }
+        ]
+      },
+      "finish_reason": "tool_calls"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 40,
+    "completion_tokens": 9,
+    "total_tokens": 49
+  }
+}
