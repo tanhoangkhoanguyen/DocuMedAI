@@ -1,0 +1,181 @@
+package provider
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"strings"
+)
+
+// OpenAICompat adapts any upstream that already speaks OpenAI's
+// /chat/completions wire format: OpenAI itself, OpenRouter, Groq, Together,
+// a self-hosted vLLM, or Gemini's OpenAI-compatibility endpoint.
+//
+// Because LLMGuard's canonical shape IS OpenAI's shape, translation here is
+// nearly the identity: the request marshals straight back out and the response
+// unmarshals straight in. What the adapter actually owns is the parts that
+// differ per deployment — endpoint URL and credential — which is why one
+// instance per upstream, configured with a base URL and key, covers every
+// vendor above without a line of per-vendor code.
+type OpenAICompat struct {
+	name    string
+	baseURL string
+	apiKey  string
+}
+
+// NewOpenAICompat builds an adapter for one OpenAI-compatible upstream.
+//
+// baseURL must include the vendor's version prefix and NOT the
+// "/chat/completions" suffix — "https://api.openai.com/v1",
+// "https://openrouter.ai/api/v1", "https://generativelanguage.googleapis.com/v1beta/openai".
+// That is the same convention every OpenAI SDK uses for base_url, and it is the
+// only one under which all the supported vendors work by configuration alone:
+// their version segments genuinely differ, so a hard-coded "/v1" would send
+// Gemini-compat traffic to ".../v1beta/openai/v1/chat/completions".
+//
+// apiKey may be empty for an upstream that does not authenticate (a local vLLM);
+// the Authorization header is then omitted rather than sent empty. name is the
+// registry key and defaults to "openai-compat" when blank, so two upstreams can
+// be registered side by side under distinct names.
+func NewOpenAICompat(name, baseURL, apiKey string) (*OpenAICompat, error) {
+	if baseURL == "" {
+		return nil, fmt.Errorf("openai-compat: baseURL is required")
+	}
+	if name == "" {
+		name = "openai-compat"
+	}
+	return &OpenAICompat{
+		name: name,
+		// Trimmed once at construction so endpoint() stays a plain concatenation
+		// and a trailing slash in config cannot produce a doubled "//".
+		baseURL: strings.TrimRight(baseURL, "/"),
+		apiKey:  apiKey,
+	}, nil
+}
+
+func (o *OpenAICompat) Name() string { return o.name }
+
+// endpoint builds the chat-completions URL for this upstream.
+func (o *OpenAICompat) endpoint() string {
+	return o.baseURL + "/chat/completions"
+}
+
+// --- translation: request ---
+
+// BuildRequest implements Provider.
+//
+// The canonical request is already the wire format, so it is marshalled as-is;
+// `stream` rides along in the body where an OpenAI-compatible upstream expects
+// it, rather than in the URL. Ported from the pre-adapter buildUpstreamRequest:
+// the caller's key never reaches the upstream — LLMGuard substitutes its own.
+func (o *OpenAICompat) BuildRequest(ctx context.Context, req *ChatRequest) (*http.Request, error) {
+	// Encode JSON
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("openai-compat: encode request: %w", err)
+	}
+
+	// Create HTTP POST
+	httpReq, err := http.NewRequestWithContext(
+		ctx, http.MethodPost, o.endpoint(), bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+
+	// Create Header
+	httpReq.Header.Set("Content-Type", "application/json")
+	if o.apiKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+o.apiKey)
+	}
+	return httpReq, nil
+}
+
+// --- translation: response ---
+
+// TranslateResponse implements Provider.
+//
+// A 2xx body is already OpenAI-shaped, so it decodes directly into ChatResponse
+// — which carries `id`, `created` and the `usage` block through to the client.
+// The Vertex adapter cannot populate the first two (generateContent sends
+// neither) and ships them empty; here they are real upstream values and must not
+// be dropped, because OpenAI clients key off the response id.
+func (o *OpenAICompat) TranslateResponse(status int, body []byte) (*ChatResponse, error) {
+	if status < 200 || status > 299 {
+		return nil, &UpstreamError{Status: status, Body: openAICompatErrorEnvelope(status, body)}
+	}
+
+	var out ChatResponse
+	// Convert to JSON
+	if err := json.Unmarshal(body, &out); err != nil {
+		return nil, fmt.Errorf("openai-compat: decode response: %w", err)
+	}
+	// Defensive default: an upstream that omits the discriminator still yields a
+	// response a strict OpenAI client will accept.
+	if out.Object == "" {
+		out.Object = "chat.completion"
+	}
+	return &out, nil
+}
+
+// openAICompatErrorEnvelope reuses the upstream's own error envelope, which is
+// already the shape LLMGuard returns to clients, so the vendor's message, type
+// and code survive verbatim.
+//
+// It falls back to the raw body when the response is not that JSON — an
+// authenticating gateway or load balancer in front of the provider can answer
+// with HTML or a bare string, and swallowing that would leave the caller with a
+// status and no explanation.
+func openAICompatErrorEnvelope(status int, body []byte) ErrorEnvelope {
+	var env ErrorEnvelope
+	if err := json.Unmarshal(body, &env); err == nil && env.Error.Message != "" {
+		if env.Error.Type == "" {
+			env.Error.Type = errorType(status)
+		}
+		return env
+	}
+	msg := strings.TrimSpace(string(body))
+	if msg == "" {
+		msg = fmt.Sprintf("upstream returned status %d", status)
+	}
+	return NewErrorEnvelope(msg, errorType(status))
+}
+
+// --- translation: streaming ---
+
+// TranslateStreamChunk implements Provider. `raw` is the payload of one SSE
+// `data:` line; the proxy strips that prefix and the `[DONE]` sentinel before
+// calling, and both are tolerated again here so the adapter is safe to drive
+// directly from a raw stream.
+//
+// The frame is already an OpenAI chunk, so it decodes straight into StreamChunk.
+func (o *OpenAICompat) TranslateStreamChunk(req *ChatRequest, raw []byte) ([]StreamChunk, error) {
+	payload := bytes.TrimSpace(raw)
+	if rest, found := bytes.CutPrefix(payload, []byte("data:")); found {
+		payload = bytes.TrimSpace(rest)
+	}
+	if len(payload) == 0 || bytes.Equal(payload, []byte("[DONE]")) {
+		return nil, nil
+	}
+
+	var chunk StreamChunk
+	if err := json.Unmarshal(payload, &chunk); err != nil {
+		return nil, fmt.Errorf("openai-compat: decode stream chunk: %w", err)
+	}
+	if chunk.Object == "" {
+		chunk.Object = "chat.completion.chunk"
+	}
+	if chunk.Model == "" && req != nil {
+		chunk.Model = req.Model
+	}
+
+	// A frame with neither choices nor usage is metadata only and yields nothing
+	// client-visible. The usage check matters: OpenAI's final usage frame carries
+	// an EMPTY choices array, and dropping it would lose token accounting on the
+	// streaming path.
+	if len(chunk.Choices) == 0 && chunk.Usage == nil {
+		return nil, nil
+	}
+	return []StreamChunk{chunk}, nil
+}
