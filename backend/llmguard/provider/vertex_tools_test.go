@@ -38,7 +38,7 @@ func TestGoldenRequestText(t *testing.T) {
 		},
 		Temperature: &temp,
 	}
-	assertGoldenJSON(t, "request_text.json", toNative(req))
+	assertGoldenJSON(t, "request/text.json", toNative(req))
 }
 
 // TestGoldenRequestTools is the tool-call golden for the request direction. It
@@ -80,7 +80,7 @@ func TestGoldenRequestTools(t *testing.T) {
 		}},
 		ToolChoice: json.RawMessage(`"auto"`),
 	}
-	assertGoldenJSON(t, "request_tools.json", toNative(req))
+	assertGoldenJSON(t, "request/tools.json", toNative(req))
 }
 
 // --- golden: generateContent -> OpenAI ---
@@ -106,7 +106,7 @@ func TestGoldenResponseText(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TranslateResponse: %v", err)
 	}
-	assertGoldenJSON(t, "response_text.json", out)
+	assertGoldenJSON(t, "response/text.json", out)
 }
 
 // nativeToolCallResponse is generateContent returning a functionCall. Note
@@ -134,7 +134,7 @@ func TestGoldenResponseToolCall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TranslateResponse: %v", err)
 	}
-	assertGoldenJSON(t, "response_tool_call.json", out)
+	assertGoldenJSON(t, "response/tool_call.json", out)
 }
 
 // --- golden: native SSE -> OpenAI chunks ---
@@ -170,7 +170,7 @@ func TestGoldenStreamText(t *testing.T) {
 	}
 
 	chunks := translateStream(t, goldenVertex(), &ChatRequest{Model: "gemini-2.5-flash"}, frames)
-	assertGoldenJSON(t, "stream_text.json", chunks)
+	assertGoldenJSON(t, "stream/text.json", chunks)
 }
 
 func TestGoldenStreamToolCall(t *testing.T) {
@@ -182,7 +182,7 @@ func TestGoldenStreamToolCall(t *testing.T) {
 	}
 
 	chunks := translateStream(t, goldenVertex(), &ChatRequest{Model: "gemini-2.5-flash"}, frames)
-	assertGoldenJSON(t, "stream_tool_call.json", chunks)
+	assertGoldenJSON(t, "stream/tool_call.json", chunks)
 }
 
 // TestStreamTerminationIsCallerOwned documents where [DONE] comes from. The

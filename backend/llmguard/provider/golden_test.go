@@ -1,21 +1,24 @@
 package provider
 
+// Golden fixtures for the Vertex adapter's wire bytes.
+//
+// The field assertions elsewhere in this package read a DECODED struct, so a
+// change in what is emitted — a dropped key, a newly-omitted empty value, a
+// reordered object — decodes back to the same struct and passes. These fixtures
+// compare the actual bytes, which is the only way to catch that.
+//
+// There is deliberately NO -update flag. A golden you can regenerate turns "the
+// bytes changed" into one command that re-blesses whatever the code now does,
+// which is precisely the failure mode goldens exist to prevent. When a fixture
+// must change, change it by hand and justify the diff in review.
+
 import (
 	"encoding/json"
-	"flag"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
-
-// update regenerates every golden fixture instead of asserting against it:
-//
-//	go test ./provider/ -update
-//
-// Review the resulting diff before committing — a fixture that changed because
-// the translation changed is the signal these tests exist to produce.
-var update = flag.Bool("update", false, "regenerate golden fixtures in testdata/")
 
 // goldenDir is where fixtures live. .gitattributes pins it to LF.
 const goldenDir = "testdata"
@@ -44,30 +47,18 @@ func marshalGolden(t *testing.T, v any) []byte {
 	return append(encoded, '\n')
 }
 
-// assertGolden compares got against testdata/<name>, or rewrites it under
-// -update.
+// assertGolden compares got against testdata/<name>.
 func assertGolden(t *testing.T, name string, got []byte) {
 	t.Helper()
 	path := filepath.Join(goldenDir, name)
 
-	if *update {
-		if err := os.MkdirAll(goldenDir, 0o755); err != nil {
-			t.Fatalf("create %s: %v", goldenDir, err)
-		}
-		if err := os.WriteFile(path, got, 0o644); err != nil {
-			t.Fatalf("write %s: %v", path, err)
-		}
-		t.Logf("updated %s", path)
-		return
-	}
-
 	want, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("read %s: %v\n(generate it with: go test ./provider/ -update)", path, err)
+		t.Fatalf("read %s: %v\n(fixtures are hand-authored; create it from the output below)", path, err)
 	}
 	if normalizeNewlines(want) != normalizeNewlines(got) {
 		t.Errorf("golden %s mismatch\n--- want ---\n%s\n--- got ---\n%s\n"+
-			"(if the new output is correct: go test ./provider/ -update)",
+			"(edit the fixture by hand only if this change is intended)",
 			path, want, got)
 	}
 }
@@ -76,4 +67,21 @@ func assertGolden(t *testing.T, name string, got []byte) {
 func assertGoldenJSON(t *testing.T, name string, v any) {
 	t.Helper()
 	assertGolden(t, name, marshalGolden(t, v))
+}
+
+// TestGoldenAssistantMessageShape pins the one Message every client sees.
+//
+// Message carries the tool fields, and each one must be omitempty or this body
+// grows keys existing clients do not expect. This is the narrowest guard on
+// that: an assistant turn with empty content stays exactly two keys.
+func TestGoldenAssistantMessageShape(t *testing.T) {
+	t.Parallel()
+
+	got, err := json.Marshal(Message{Role: "assistant", Content: ""})
+	if err != nil {
+		t.Fatalf("marshal message: %v", err)
+	}
+	if want := `{"role":"assistant","content":""}`; string(got) != want {
+		t.Errorf("Message wire form = %s, want %s", got, want)
+	}
 }
