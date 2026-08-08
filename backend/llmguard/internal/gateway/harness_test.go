@@ -212,6 +212,18 @@ func newHarnessWithHandler(
 	return &harness{proxy: p, metrics: m, up: up}
 }
 
+// modelLabels builds the label values for a request-scoped metric vector, in the
+// order the vector declares them: provider first, then model, then any extra
+// dimension the vector carries (tokensUsed's kind).
+//
+// Tests go through this rather than spelling the values out so that adding a
+// label to those vectors is one edit here instead of one per assertion. The
+// harness registers a single adapter named "mock", so that is the provider every
+// gateway test observes.
+func modelLabels(model string, extra ...string) []string {
+	return append([]string{"mock", model}, extra...)
+}
+
 func chatBody(model, prompt string, stream bool) string {
 	req := map[string]any{
 		"model":    model,

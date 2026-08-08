@@ -156,7 +156,7 @@ func TestUpstreamErrorPassthrough(t *testing.T) {
 			if got := testutil.LabeledCounterValue(
 				t,
 				h.metrics.retries,
-				"gemini-2.5-flash",
+				modelLabels("gemini-2.5-flash")...,
 			); got != tc.wantRetries {
 				t.Errorf("retries metric = %v, want %v", got, tc.wantRetries)
 			}

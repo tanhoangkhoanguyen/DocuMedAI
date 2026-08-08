@@ -36,10 +36,10 @@ func TestUsageTokenExtraction(t *testing.T) {
 	}
 
 	// The same counts must reach Prometheus, not just the response body.
-	if v := testutil.LabeledCounterValue(t, h.metrics.tokensUsed, "gemini-2.5-flash", "completion"); v != completionTokens {
+	if v := testutil.LabeledCounterValue(t, h.metrics.tokensUsed, modelLabels("gemini-2.5-flash", "completion")...); v != completionTokens {
 		t.Errorf("tokensUsed{completion} = %v, want %d", v, completionTokens)
 	}
-	if v := testutil.LabeledCounterValue(t, h.metrics.tokensUsed, "gemini-2.5-flash", "prompt"); v != float64(got.Usage.PromptTokens) {
+	if v := testutil.LabeledCounterValue(t, h.metrics.tokensUsed, modelLabels("gemini-2.5-flash", "prompt")...); v != float64(got.Usage.PromptTokens) {
 		t.Errorf("tokensUsed{prompt} = %v, want %d", v, got.Usage.PromptTokens)
 	}
 }
@@ -57,10 +57,10 @@ func TestUsageTokenExtractionStreaming(t *testing.T) {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
 
-	if v := testutil.LabeledCounterValue(t, h.metrics.tokensUsed, "gemini-2.5-flash", "completion"); v != completionTokens {
+	if v := testutil.LabeledCounterValue(t, h.metrics.tokensUsed, modelLabels("gemini-2.5-flash", "completion")...); v != completionTokens {
 		t.Errorf("tokensUsed{completion} = %v, want %d", v, completionTokens)
 	}
-	if v := testutil.LabeledCounterValue(t, h.metrics.tokensUsed, "gemini-2.5-flash", "prompt"); v <= 0 {
+	if v := testutil.LabeledCounterValue(t, h.metrics.tokensUsed, modelLabels("gemini-2.5-flash", "prompt")...); v <= 0 {
 		t.Errorf("tokensUsed{prompt} = %v, want > 0", v)
 	}
 }

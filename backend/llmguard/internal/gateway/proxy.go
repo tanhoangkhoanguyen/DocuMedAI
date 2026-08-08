@@ -88,15 +88,17 @@ func newProxy(cfg Config, limiter *RateLimiter, deduper *Deduper, m *Metrics, lo
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 
+	// Every rejection below this point happens before provider.For runs, so
+	// there is no adapter to name — see providerUnknown.
 	if r.Method != http.MethodPost {
-		p.writeError(w, "unknown", start, http.StatusMethodNotAllowed,
+		p.writeError(w, providerUnknown, "unknown", start, http.StatusMethodNotAllowed,
 			"method not allowed", "invalid_request_error")
 		return
 	}
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		p.writeError(w, "unknown", start, http.StatusBadRequest,
+		p.writeError(w, providerUnknown, "unknown", start, http.StatusBadRequest,
 			"failed to read request body", "invalid_request_error")
 		return
 	}
@@ -104,33 +106,40 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	var req provider.ChatRequest
 	if decErr := json.Unmarshal(body, &req); decErr != nil {
-		p.writeError(w, "unknown", start, http.StatusBadRequest,
+		p.writeError(w, providerUnknown, "unknown", start, http.StatusBadRequest,
 			"invalid JSON body", "invalid_request_error")
 		return
 	}
 	model := req.Model
 	if model == "" {
-		p.writeError(w, "unknown", start, http.StatusBadRequest,
+		p.writeError(w, providerUnknown, "unknown", start, http.StatusBadRequest,
 			"field 'model' is required", "invalid_request_error")
 		return
 	}
 	if len(req.Messages) == 0 {
-		p.writeError(w, model, start, http.StatusBadRequest,
+		p.writeError(w, providerUnknown, model, start, http.StatusBadRequest,
 			"field 'messages' must not be empty", "invalid_request_error")
 		return
 	}
 
 	prov, err := provider.For(model, p.cfg.Provider)
 	if err != nil {
-		p.writeError(w, model, start, http.StatusBadRequest, err.Error(), "invalid_request_error")
+		// The model is known but unroutable, so it is labelled while the provider
+		// is not — resolution is exactly what failed.
+		p.writeError(w, providerUnknown, model, start, http.StatusBadRequest,
+			err.Error(), "invalid_request_error")
 		return
 	}
+	// Past this point every observation carries the RESOLVED adapter's name, not
+	// cfg.Provider. Once routing is config-driven those differ, and labelling with
+	// the configured default would silently attribute traffic to the wrong upstream.
+	provName := prov.Name()
 
 	// --- Rate limit (token bucket, per key+model) ---
 	rlKey := apiKeyHint(r) + ":" + model
 	if !p.limiter.Acquire(r.Context(), rlKey, p.cfg.RateWaitMax) {
-		p.metrics.rateLimited.WithLabelValues(model).Inc()
-		p.writeError(w, model, start, http.StatusTooManyRequests,
+		p.metrics.rateLimited.WithLabelValues(provName, model).Inc()
+		p.writeError(w, provName, model, start, http.StatusTooManyRequests,
 			"proxy rate limit exceeded", "rate_limit")
 		return
 	}
@@ -150,6 +159,7 @@ func (p *Proxy) serveBuffered(
 	prov provider.Provider, req *provider.ChatRequest, rawBody []byte, start time.Time,
 ) {
 	model := req.Model
+	provName := prov.Name()
 	key := dedupKey(rawBody)
 
 	res, shared, err := p.deduper.Do(key, func() (*upstreamResult, error) {
@@ -157,7 +167,7 @@ func (p *Proxy) serveBuffered(
 		// us before we even start retrying.
 		v, berr := p.breaker.Execute(func() (interface{}, error) {
 			return doWithRetry(r.Context(), p.cfg, key,
-				func() { p.metrics.retries.WithLabelValues(model).Inc() },
+				func() { p.metrics.retries.WithLabelValues(provName, model).Inc() },
 				func(ctx context.Context) (*upstreamResult, error) {
 					return p.forwardBuffered(ctx, prov, req)
 				},
@@ -180,11 +190,12 @@ func (p *Proxy) serveBuffered(
 			if ue.RetryAfter != "" {
 				w.Header().Set("Retry-After", ue.RetryAfter)
 			}
-			p.writeError(w, model, start, ue.Status, ue.Body.Error.Message, ue.Body.Error.Type)
+			p.writeError(w, provName, model, start, ue.Status,
+				ue.Body.Error.Message, ue.Body.Error.Type)
 			return
 		}
-		p.log.Warn("upstream failed", "model", model, "err", err.Error())
-		p.writeError(w, model, start, http.StatusServiceUnavailable,
+		p.log.Warn("upstream failed", "provider", provName, "model", model, "err", err.Error())
+		p.writeError(w, provName, model, start, http.StatusServiceUnavailable,
 			"upstream unavailable", "upstream_error")
 		return
 	}
@@ -202,8 +213,8 @@ func (p *Proxy) serveBuffered(
 		p.metrics.dedupHits.Inc()
 	}
 
-	p.recordUsage(model, res.usage)
-	p.writeJSON(w, model, start, res.status, res.body, "buffered")
+	p.recordUsage(provName, model, res.usage)
+	p.writeJSON(w, provName, model, start, res.status, res.body, "buffered")
 }
 
 // forwardBuffered performs ONE upstream attempt: build → send → translate. The
@@ -259,9 +270,10 @@ func (p *Proxy) serveStreaming(
 	prov provider.Provider, req *provider.ChatRequest, start time.Time,
 ) {
 	model := req.Model
+	provName := prov.Name()
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		p.writeError(w, model, start, http.StatusInternalServerError,
+		p.writeError(w, provName, model, start, http.StatusInternalServerError,
 			"streaming unsupported", "upstream_error")
 		return
 	}
@@ -302,7 +314,7 @@ func (p *Proxy) serveStreaming(
 		w.Header().Set("Connection", "keep-alive")
 		w.WriteHeader(http.StatusOK)
 		wroteHeader = true
-		p.metrics.requests.WithLabelValues(model, statusLabel(http.StatusOK)).Inc()
+		p.metrics.requests.WithLabelValues(provName, model, statusLabel(http.StatusOK)).Inc()
 
 		// Scan the provider's SSE frames line by line. Vertex sends
 		// `data: {...}` per frame; blank lines separate events.
@@ -320,7 +332,8 @@ func (p *Proxy) serveStreaming(
 
 			chunks, cerr := prov.TranslateStreamChunk(req, []byte(payload))
 			if cerr != nil {
-				p.log.Warn("stream chunk translate failed", "model", model, "err", cerr.Error())
+				p.log.Warn("stream chunk translate failed",
+					"provider", provName, "model", model, "err", cerr.Error())
 				continue // a malformed frame shouldn't kill the whole stream
 			}
 			for _, ch := range chunks {
@@ -346,7 +359,8 @@ func (p *Proxy) serveStreaming(
 		return nil, nil
 	})
 	if err != nil {
-		p.log.Warn("streaming upstream failed", "model", model, "err", err.Error())
+		p.log.Warn("streaming upstream failed",
+			"provider", provName, "model", model, "err", err.Error())
 
 		if !wroteHeader {
 			// Nothing has reached the client, so the buffered path's error
@@ -364,10 +378,11 @@ func (p *Proxy) serveStreaming(
 				if ue.RetryAfter != "" {
 					w.Header().Set("Retry-After", ue.RetryAfter)
 				}
-				p.writeError(w, model, start, ue.Status, ue.Body.Error.Message, ue.Body.Error.Type)
+				p.writeError(w, provName, model, start, ue.Status,
+					ue.Body.Error.Message, ue.Body.Error.Type)
 				return
 			}
-			p.writeError(w, model, start, http.StatusServiceUnavailable,
+			p.writeError(w, provName, model, start, http.StatusServiceUnavailable,
 				"upstream unavailable", "upstream_error")
 			return
 		}
@@ -390,31 +405,33 @@ func (p *Proxy) serveStreaming(
 	}
 
 	// The streaming path now accounts tokens too — the old byte-pipe could not.
-	p.recordUsage(model, usage)
-	p.metrics.latency.WithLabelValues(model).Observe(time.Since(start).Seconds())
+	p.recordUsage(provName, model, usage)
+	p.metrics.latency.WithLabelValues(provName, model).Observe(time.Since(start).Seconds())
 }
 
 // recordUsage adds normalized token counts to metrics.
-func (p *Proxy) recordUsage(model string, u provider.Usage) {
+func (p *Proxy) recordUsage(provName, model string, u provider.Usage) {
 	if u.PromptTokens > 0 {
-		p.metrics.tokensUsed.WithLabelValues(model, "prompt").Add(float64(u.PromptTokens))
+		p.metrics.tokensUsed.WithLabelValues(provName, model, "prompt").Add(float64(u.PromptTokens))
 	}
 	if u.CompletionTokens > 0 {
-		p.metrics.tokensUsed.WithLabelValues(model, "completion").Add(float64(u.CompletionTokens))
+		p.metrics.tokensUsed.WithLabelValues(provName, model, "completion").Add(float64(u.CompletionTokens))
 	}
 }
 
 // writeJSON writes a JSON body and records metrics/log.
 func (p *Proxy) writeJSON(
-	w http.ResponseWriter, model string, start time.Time, status int, body []byte, kind string,
+	w http.ResponseWriter, provName, model string, start time.Time,
+	status int, body []byte, kind string,
 ) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_, _ = w.Write(body)
 
-	p.metrics.requests.WithLabelValues(model, statusLabel(status)).Inc()
-	p.metrics.latency.WithLabelValues(model).Observe(time.Since(start).Seconds())
+	p.metrics.requests.WithLabelValues(provName, model, statusLabel(status)).Inc()
+	p.metrics.latency.WithLabelValues(provName, model).Observe(time.Since(start).Seconds())
 	p.log.Info("request",
+		"provider", provName,
 		"model", model,
 		"status", status,
 		"latency_ms", time.Since(start).Milliseconds(),
@@ -424,14 +441,17 @@ func (p *Proxy) writeJSON(
 
 // writeError emits the OpenAI-shaped error envelope so clients see one error
 // format regardless of which provider (or LLMGuard itself) produced it.
+//
+// provName is providerUnknown on the early-rejection paths, which run before an
+// adapter is resolved.
 func (p *Proxy) writeError(
-	w http.ResponseWriter, model string, start time.Time, status int, msg, typ string,
+	w http.ResponseWriter, provName, model string, start time.Time, status int, msg, typ string,
 ) {
 	body, err := json.Marshal(provider.NewErrorEnvelope(msg, typ))
 	if err != nil {
 		body = []byte(`{"error":{"message":"internal error","type":"upstream_error"}}`)
 	}
-	p.writeJSON(w, model, start, status, body, "error")
+	p.writeJSON(w, provName, model, start, status, body, "error")
 }
 
 // --- small helpers ---

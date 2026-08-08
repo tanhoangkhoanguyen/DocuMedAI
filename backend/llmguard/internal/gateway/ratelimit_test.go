@@ -61,7 +61,7 @@ func TestRateLimitShedding(t *testing.T) {
 	if h.up.Hits() != 1 {
 		t.Errorf("upstream hits = %d, want 1 (the 429 is shed before dispatch)", h.up.Hits())
 	}
-	if got := testutil.LabeledCounterValue(t, h.metrics.rateLimited, "gemini-2.5-flash"); got != 1 {
+	if got := testutil.LabeledCounterValue(t, h.metrics.rateLimited, modelLabels("gemini-2.5-flash")...); got != 1 {
 		t.Errorf("rateLimited metric = %v, want 1", got)
 	}
 }
