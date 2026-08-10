@@ -62,15 +62,3 @@ func RequireRedis(t *testing.T) *redis.Client {
 	})
 	return client
 }
-
-// FreeRedisDB is a convenience for tests that want an isolated keyspace without
-// a dedicated server: it flushes the configured test DB up front, so a run
-// starts from a known-empty bucket set.
-func FreeRedisDB(t *testing.T, client *redis.Client) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	if err := client.FlushDB(ctx).Err(); err != nil {
-		t.Fatalf("testutil: flush test redis db: %v", err)
-	}
-}

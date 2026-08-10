@@ -3,11 +3,11 @@ package provider
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"hash/fnv"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -35,6 +35,11 @@ type Vertex struct {
 	// pin it: generateContent returns no timestamp, so the only alternative to a
 	// clock is baking a wall-clock value into every fixture.
 	now func() time.Time
+
+	// newID supplies the random half of every id this adapter mints — the
+	// response id and each tool-call id. A field for the same reason as now: a
+	// fixture cannot be compared against a fresh random value.
+	newID func() string
 }
 
 // timestamp is the `created` value for a translated response.
@@ -48,6 +53,31 @@ func (v *Vertex) timestamp() int64 {
 		return time.Now().Unix()
 	}
 	return v.now().Unix()
+}
+
+// id returns one random identifier, nil-tolerant for the same reason timestamp is.
+func (v *Vertex) id() string {
+	if v.newID == nil {
+		return randomID()
+	}
+	return v.newID()
+}
+
+// randomID returns 16 hex characters of cryptographic randomness.
+//
+// Ids must be unique, not merely unpredictable, so this reads crypto/rand rather
+// than math/rand: the latter's global source is seeded per process, and two
+// replicas started from the same image would mint the same sequence.
+//
+// A read failure is fatal. Falling back to a counter or a timestamp would keep
+// the process alive while quietly emitting ids that can collide, and a duplicate
+// tool-call id silently attaches a result to the wrong call.
+func randomID() string {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		panic("provider: crypto/rand unavailable: " + err.Error())
+	}
+	return hex.EncodeToString(b[:])
 }
 
 // NewVertex builds the adapter and resolves Application Default Credentials.
@@ -202,45 +232,41 @@ type vertexErrorBody struct {
 
 // toolCallID synthesizes the id OpenAI requires and Gemini does not provide.
 //
-// Position is the only property guaranteed unique within one message — two calls
-// to the same function with the same arguments are legal — so the id is derived
-// from position and name and nothing else. Being a pure function of those two
-// keeps golden fixtures stable.
-func toolCallID(index int, name string) string {
-	return "call_" + strconv.Itoa(index) + "_" + name
-}
-
-// functionNameFromCallID recovers the function name from an id produced by
-// toolCallID, for the case where no assistant turn in the request declared it.
-// Returns "" when the id has some other shape.
-func functionNameFromCallID(id string) string {
-	rest, ok := strings.CutPrefix(id, "call_")
-	if !ok {
-		return ""
-	}
-	index, name, ok := strings.Cut(rest, "_")
-	if !ok {
-		return ""
-	}
-	if _, err := strconv.Atoi(index); err != nil {
-		return ""
-	}
-	return name
+// Random rather than derived from the call's content: the model may legitimately
+// issue two identical calls in one turn (the same search against two vendors),
+// and toNative keys results by id — so ids derived from content would collide and
+// one result would be attached to the wrong call. Random also keeps ids opaque
+// and uniform with the response id.
+func (v *Vertex) toolCallID() string {
+	return "call-" + v.id()
 }
 
 // argsObject converts OpenAI's `arguments` JSON string into the object Gemini
 // expects, preserving the caller's bytes verbatim.
 //
-// Anything that is not a JSON object degrades to `{}`: toNative has no error
-// channel, and sending malformed args would fail the upstream call with a less
-// obvious message than an empty argument set.
+// Absent arguments become `{}` — that is a call with no parameters, which is
+// legitimate. Arguments that do not PARSE are different: they are corruption,
+// and turning them into `{}` would invoke the function with no parameters at
+// all, silently, with no way to tell that apart from a genuine no-arg call.
+// They are carried through under `_raw` instead, so Gemini's own rejection names
+// the actual bytes. This mirrors toolResultPayload below, which likewise wraps
+// what it cannot map rather than discarding it.
+//
+// toNative has no error channel, which is why this reports through the payload
+// rather than returning an error.
 func argsObject(arguments string) json.RawMessage {
 	trimmed := strings.TrimSpace(arguments)
 	if trimmed == "" {
 		return json.RawMessage("{}")
 	}
 	if !json.Valid([]byte(trimmed)) {
-		return json.RawMessage("{}")
+		// Marshalling a string cannot fail, so the error is unreachable; the
+		// fallback keeps the function total rather than panicking on it.
+		wrapped, err := json.Marshal(map[string]string{"_raw": arguments})
+		if err != nil {
+			return json.RawMessage("{}")
+		}
+		return wrapped
 	}
 	return json.RawMessage(trimmed)
 }
@@ -289,8 +315,8 @@ func messageParts(m Message) []vertexPart {
 //
 // Gemini's functionResponse is keyed by NAME, while OpenAI's tool result is keyed
 // by call ID, and the id is opaque — a client replaying a real OpenAI transcript
-// sends ids we never minted. Reading the assistant turns is therefore the only
-// reliable mapping; parsing our own id format is just a fallback.
+// sends ids we never minted, and ours are random. Reading the assistant turns is
+// therefore the only mapping available.
 func toolNamesByCallID(messages []Message) map[string]string {
 	names := make(map[string]string)
 	for _, m := range messages {
@@ -387,10 +413,11 @@ func toNative(req *ChatRequest) *vertexRequest {
 			}
 
 		case "tool":
+			// Resolved from the assistant turn that made the call, never parsed
+			// out of the id: ids are opaque random strings, and a transcript may
+			// carry ids minted by OpenAI rather than by this adapter. A result
+			// whose call is absent from the transcript has no name to recover.
 			name := names[m.ToolCallID]
-			if name == "" {
-				name = functionNameFromCallID(m.ToolCallID)
-			}
 			out.Contents = append(out.Contents, vertexContent{
 				Role: "user",
 				Parts: []vertexPart{{FunctionResponse: &vertexFunctionResponse{
@@ -496,7 +523,7 @@ func joinParts(parts []vertexPart) string {
 // JSON string, so the raw bytes are carried across as-is rather than re-encoded.
 // An absent args becomes "{}" — OpenAI clients parse this field, and "" is not
 // valid JSON.
-func toolCalls(parts []vertexPart) []ToolCall {
+func (v *Vertex) toolCalls(parts []vertexPart) []ToolCall {
 	var calls []ToolCall
 	for _, p := range parts {
 		if p.FunctionCall == nil {
@@ -507,7 +534,7 @@ func toolCalls(parts []vertexPart) []ToolCall {
 			args = string(p.FunctionCall.Args)
 		}
 		calls = append(calls, ToolCall{
-			ID:   toolCallID(len(calls), p.FunctionCall.Name),
+			ID:   v.toolCallID(),
 			Type: "function",
 			Function: FunctionCall{
 				Name:      p.FunctionCall.Name,
@@ -563,13 +590,13 @@ func toolCallDeltas(calls []ToolCall) []ToolCallDelta {
 	return deltas
 }
 
-// responseID synthesizes the id OpenAI requires. generateContent returns none,
-// so it is derived from the response bytes: deterministic, which keeps golden
-// fixtures stable, at the cost of two byte-identical responses sharing an id.
-func responseID(body []byte) string {
-	h := fnv.New64a()
-	_, _ = h.Write(body)
-	return fmt.Sprintf("chatcmpl-%016x", h.Sum64())
+// responseID synthesizes the id OpenAI requires; generateContent returns none.
+//
+// Random rather than a hash of the response bytes: clients use this id to trace
+// and de-duplicate, so two callers who happen to receive identical content must
+// still get distinct ids. The "chatcmpl-" prefix is part of OpenAI's contract.
+func (v *Vertex) responseID() string {
+	return "chatcmpl-" + v.id()
 }
 
 // toUsage converts Vertex token accounting.
@@ -605,7 +632,7 @@ func (v *Vertex) TranslateResponse(status int, body []byte) (*ChatResponse, erro
 	}
 
 	out := &ChatResponse{
-		ID:      responseID(body),
+		ID:      v.responseID(),
 		Object:  "chat.completion",
 		Created: v.timestamp(),
 		Model:   native.ModelVersion,
@@ -617,7 +644,7 @@ func (v *Vertex) TranslateResponse(status int, body []byte) (*ChatResponse, erro
 		if idx == 0 {
 			idx = i
 		}
-		calls := toolCalls(c.Content.Parts)
+		calls := v.toolCalls(c.Content.Parts)
 		out.Choices = append(out.Choices, Choice{
 			Index: idx,
 			Message: Message{
@@ -688,7 +715,7 @@ func (v *Vertex) TranslateStreamChunk(req *ChatRequest, raw []byte) ([]StreamChu
 		if idx == 0 {
 			idx = i
 		}
-		calls := toolCalls(c.Content.Parts)
+		calls := v.toolCalls(c.Content.Parts)
 		chunk.Choices = append(chunk.Choices, ChunkChoice{
 			Index: idx,
 			Delta: Delta{

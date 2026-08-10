@@ -63,6 +63,15 @@ type FunctionDef struct {
 	// what callers can express and force a lossy round trip, while adapters only
 	// ever pass it through.
 	Parameters json.RawMessage `json:"parameters,omitempty"`
+
+	// Strict asks the model to adhere to Parameters exactly.
+	//
+	// Modelled because the openai-compat adapter marshals ChatRequest straight
+	// through: an unmodelled field is dropped at decode, so a caller setting
+	// strict against OpenAI — which supports it — would silently lose it. Vertex
+	// needs no filter to exclude it, since toNative copies field by field and
+	// simply never reads this one; Gemini has no equivalent.
+	Strict bool `json:"strict,omitempty"`
 }
 
 // Tool is one entry of a request's `tools` array.

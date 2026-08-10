@@ -11,7 +11,7 @@
           "tool_calls": [
             {
               "index": 0,
-              "id": "call_0_get_weather",
+              "id": "call-0000000000000001",
               "type": "function",
               "function": {
                 "name": "get_weather",

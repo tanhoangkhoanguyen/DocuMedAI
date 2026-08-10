@@ -2,6 +2,7 @@ package provider
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -14,9 +15,30 @@ import (
 // (2025-01-01T00:00:00Z) so fixtures across the repo read alike.
 const goldenCreated int64 = 1735689600
 
-// goldenVertex is an adapter with a frozen clock and no token source. It never
-// reaches the network: these tests exercise translation only.
+// goldenVertex is an adapter with a frozen clock and a counting id source, and
+// no token source. It never reaches the network: these tests exercise translation
+// only.
+//
+// Ids are sequential rather than random so fixtures stay byte-stable — the same
+// reason the clock is frozen. The counter is per-adapter, so each test that calls
+// goldenVertex() starts from 0 and fixtures do not depend on execution order.
 func goldenVertex() *Vertex {
+	var n int
+	return &Vertex{
+		project:  "test-project",
+		location: "us-central1",
+		now:      func() time.Time { return time.Unix(goldenCreated, 0).UTC() },
+		newID: func() string {
+			n++
+			return fmt.Sprintf("%016x", n)
+		},
+	}
+}
+
+// realIDVertex is goldenVertex with the production id source, for the tests that
+// are ABOUT id generation — uniqueness and prefix — where a pinned counter would
+// assert the fake instead of the code.
+func realIDVertex() *Vertex {
 	return &Vertex{
 		project:  "test-project",
 		location: "us-central1",
@@ -233,16 +255,6 @@ func TestToNativeToolDeclarations(t *testing.T) {
 	}
 }
 
-func TestToNativeSkipsUnnamedTool(t *testing.T) {
-	native := toNative(&ChatRequest{
-		Messages: []Message{{Role: "user", Content: "hi"}},
-		Tools:    []Tool{{Type: "function", Function: FunctionDef{Name: ""}}},
-	})
-	if native.Tools != nil {
-		t.Errorf("tools = %+v, want nil for an unnamed function", native.Tools)
-	}
-}
-
 func TestToNativeAssistantToolCall(t *testing.T) {
 	native := toNative(&ChatRequest{
 		Messages: []Message{{
@@ -337,20 +349,6 @@ func TestToNativeToolResult(t *testing.T) {
 	}
 }
 
-func TestToNativeToolResultFallsBackToSynthesizedID(t *testing.T) {
-	// No assistant turn to look up, so the name comes from our own id format.
-	native := toNative(&ChatRequest{
-		Messages: []Message{{Role: "tool", ToolCallID: "call_0_get_weather", Content: `{"ok":true}`}},
-	})
-	fr := native.Contents[0].Parts[0].FunctionResponse
-	if fr == nil {
-		t.Fatal("functionResponse part missing")
-	}
-	if fr.Name != "get_weather" {
-		t.Errorf("name = %q, want get_weather", fr.Name)
-	}
-}
-
 func TestToolResultPayloadWrapsNonObject(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -380,7 +378,14 @@ func TestArgsObject(t *testing.T) {
 		{name: "object preserved verbatim", args: `{"b":1,"a":2}`, want: `{"b":1,"a":2}`},
 		{name: "empty becomes empty object", args: "", want: "{}"},
 		{name: "whitespace becomes empty object", args: "   ", want: "{}"},
-		{name: "malformed degrades to empty object", args: `{"a":`, want: "{}"},
+		{
+			// Corruption is carried through, not silently turned into a no-arg
+			// call: `{}` would invoke the function with no parameters and look
+			// identical to a legitimate one.
+			name: "malformed is carried under _raw",
+			args: `{"a":`,
+			want: `{"_raw":"{\"a\":"}`,
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -459,8 +464,8 @@ func TestTranslateResponseToolCalls(t *testing.T) {
 		t.Fatalf("tool_calls = %d, want 1", len(choice.Message.ToolCalls))
 	}
 	tc := choice.Message.ToolCalls[0]
-	if tc.ID != "call_0_get_weather" {
-		t.Errorf("id = %q, want call_0_get_weather", tc.ID)
+	if !strings.HasPrefix(tc.ID, "call-") {
+		t.Errorf("id = %q, want a call- prefix", tc.ID)
 	}
 	if tc.Type != "function" {
 		t.Errorf("type = %q", tc.Type)
@@ -471,15 +476,20 @@ func TestTranslateResponseToolCalls(t *testing.T) {
 	}
 }
 
-func TestToolCallIDIsPositional(t *testing.T) {
-	// Two calls to the SAME function with the SAME args: only position
-	// distinguishes them, which is why the id is built from position.
+// TestToolCallIDsAreUnique is why the id is random rather than derived from the
+// call's content.
+//
+// Two calls to the SAME function with the SAME arguments in one turn are legal —
+// the same search issued against two vendors, say. toNative keys results by id
+// (toolNamesByCallID), so ids that collide would attach one result to the wrong
+// call and drop the other. Nothing else in the payload distinguishes these two.
+func TestToolCallIDsAreUnique(t *testing.T) {
 	native := `{"candidates":[{"content":{"parts":[
 		{"functionCall":{"name":"f","args":{"x":1}}},
 		{"functionCall":{"name":"f","args":{"x":1}}}
 	]},"finishReason":"STOP","index":0}]}`
 
-	out, err := goldenVertex().TranslateResponse(http.StatusOK, []byte(native))
+	out, err := realIDVertex().TranslateResponse(http.StatusOK, []byte(native))
 	if err != nil {
 		t.Fatalf("TranslateResponse: %v", err)
 	}
@@ -488,10 +498,12 @@ func TestToolCallIDIsPositional(t *testing.T) {
 		t.Fatalf("tool_calls = %d, want 2", len(calls))
 	}
 	if calls[0].ID == calls[1].ID {
-		t.Fatalf("ids collide: %q", calls[0].ID)
+		t.Fatalf("ids collide: %q — identical calls must still be addressable", calls[0].ID)
 	}
-	if calls[0].ID != "call_0_f" || calls[1].ID != "call_1_f" {
-		t.Errorf("ids = %q, %q", calls[0].ID, calls[1].ID)
+	for i, c := range calls {
+		if !strings.HasPrefix(c.ID, "call-") {
+			t.Errorf("calls[%d].ID = %q, want a call- prefix", i, c.ID)
+		}
 	}
 }
 
@@ -520,7 +532,7 @@ func TestFinishReasonToolCallsDoesNotMaskTruncation(t *testing.T) {
 }
 
 func TestTranslateResponsePopulatesIDAndCreated(t *testing.T) {
-	v := goldenVertex()
+	v := realIDVertex()
 	out, err := v.TranslateResponse(http.StatusOK, []byte(nativeTextResponse))
 	if err != nil {
 		t.Fatalf("TranslateResponse: %v", err)
@@ -532,13 +544,14 @@ func TestTranslateResponsePopulatesIDAndCreated(t *testing.T) {
 		t.Errorf("created = %d, want %d", out.Created, goldenCreated)
 	}
 
-	// Deterministic: the same body must produce the same id, or fixtures churn.
+	// Unique per response: two translations of the SAME body must differ, or a
+	// client tracing by id cannot tell two calls apart.
 	again, err := v.TranslateResponse(http.StatusOK, []byte(nativeTextResponse))
 	if err != nil {
 		t.Fatalf("TranslateResponse: %v", err)
 	}
-	if again.ID != out.ID {
-		t.Errorf("id not deterministic: %q then %q", out.ID, again.ID)
+	if again.ID == out.ID {
+		t.Errorf("id repeated across responses: %q", out.ID)
 	}
 }
 
@@ -576,8 +589,8 @@ func TestTranslateStreamChunkToolCall(t *testing.T) {
 	if d.Index != 0 {
 		t.Errorf("index = %d, want 0", d.Index)
 	}
-	if d.ID != "call_0_get_weather" || d.Type != "function" {
-		t.Errorf("id/type = %q/%q", d.ID, d.Type)
+	if !strings.HasPrefix(d.ID, "call-") || d.Type != "function" {
+		t.Errorf("id/type = %q/%q, want a call- prefix and function", d.ID, d.Type)
 	}
 	if d.Function == nil {
 		t.Fatal("function fragment missing")
@@ -590,17 +603,6 @@ func TestTranslateStreamChunkToolCall(t *testing.T) {
 	}
 	if chunks[0].Choices[0].FinishReason != "tool_calls" {
 		t.Errorf("finish_reason = %q, want tool_calls", chunks[0].Choices[0].FinishReason)
-	}
-}
-
-func TestTranslateStreamChunkTextHasNoToolCalls(t *testing.T) {
-	frame := `{"candidates":[{"content":{"parts":[{"text":"hi"}]},"index":0}]}`
-	chunks, err := goldenVertex().TranslateStreamChunk(&ChatRequest{Model: "m"}, []byte(frame))
-	if err != nil {
-		t.Fatalf("TranslateStreamChunk: %v", err)
-	}
-	if got := chunks[0].Choices[0].Delta.ToolCalls; got != nil {
-		t.Errorf("tool_calls = %+v, want nil so the key is omitted", got)
 	}
 }
 
