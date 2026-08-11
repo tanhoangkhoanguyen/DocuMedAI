@@ -5,6 +5,7 @@ package gateway
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 
 	"documedai/llmguard/mockupstream"
@@ -23,7 +24,7 @@ func TestBufferedHappyPath(t *testing.T) {
 		},
 		{
 			name: "system plus multi-turn",
-			body: `{"model":"gemini-2.5-flash","messages":[` +
+			body: `{"provider":"mock","model":"gemini-2.5-flash","messages":[` +
 				`{"role":"system","content":"be terse"},` +
 				`{"role":"user","content":"hi"},` +
 				`{"role":"assistant","content":"hello"},` +
@@ -63,14 +64,15 @@ func TestBufferedHappyPath(t *testing.T) {
 				t.Errorf("finish_reason = %q, want stop", got.Choices[0].FinishReason)
 			}
 
-			// QUIRK (pinned, not fixed): the Vertex adapter never populates `id`
-			// or `created`, so every buffered completion goes out with the zero
-			// values. OpenAI clients that key off response id see "".
-			if got.ID != "" {
-				t.Errorf("id = %q; today's behavior is an empty id", got.ID)
+			// Was a pinned QUIRK (empty `id`, zero `created`); closed by issue
+			// #57, which made the Vertex adapter synthesize both. The id is
+			// derived from the response bytes, so it is stable for a given
+			// response rather than unique per request.
+			if !strings.HasPrefix(got.ID, "chatcmpl-") {
+				t.Errorf("id = %q, want a chatcmpl- id", got.ID)
 			}
-			if got.Created != 0 {
-				t.Errorf("created = %d; today's behavior is 0", got.Created)
+			if got.Created <= 0 {
+				t.Errorf("created = %d, want a real unix timestamp", got.Created)
 			}
 
 			if h.up.Hits() != 1 {

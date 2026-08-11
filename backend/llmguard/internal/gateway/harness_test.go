@@ -141,7 +141,6 @@ func (p *mockProvider) TranslateStreamChunk(req *provider.ChatRequest, raw []byt
 // a test failure rather than passing against a stale copy.
 func realDefaults() Config {
 	return Config{
-		Provider:         "mock",
 		RateLimitRPM:     480,
 		RateLimitBurst:   60,
 		RateWaitMax:      5 * time.Second,
@@ -204,6 +203,9 @@ func newHarnessWithHandler(
 	provider.Reset()
 	t.Cleanup(provider.Reset)
 	provider.Register(&mockProvider{base: up.server.URL, inner: &provider.Vertex{}})
+	// Routing is allowlist-only now, so the harness must enable the route its
+	// tests call. Without this every request 400s before reaching the pipeline.
+	provider.SetRoutes([]provider.Route{{Provider: "mock", Model: "gemini-2.5-flash"}})
 
 	m := newMetricsWith(prometheus.NewRegistry())
 	p := newProxy(cfg, limiter, newDeduper(), m,
@@ -212,8 +214,26 @@ func newHarnessWithHandler(
 	return &harness{proxy: p, metrics: m, up: up}
 }
 
+// modelLabels builds the label values for a request-scoped metric vector, in the
+// order the vector declares them: provider first, then model, then any extra
+// dimension the vector carries (tokensUsed's kind).
+//
+// Tests go through this rather than spelling the values out so that adding a
+// label to those vectors is one edit here instead of one per assertion. The
+// harness registers a single adapter named "mock", so that is the provider every
+// gateway test observes.
+func modelLabels(model string, extra ...string) []string {
+	return append([]string{"mock", model}, extra...)
+}
+
+// chatBody builds a request body for the harness's single registered adapter.
+//
+// provider is filled in here rather than by each caller: it is required on every
+// request, and the harness only ever registers "mock", so spelling it out at each
+// call site would repeat one constant across the whole suite.
 func chatBody(model, prompt string, stream bool) string {
 	req := map[string]any{
+		"provider": "mock",
 		"model":    model,
 		"messages": []any{map[string]any{"role": "user", "content": prompt}},
 	}

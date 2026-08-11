@@ -46,7 +46,7 @@ func TestRetryExhaustsAtRetryMax(t *testing.T) {
 		t.Errorf("error.type = %q, want upstream_error", env.Error.Type)
 	}
 	// retries metric counts attempts beyond the first.
-	if got := testutil.LabeledCounterValue(t, h.metrics.retries, "gemini-2.5-flash"); got != 3 {
+	if got := testutil.LabeledCounterValue(t, h.metrics.retries, modelLabels("gemini-2.5-flash")...); got != 3 {
 		t.Errorf("retries metric = %v, want 3 (RetryMax-1)", got)
 	}
 }
@@ -104,7 +104,7 @@ func TestRetryThenSucceed(t *testing.T) {
 	if h.up.Hits() > 4 {
 		t.Errorf("upstream hits = %d, must never exceed RetryMax=4", h.up.Hits())
 	}
-	if got := testutil.LabeledCounterValue(t, h.metrics.retries, "gemini-2.5-flash"); got < 1 {
+	if got := testutil.LabeledCounterValue(t, h.metrics.retries, modelLabels("gemini-2.5-flash")...); got < 1 {
 		t.Errorf("retries metric = %v, want at least 1", got)
 	}
 }

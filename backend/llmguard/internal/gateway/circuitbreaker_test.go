@@ -13,6 +13,7 @@ import (
 
 	"documedai/llmguard/internal/testutil"
 	"documedai/llmguard/mockupstream"
+	"documedai/llmguard/provider"
 )
 
 // Pins CircuitMinReqs=10 and CircuitFailRatio=0.6. The breaker wraps the WHOLE
@@ -64,7 +65,7 @@ func TestCircuitBreakerTrips(t *testing.T) {
 		t.Errorf("upstream hits = %d, want %d — an open breaker must not dispatch",
 			got, hitsBeforeTrip)
 	}
-	if got := testutil.CounterValue(t, h.metrics.circuitState); got != 2 {
+	if got := testutil.LabeledGaugeValue(t, h.metrics.circuitState, "mock"); got != 2 {
 		t.Errorf("circuitState gauge = %v, want 2 (open)", got)
 	}
 }
@@ -128,7 +129,7 @@ func TestCircuitBreakerRecovers(t *testing.T) {
 		t.Fatalf("status after trip = %d, want 503 — the breaker must be open before "+
 			"recovery means anything", rec.Code)
 	}
-	if got := testutil.CounterValue(t, h.metrics.circuitState); got != 2 {
+	if got := testutil.LabeledGaugeValue(t, h.metrics.circuitState, "mock"); got != 2 {
 		t.Fatalf("circuitState gauge = %v, want 2 (open)", got)
 	}
 
@@ -154,7 +155,7 @@ func TestCircuitBreakerRecovers(t *testing.T) {
 	}, "the breaker never closed after CircuitOpenFor elapsed with a healthy upstream")
 
 	// --- The gauge alone does not prove traffic flows; check the response ---
-	if got := testutil.CounterValue(t, h.metrics.circuitState); got != 0 {
+	if got := testutil.LabeledGaugeValue(t, h.metrics.circuitState, "mock"); got != 0 {
 		t.Errorf("circuitState gauge = %v, want 0 (closed) after a successful probe", got)
 	}
 	if got := decodeChat(t, recovered); len(got.Choices) == 0 || got.Choices[0].Message.Content == "" {
@@ -203,7 +204,7 @@ func TestCircuitBreakerIgnoresClientErrors(t *testing.T) {
 
 	// Closed throughout: 0 is the gauge's initial value and its closed value,
 	// so the load-bearing assertion is that it never became 2 (open).
-	if got := testutil.CounterValue(t, h.metrics.circuitState); got == 2 {
+	if got := testutil.LabeledGaugeValue(t, h.metrics.circuitState, "mock"); got == 2 {
 		t.Errorf("circuitState gauge = %v — %d client errors must not open the breaker",
 			got, requests)
 	}
@@ -221,5 +222,69 @@ func TestCircuitBreakerIgnoresClientErrors(t *testing.T) {
 	}
 	if env := decodeError(t, rec); env.Error.Message == "upstream unavailable" {
 		t.Error("got the breaker-open message; the breaker tripped on client errors")
+	}
+}
+
+// healthyProvider is a second adapter, pointed at its own upstream, so one
+// provider can fail while another stays up.
+type healthyProvider struct{ *mockProvider }
+
+func (p *healthyProvider) Name() string { return "healthy" }
+
+// TestCircuitBreakerIsolatesProviders is why breakers are per provider: an
+// upstream that fails hard must not shed traffic bound for a healthy one.
+//
+// With a single shared breaker this is exactly backwards — routing a model to a
+// second provider would make an outage WORSE, since the failing upstream would
+// take the working one down with it.
+func TestCircuitBreakerIsolatesProviders(t *testing.T) {
+	cfg := realDefaults()
+	cfg.RetryBaseDly = time.Millisecond // timing only
+	cfg.RetryMaxDly = 5 * time.Millisecond
+
+	// The harness's own upstream fails every call; "mock" is routed to it.
+	failing := mockupstream.DefaultConfig()
+	failing.ErrorRate = 1.0
+	failing.ErrorStatus = http.StatusInternalServerError
+	h := newHarness(t, cfg, failing, nil)
+
+	// A second upstream that answers normally, behind a second adapter.
+	healthy := newMockUpstream(t, mockupstream.DefaultConfig())
+	provider.Register(&healthyProvider{mockProvider: &mockProvider{
+		base: healthy.server.URL, inner: &provider.Vertex{},
+	}})
+	provider.SetRoutes([]provider.Route{
+		{Provider: "mock", Model: "gemini-2.5-flash"},
+		{Provider: "healthy", Model: "gemini-2.5-flash"},
+	})
+
+	// Trip the failing provider's breaker: 10 observations at ratio 1.0.
+	failBody := chatBody("gemini-2.5-flash", "sustained failure", false)
+	for i := 1; i <= 10; i++ {
+		if rec := h.do(t, failBody, nil); rec.Code != http.StatusInternalServerError {
+			t.Fatalf("request %d: status = %d, want 500", i, rec.Code)
+		}
+	}
+	if rec := h.do(t, failBody, nil); rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 — the failing provider's breaker must be open", rec.Code)
+	}
+
+	// The healthy provider is untouched by the other's outage.
+	okBody := `{"provider":"healthy","model":"gemini-2.5-flash",` +
+		`"messages":[{"role":"user","content":"still fine"}]}`
+	if rec := h.do(t, okBody, nil); rec.Code != http.StatusOK {
+		t.Errorf("healthy provider status = %d, want 200 — one provider's open breaker "+
+			"must not shed another's traffic\nbody: %s", rec.Code, rec.Body.String())
+	}
+	if got := healthy.Hits(); got != 1 {
+		t.Errorf("healthy upstream hits = %d, want 1 — its request must actually dispatch", got)
+	}
+
+	// And the gauges disagree, which an unlabelled gauge could not express.
+	if got := testutil.LabeledGaugeValue(t, h.metrics.circuitState, "mock"); got != 2 {
+		t.Errorf("circuitState{provider=\"mock\"} = %v, want 2 (open)", got)
+	}
+	if got := testutil.LabeledGaugeValue(t, h.metrics.circuitState, "healthy"); got != 0 {
+		t.Errorf("circuitState{provider=\"healthy\"} = %v, want 0 (closed)", got)
 	}
 }

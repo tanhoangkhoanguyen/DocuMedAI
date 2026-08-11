@@ -25,11 +25,20 @@ import (
 // LoadConfig reads the environment and applies production defaults.
 func LoadConfig() Config { return loadConfig() }
 
-// SetupProviders constructs and registers the configured provider adapter and
-// its model routing rules. It performs credential work (for Vertex, resolving
-// Application Default Credentials), so a process that cannot mint credentials
-// fails here at startup rather than on the first request.
-func SetupProviders(ctx context.Context, cfg Config) error { return setupProviders(ctx, cfg) }
+// LoadModelConfig reads and validates the model allowlist.
+//
+// The file is REQUIRED. It is the only authority over which models LLMGuard will
+// serve, so booting without one would leave a gateway that refuses every request
+// while its health check stays green — worse than refusing to start.
+func LoadModelConfig(path string) (*ModelConfig, error) { return loadModelConfig(path) }
+
+// SetupProviders constructs and registers an adapter per declared provider, then
+// installs the allowlist's model routes. It performs credential work (for Vertex,
+// resolving Application Default Credentials), so a process that cannot mint
+// credentials fails here at startup rather than on the first request.
+func SetupProviders(ctx context.Context, cfg Config, mc *ModelConfig) error {
+	return setupProviders(ctx, cfg, mc)
+}
 
 // NewMetrics registers the pipeline's Prometheus collectors on the default
 // registry.

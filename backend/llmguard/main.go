@@ -14,6 +14,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"documedai/llmguard/internal/gateway"
+	"documedai/llmguard/provider"
 )
 
 func main() {
@@ -31,13 +32,23 @@ func main() {
 
 	cfg := gateway.LoadConfig()
 
-	// Resolve the provider up front: a process that cannot mint credentials
-	// should fail at startup, not on the first request. For Vertex this reaches
-	// out to Application Default Credentials.
-	if err := gateway.SetupProviders(context.Background(), cfg); err != nil {
-		log.Error("provider setup failed", "provider", cfg.Provider, "err", err.Error())
+	// The allowlist decides which models are callable, so it is required rather
+	// than optional: without it every request would 400 while the health check
+	// stayed green. Every validation problem is reported at once.
+	mc, err := gateway.LoadModelConfig(cfg.ModelConfigPath)
+	if err != nil {
+		log.Error("model config", "path", cfg.ModelConfigPath, "err", err.Error())
 		os.Exit(1)
 	}
+
+	// Resolve the providers up front: a process that cannot mint credentials
+	// should fail at startup, not on the first request. For Vertex this reaches
+	// out to Application Default Credentials.
+	if err := gateway.SetupProviders(context.Background(), cfg, mc); err != nil {
+		log.Error("provider setup failed", "err", err.Error())
+		os.Exit(1)
+	}
+	log.Info("model allowlist loaded", "routes", provider.EnabledRoutes())
 
 	// Redis backs the rate-limit token bucket (and the cross-replica dedup
 	// extension point). Parse the URL form: redis://host:port/db.
@@ -75,7 +86,7 @@ func main() {
 
 	// Graceful shutdown on SIGINT/SIGTERM so in-flight calls aren't cut off.
 	go func() {
-		log.Info("llmguard listening", "port", cfg.Port, "provider", cfg.Provider)
+		log.Info("llmguard listening", "port", cfg.Port, "models", len(mc.ModelList))
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Error("server error", "err", err.Error())
 			os.Exit(1)

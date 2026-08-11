@@ -18,8 +18,8 @@ import (
 // concurrency — no read-modify-write race between competing requests.
 type RateLimiter struct {
 	rdb   *redis.Client
-	rpm   int     // sustained requests/min → refill rate
-	burst int     // bucket capacity
+	rpm   int // sustained requests/min → refill rate
+	burst int // bucket capacity
 }
 
 // tokenBucketScript implements lazy refill: instead of a background ticker we

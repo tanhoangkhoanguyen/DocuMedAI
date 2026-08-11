@@ -110,7 +110,7 @@ func TestStreamingUpstreamErrorReturnsEnvelope(t *testing.T) {
 	// tail of serveStreaming records latency unconditionally, so a missing return
 	// in the pre-header branch would observe this request twice — invisible to
 	// every status assertion above.
-	if got := testutil.HistogramCount(t, h.metrics.latency, "gemini-2.5-flash"); got != 1 {
+	if got := testutil.HistogramCount(t, h.metrics.latency, modelLabels("gemini-2.5-flash")...); got != 1 {
 		t.Errorf("latency observations = %d, want 1 — a failed request must be counted once", got)
 	}
 }

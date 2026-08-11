@@ -4,20 +4,77 @@ An **OpenAI-API-compatible** gateway in front of the LLM provider.
 
 ```
 client (base_url=…)  →  la-llmguard :8081  →  provider adapter  →  Vertex AI
+                         ├ model allowlist (exact, per provider+model)
                          ├ rate limit (Redis token bucket)
                          ├ retry + backoff (honors Retry-After)
-                         ├ circuit breaker (fail fast on outage)
+                         ├ circuit breaker (one per provider, fail fast on outage)
                          ├ in-flight dedup (singleflight)
                          └ Prometheus /metrics
 ```
 
 Clients speak the OpenAI wire format. Internally a **provider adapter** translates
-to the vendor's native API — today Vertex AI's `generateContent`. Core (rate
-limit, dedup, breaker, retry, metrics) never sees vendor JSON, so adding a
-provider doesn't change clients or core.
+to the vendor's native API — Vertex AI's `generateContent`, or any endpoint that
+already speaks OpenAI. Core (rate limit, dedup, breaker, retry, metrics) never
+sees vendor JSON, so adding a provider doesn't change clients or core.
 
 Only chat completions pass through. Embeddings and the reranker run locally in the
 backend and never reach LLMGuard.
+
+## The model allowlist
+
+A request names **both** an upstream and a model:
+
+```json
+{"provider": "vertex-prod", "model": "gemini-2.5-flash", "messages": [...]}
+```
+
+`provider` is an LLMGuard extension, not part of the OpenAI schema. It exists
+because one model can be served by several upstreams, and the OpenAI wire format
+has only the one `model` field to tell them apart. It is required — LLMGuard will
+not pick an upstream on the caller's behalf — and is stripped before the request
+goes upstream.
+
+`config.yaml` (path from `LLMGUARD_CONFIG`) declares the upstreams and which
+models each may serve:
+
+```yaml
+version: 1
+
+providers:
+  - name: vertex-prod          # your name for this upstream; also its metrics
+    type: vertex               # and circuit-breaker key
+    project_env: GOOGLE_CLOUD_PROJECT   # an env var NAME, never a value
+    location: us-central1
+
+  - name: openrouter
+    type: openai-compat
+    base_url: https://openrouter.ai/api/v1   # no /chat/completions suffix
+    api_key_env: OPENROUTER_API_KEY
+
+model_list:
+  - model_name: gemini-2.5-flash
+    provider: vertex-prod
+    pricing: {input_per_1k: 0.000075, output_per_1k: 0.0003}
+
+  # The same model through a second upstream: a separate route, addressed as
+  # provider "openrouter". Neither entry shadows the other.
+  - model_name: gemini-2.5-flash
+    provider: openrouter
+
+  - model_name: gpt-4o-mini
+    provider: openrouter
+    upstream_model: openai/gpt-4o-mini   # what the vendor calls it
+```
+
+Matching is **exact** on the `(provider, model)` pair — no prefixes, no fallback
+to a default adapter. An unlisted pair is refused with a 400 that names the
+enabled routes; nothing reaches an upstream. The file is required, and every
+validation problem is reported at once, because an optional allowlist would boot
+a gateway that 400s every request while its health check stayed green.
+
+Credentials are never in the file: it names env vars, so a committed config
+cannot carry a secret. `pricing` is recorded for a later consumer to attribute
+spend — LLMGuard is a reliability gateway and does nothing with those numbers.
 
 ## Endpoints
 
@@ -31,7 +88,7 @@ backend and never reach LLMGuard.
 
 | Var | Default | Notes |
 |-----|---------|-------|
-| `LLMGUARD_PROVIDER` | `vertex` | Default adapter for models matching no routing rule |
+| `LLMGUARD_CONFIG` | `config.yaml` | **Required file.** The model allowlist — see below |
 | `GOOGLE_CLOUD_PROJECT` | — | **Required.** Same var the Python backend reads |
 | `GOOGLE_CLOUD_LOCATION` | `us-central1` | Vertex region — appears in both host and path |
 | `PROXY_PORT` | `8081` | |
@@ -54,7 +111,8 @@ docker compose up -d --build la-llmguard
 curl localhost:8081/healthz    # {"status":"ok"}
 
 curl localhost:8081/v1/chat/completions -H 'Content-Type: application/json' \
-  -d '{"model":"gemini-2.5-flash","messages":[{"role":"user","content":"hi"}]}'
+  -d '{"provider":"vertex-prod","model":"gemini-2.5-flash",
+       "messages":[{"role":"user","content":"hi"}]}'
 ```
 
 Uncomment the `GOOGLE_APPLICATION_CREDENTIALS` env var and the SA-key volume in
@@ -70,10 +128,11 @@ compose is the only supported build path.
 | `main.go` | Composition root: wiring, HTTP server, graceful shutdown, `-healthcheck` |
 | `internal/gateway/gateway.go` | The package's entire exported surface — what `main` may call |
 | `internal/gateway/config.go` | Env-driven config + defaults |
-| `internal/gateway/providers.go` | Adapter construction + model routing rules |
+| `internal/gateway/modelconfig.go` | Parses + validates `config.yaml` (the allowlist) |
+| `internal/gateway/providers.go` | Adapter construction + installing the allowlist's routes |
 | `internal/gateway/proxy.go` | Rate limit → dedup → breaker → retry; SSE translation loop |
 | `internal/gateway/ratelimit.go` | Redis token bucket (atomic Lua) |
-| `internal/gateway/retry.go` | Backoff + jitter + Retry-After + circuit breaker |
+| `internal/gateway/retry.go` | Backoff + jitter + Retry-After + per-provider circuit breakers |
 | `internal/gateway/dedup.go` | In-flight de-duplication (singleflight) |
 | `internal/gateway/metrics.go` | Prometheus collectors |
 | `provider/` | Normalized schema, `Provider` interface + registry, Vertex adapter |
@@ -89,10 +148,21 @@ so no identifier is exported merely to be testable.
 
 ## Adding a provider
 
-Implement `provider.Provider` (4 methods: `Name`, `BuildRequest`,
-`TranslateResponse`, `TranslateStreamChunk`), then register it in
-`internal/gateway/providers.go` with a `RouteModel` prefix rule. Nothing in
-`internal/gateway/proxy.go` or the client contract changes.
+Two cases:
+
+**An upstream that already speaks OpenAI** (OpenRouter, Groq, Together, vLLM,
+Gemini's compat endpoint) needs no code — add a `type: openai-compat` entry to
+`config.yaml` with its `base_url` and key.
+
+**A genuinely different wire format** needs an adapter: implement
+`provider.Provider` (4 methods: `Name`, `BuildRequest`, `TranslateResponse`,
+`TranslateStreamChunk`), then add a case to `buildAdapter` in
+`internal/gateway/providers.go`. That function is the only place that knows a
+vendor's name; `proxy.go` and the client contract are untouched.
+
+Adapters register under the **config's** provider name, not the adapter type's,
+so two instances of one type can coexist and metrics and the circuit breaker key
+on something the operator chose.
 
 ## Notes
 

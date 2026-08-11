@@ -65,7 +65,10 @@ services:
     env_file:
       - path: .env
     environment:
-      LLMGUARD_PROVIDER: ${LLMGUARD_PROVIDER:-vertex}
+      # The model allowlist: which models are callable and through which upstream.
+      # Required — the process exits if it is missing or invalid. Mounted below,
+      # so editing it is a restart rather than a rebuild.
+      LLMGUARD_CONFIG: /config.yaml
       # Same vars la-documedai reads — one .env configures both.
       GOOGLE_CLOUD_PROJECT: ${GOOGLE_CLOUD_PROJECT}
       GOOGLE_CLOUD_LOCATION: ${GOOGLE_CLOUD_LOCATION:-us-central1}
@@ -80,7 +83,11 @@ services:
       - "8081:8081"                      # expose for local /metrics + smoke tests
     networks:
       - documedai-net
-    # volumes:
+    volumes:
+      # Read-only: the gateway never writes its own allowlist. The image ships a
+      # copy of this same file, so the service still starts if the mount is
+      # removed in a deployment that bakes the config in instead.
+      - ./backend/llmguard/config.yaml:/config.yaml:ro
     #   - ${GOOGLE_SA_KEY_PATH:-./gcp-sa.json}:/secrets/gcp-sa.json:ro  # Vertex AI ADC. Comment out in deployment
     healthcheck:
       # distroless image has no shell/curl; use the Go binary's own probe.

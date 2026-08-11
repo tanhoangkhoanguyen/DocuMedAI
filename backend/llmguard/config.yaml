@@ -1,0 +1,73 @@
+# LLMGuard model allowlist.
+#
+# This file is the ONLY authority over which models LLMGuard will serve. A model
+# absent from model_list cannot be called: there is no prefix matching and no
+# fallback to a default upstream. LLMGuard exits at startup if this file is
+# missing or invalid, rather than booting a gateway that 400s every request while
+# its health check stays green.
+#
+# Path comes from LLMGUARD_CONFIG (default: config.yaml).
+#
+# SECRETS NEVER GO IN THIS FILE. It names environment VARIABLES — project_env,
+# api_key_env — so a committed config cannot carry a credential even by accident.
+
+version: 1
+
+# --- Upstreams ---------------------------------------------------------------
+# Each entry is one upstream instance. `name` is yours to choose: it is what
+# clients send as `provider`, and the key for that upstream's metrics label and
+# its own circuit breaker. Two instances of one type can coexist under different
+# names (two openai-compat endpoints, say).
+providers:
+  - name: vertex-prod
+    type: vertex
+    # The NAME of the env var holding the GCP project — not the project itself.
+    # Vertex authenticates with Application Default Credentials and takes no key.
+    project_env: GOOGLE_CLOUD_PROJECT
+    location: us-central1
+
+  # An OpenAI-compatible upstream needs no adapter code — OpenRouter, Groq,
+  # Together, a self-hosted vLLM, or Gemini's compat endpoint all work by
+  # configuration alone. Uncomment and set OPENROUTER_API_KEY to enable it.
+  #
+  # base_url includes the vendor's version prefix and omits /chat/completions.
+  # The api_key_env var must be SET, not merely named: a declared-but-empty key
+  # is the same outage as a wrong one, except it only surfaces on the first call.
+  #
+  # - name: openrouter
+  #   type: openai-compat
+  #   base_url: https://openrouter.ai/api/v1
+  #   api_key_env: OPENROUTER_API_KEY
+
+# --- Allowed models ----------------------------------------------------------
+# Access is granted per (provider, model) PAIR, because a client names both:
+#
+#   {"provider": "vertex-prod", "model": "gemini-2.5-flash", "messages": [...]}
+#
+# So enabling a model on one upstream does not enable it on another. The same
+# model listed under two providers is two independent routes — that is the point
+# of the pair, not a duplicate — and lets a client pick which upstream serves it.
+#
+# pricing is recorded for a later consumer to attribute spend. LLMGuard is a
+# reliability gateway and does nothing with these numbers: no budgets, no cost
+# metrics, no enforcement. Omitting it costs that consumer accuracy and is not a
+# reason to refuse traffic.
+model_list:
+  - model_name: gemini-2.5-flash
+    provider: vertex-prod
+    pricing:
+      input_per_1k: 0.000075
+      output_per_1k: 0.0003
+
+  # The same model through a second upstream. Neither entry shadows the other:
+  # clients reach this one by sending provider "openrouter".
+  #
+  # - model_name: gemini-2.5-flash
+  #   provider: openrouter
+
+  # upstream_model overrides the identifier sent to the vendor when they spell it
+  # differently. Absent means "same as model_name".
+  #
+  # - model_name: gpt-4o-mini
+  #   provider: openrouter
+  #   upstream_model: openai/gpt-4o-mini

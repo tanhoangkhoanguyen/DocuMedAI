@@ -15,6 +15,11 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/llmguard .
 FROM gcr.io/distroless/static-debian12:nonroot
 WORKDIR /
 COPY --from=builder /out/llmguard /llmguard
+# The model allowlist is REQUIRED — the process exits without it — so a default
+# copy ships in the image and the service starts out of the box. Compose mounts
+# the repo's file over this one, so an operator edits config.yaml and restarts
+# rather than rebuilding. LLMGUARD_CONFIG overrides the path.
+COPY --from=builder /src/config.yaml /config.yaml
 EXPOSE 8081
 USER nonroot:nonroot
 ENTRYPOINT ["/llmguard"]
