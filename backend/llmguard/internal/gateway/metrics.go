@@ -42,8 +42,10 @@ type Metrics struct {
 	rateLimited *prometheus.CounterVec
 	// dedupHits counts requests that piggy-backed on an in-flight identical call.
 	dedupHits prometheus.Counter
-	// circuitState reflects the breaker: 0=closed, 1=half-open, 2=open.
-	circuitState prometheus.Gauge
+	// circuitState reflects each provider's breaker: 0=closed, 1=half-open,
+	// 2=open. Labelled because the breakers are per provider — a single series
+	// would let one upstream's outage overwrite every other upstream's reading.
+	circuitState *prometheus.GaugeVec
 	// tokensUsed sums prompt+completion tokens parsed from upstream `usage`.
 	tokensUsed *prometheus.CounterVec // labels: provider, model, kind(prompt|completion)
 }
@@ -81,10 +83,10 @@ func newMetricsWith(reg prometheus.Registerer) *Metrics {
 			Name: "llmguard_dedup_hits_total",
 			Help: "Requests served by sharing an in-flight identical call.",
 		}),
-		circuitState: auto.NewGauge(prometheus.GaugeOpts{
+		circuitState: auto.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "llmguard_circuit_state",
-			Help: "Circuit breaker state: 0=closed, 1=half-open, 2=open.",
-		}),
+			Help: "Circuit breaker state by provider: 0=closed, 1=half-open, 2=open.",
+		}, []string{"provider"}),
 		tokensUsed: auto.NewCounterVec(prometheus.CounterOpts{
 			Name: "llmguard_tokens_total",
 			Help: "Tokens reported by upstream usage, by provider, model and kind.",

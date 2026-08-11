@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sony/gobreaker"
@@ -50,15 +51,56 @@ func isUpstreamErr(err error) bool {
 	return errors.As(err, &ue)
 }
 
-// newBreaker builds the circuit breaker that wraps every upstream call. When
-// the provider is failing hard, the breaker OPENS and we fail fast with 503
-// instead of piling on more doomed requests — protecting both upstream and our
-// own latency.
-func newBreaker(cfg Config, m *Metrics) *gobreaker.CircuitBreaker {
+// breakerGroup holds one circuit breaker per provider.
+//
+// Isolation is the point: with a single shared breaker, one sick upstream trips
+// the circuit for every other upstream too, so a Vertex outage would 503 traffic
+// bound for an entirely healthy openai-compat endpoint. That is the opposite of
+// what routing a model to a second provider is meant to buy.
+//
+// Breakers are created on demand rather than pre-seeded from the config, because
+// the registry — not this type — is the authority on which providers exist, and
+// a breaker for a provider that never serves a request would report a permanent
+// "closed" for something that does not run.
+type breakerGroup struct {
+	mu       sync.Mutex
+	cfg      Config
+	metrics  *Metrics
+	breakers map[string]*gobreaker.CircuitBreaker
+}
+
+func newBreakerGroup(cfg Config, m *Metrics) *breakerGroup {
+	return &breakerGroup{
+		cfg:      cfg,
+		metrics:  m,
+		breakers: map[string]*gobreaker.CircuitBreaker{},
+	}
+}
+
+// get returns the breaker for one provider, creating it on first use.
+//
+// A plain mutex rather than sync.Map or an RWMutex: this runs once per request
+// and holds the lock only for a map lookup, so contention is not the cost that
+// matters next to an upstream LLM call.
+func (g *breakerGroup) get(providerName string) *gobreaker.CircuitBreaker {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	if b, ok := g.breakers[providerName]; ok {
+		return b
+	}
+	b := newBreaker(providerName, g.cfg, g.metrics)
+	g.breakers[providerName] = b
+	return b
+}
+
+// newBreaker builds the circuit breaker wrapping one provider's upstream calls.
+// When that provider is failing hard, the breaker OPENS and we fail fast with
+// 503 instead of piling on more doomed requests — protecting both upstream and
+// our own latency.
+func newBreaker(providerName string, cfg Config, m *Metrics) *gobreaker.CircuitBreaker {
 	return gobreaker.NewCircuitBreaker(gobreaker.Settings{
-		// One breaker shared across providers today; per-provider isolation is a
-		// separate change, since it also has to split the circuit_state gauge.
-		Name:    "upstream",
+		Name:    providerName,
 		Timeout: cfg.CircuitOpenFor, // how long to stay open before half-open probe
 		ReadyToTrip: func(c gobreaker.Counts) bool {
 			if c.Requests < cfg.CircuitMinReqs {
@@ -87,15 +129,21 @@ func newBreaker(cfg Config, m *Metrics) *gobreaker.CircuitBreaker {
 			// cancellation. That IS an upstream problem.
 			return false
 		},
-		OnStateChange: func(_ string, _ gobreaker.State, to gobreaker.State) {
-			// Surface breaker state as a gauge for dashboards/alerts.
+		// name is gobreaker's Name above, i.e. the provider. Taken from the
+		// callback rather than the closure so the gauge cannot drift from the
+		// breaker that actually changed state.
+		OnStateChange: func(name string, _ gobreaker.State, to gobreaker.State) {
+			// Surface breaker state as a gauge for dashboards/alerts, one series
+			// per provider — an unlabelled gauge would let the last provider to
+			// change state overwrite every other provider's reading.
+			gauge := m.circuitState.WithLabelValues(name)
 			switch to {
 			case gobreaker.StateClosed:
-				m.circuitState.Set(0)
+				gauge.Set(0)
 			case gobreaker.StateHalfOpen:
-				m.circuitState.Set(1)
+				gauge.Set(1)
 			case gobreaker.StateOpen:
-				m.circuitState.Set(2)
+				gauge.Set(2)
 			}
 		},
 	})

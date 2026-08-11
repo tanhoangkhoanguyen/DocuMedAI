@@ -12,8 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sony/gobreaker"
-
 	"documedai/llmguard/provider"
 )
 
@@ -56,11 +54,11 @@ func readUpstreamBody(r io.Reader) ([]byte, error) {
 type Proxy struct {
 	cfg     Config
 	client  *http.Client // shared, keep-alive pooled
-	limiter *RateLimiter
-	deduper *Deduper
-	breaker *gobreaker.CircuitBreaker
-	metrics *Metrics
-	log     *slog.Logger
+	limiter  *RateLimiter
+	deduper  *Deduper
+	breakers *breakerGroup
+	metrics  *Metrics
+	log      *slog.Logger
 }
 
 func newProxy(cfg Config, limiter *RateLimiter, deduper *Deduper, m *Metrics, log *slog.Logger) *Proxy {
@@ -73,13 +71,13 @@ func newProxy(cfg Config, limiter *RateLimiter, deduper *Deduper, m *Metrics, lo
 		ForceAttemptHTTP2:   true,
 	}
 	return &Proxy{
-		cfg:     cfg,
-		client:  &http.Client{Transport: transport, Timeout: cfg.UpstreamTimeout},
-		limiter: limiter,
-		deduper: deduper,
-		breaker: newBreaker(cfg, m),
-		metrics: m,
-		log:     log,
+		cfg:      cfg,
+		client:   &http.Client{Transport: transport, Timeout: cfg.UpstreamTimeout},
+		limiter:  limiter,
+		deduper:  deduper,
+		breakers: newBreakerGroup(cfg, m),
+		metrics:  m,
+		log:      log,
 	}
 }
 
@@ -188,8 +186,9 @@ func (p *Proxy) serveBuffered(
 
 	res, shared, err := p.deduper.Do(key, func() (*upstreamResult, error) {
 		// The breaker wraps the WHOLE retry loop: a tripped breaker should stop
-		// us before we even start retrying.
-		v, berr := p.breaker.Execute(func() (interface{}, error) {
+		// us before we even start retrying. It is this provider's breaker, so a
+		// failing upstream does not shed traffic bound for a healthy one.
+		v, berr := p.breakers.get(provName).Execute(func() (interface{}, error) {
 			return doWithRetry(r.Context(), p.cfg, key,
 				func() { p.metrics.retries.WithLabelValues(provName, model).Inc() },
 				func(ctx context.Context) (*upstreamResult, error) {
@@ -307,7 +306,7 @@ func (p *Proxy) serveStreaming(
 	// and everything already flushed belongs to the client, so a failure can only
 	// be APPENDED to the stream — never rewritten as an error envelope.
 	var wroteHeader bool
-	_, err := p.breaker.Execute(func() (interface{}, error) {
+	_, err := p.breakers.get(provName).Execute(func() (interface{}, error) {
 		httpReq, berr := prov.BuildRequest(r.Context(), req)
 		if berr != nil {
 			return nil, berr

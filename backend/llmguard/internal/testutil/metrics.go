@@ -30,6 +30,17 @@ func LabeledCounterValue(t *testing.T, vec *prometheus.CounterVec, labels ...str
 	return testutil.ToFloat64(counter)
 }
 
+// LabeledGaugeValue reads one labeled child out of a GaugeVec, matching the
+// label order declared when the vector was created.
+func LabeledGaugeValue(t *testing.T, vec *prometheus.GaugeVec, labels ...string) float64 {
+	t.Helper()
+	gauge, err := vec.GetMetricWithLabelValues(labels...)
+	if err != nil {
+		t.Fatalf("testutil: bad labels %v: %v", labels, err)
+	}
+	return testutil.ToFloat64(gauge)
+}
+
 // HistogramCount reads how many observations one labeled child of a
 // HistogramVec has recorded — not their sum.
 //
