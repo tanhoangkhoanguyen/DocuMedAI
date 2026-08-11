@@ -30,6 +30,20 @@ type Message struct {
 // dropped: a field we don't model can't be forwarded to a provider whose wire
 // format is different anyway.
 type ChatRequest struct {
+	// Provider names which declared upstream serves this request. An LLMGuard
+	// extension, not part of the OpenAI schema.
+	//
+	// A field of its own rather than a prefix on Model, because one model can be
+	// served by several upstreams — the same gemini-2.5-flash through Vertex and
+	// through an openai-compat endpoint — and the OpenAI wire format has only the
+	// one `model` field to distinguish them. Encoding it as "provider/model"
+	// would work, but the config already names the provider, so the name would
+	// then be stated twice and could disagree.
+	//
+	// Never forwarded upstream: adapters build their own native body, and the
+	// openai-compat adapter re-marshals a struct that has no such field.
+	Provider string `json:"provider,omitempty"`
+
 	Model       string    `json:"model"`
 	Messages    []Message `json:"messages"`
 	Temperature *float64  `json:"temperature,omitempty"` // pointer: 0 differs from unset

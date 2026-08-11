@@ -71,8 +71,15 @@ func (o *OpenAICompat) endpoint() string {
 // it, rather than in the URL. Ported from the pre-adapter buildUpstreamRequest:
 // the caller's key never reaches the upstream — LLMGuard substitutes its own.
 func (o *OpenAICompat) BuildRequest(ctx context.Context, req *ChatRequest) (*http.Request, error) {
+	// Provider is LLMGuard's own routing field and means nothing upstream, so it
+	// is stripped rather than forwarded: OpenAI itself rejects a body carrying an
+	// unrecognized field. Copied by value — mutating the caller's request would
+	// leak into the retry loop, which reuses the same struct across attempts.
+	outbound := *req
+	outbound.Provider = ""
+
 	// Encode JSON
-	body, err := json.Marshal(req)
+	body, err := json.Marshal(&outbound)
 	if err != nil {
 		return nil, fmt.Errorf("openai-compat: encode request: %w", err)
 	}

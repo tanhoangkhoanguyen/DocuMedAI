@@ -12,10 +12,13 @@ package gateway
 // and a typo in one copy would silently split routing in two. The provider name
 // is also the natural key for a per-provider circuit breaker.
 //
-// The allowlist is STRICT and matches model names exactly. There is no lenient
-// mode and no prefix matching — an allowlist whose entries are prefixes is not
-// an allowlist. A model that is not listed cannot be called, which makes the
+// The allowlist is STRICT and matches exactly. There is no lenient mode and no
+// prefix matching — an allowlist whose entries are prefixes is not an allowlist.
+// A (provider, model) pair that is not listed cannot be called, which makes the
 // file the single place an operator grants access.
+//
+// The unit of access is the PAIR, not the model: a client names both, so
+// enabling gemini-2.5-flash on Vertex does not enable it on some other upstream.
 
 import (
 	"errors"
@@ -25,6 +28,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"documedai/llmguard/provider"
 )
 
 // Provider type names accepted in `type:`. These are adapter KINDS, not
@@ -93,14 +98,18 @@ func (m ModelEntry) Upstream() string {
 	return m.ModelName
 }
 
-// EnabledModels lists every allowed model name, in file order.
+// Route is the allowlist key this entry grants.
+func (m ModelEntry) Route() provider.Route {
+	return provider.Route{Provider: m.Provider, Model: m.ModelName}
+}
+
+// EnabledRoutes lists every allowed route, in file order.
 //
-// File order, not sorted: it is what an operator sees in config.yaml, and the
-// 400 body for an unknown model quotes this list back.
-func (c *ModelConfig) EnabledModels() []string {
-	out := make([]string, 0, len(c.ModelList))
+// File order, not sorted: it is what an operator sees in config.yaml.
+func (c *ModelConfig) EnabledRoutes() []provider.Route {
+	out := make([]provider.Route, 0, len(c.ModelList))
 	for _, m := range c.ModelList {
-		out = append(out, m.ModelName)
+		out = append(out, m.Route())
 	}
 	return out
 }
@@ -166,20 +175,24 @@ func (c *ModelConfig) validate() error {
 		problems = append(problems, errors.New("model_list must not be empty"))
 	}
 
-	seenModel := map[string]bool{}
+	seenModel := map[provider.Route]bool{}
 	for i, m := range c.ModelList {
 		where := fmt.Sprintf("model_list[%d]", i)
+		route := m.Route()
 
 		switch {
 		case m.ModelName == "":
 			problems = append(problems, fmt.Errorf("%s: model_name is required", where))
-		case seenModel[m.ModelName]:
-			// Silently taking the first (or last) would make routing depend on
-			// file order, which no reader would expect.
+		case seenModel[route]:
+			// Duplicates are judged on the PAIR, not the model: the same model
+			// under two providers is the point of the pair, while the same pair
+			// twice is a real conflict. Silently taking the first (or last) would
+			// make routing depend on file order, which no reader would expect.
 			problems = append(problems,
-				fmt.Errorf("%s: duplicate model_name %q", where, m.ModelName))
+				fmt.Errorf("%s: duplicate model_name %q for provider %q",
+					where, m.ModelName, m.Provider))
 		default:
-			seenModel[m.ModelName] = true
+			seenModel[route] = true
 		}
 
 		switch {

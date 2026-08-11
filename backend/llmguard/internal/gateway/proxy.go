@@ -116,18 +116,42 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"field 'model' is required", "invalid_request_error")
 		return
 	}
+	// Required, with no default: one model can be served by several upstreams, so
+	// picking one for the caller would silently send traffic somewhere they did
+	// not choose. An explicit 400 makes the omission theirs to fix.
+	if req.Provider == "" {
+		p.writeError(w, providerUnknown, model, start, http.StatusBadRequest,
+			"field 'provider' is required — it names which upstream serves this model",
+			"invalid_request_error")
+		return
+	}
 	if len(req.Messages) == 0 {
 		p.writeError(w, providerUnknown, model, start, http.StatusBadRequest,
 			"field 'messages' must not be empty", "invalid_request_error")
 		return
 	}
 
-	prov, err := provider.For(model, p.cfg.Provider)
+	prov, err := provider.For(provider.Route{Provider: req.Provider, Model: model})
 	if err != nil {
 		// The model is known but unroutable, so it is labelled while the provider
 		// is not — resolution is exactly what failed.
-		p.writeError(w, providerUnknown, model, start, http.StatusBadRequest,
-			err.Error(), "invalid_request_error")
+		var unknown *provider.UnknownModelError
+		if errors.As(err, &unknown) {
+			// The enabled list is quoted back so a caller can correct the request
+			// without reading the operator's config. This does disclose the model
+			// inventory, which is acceptable for an internal gateway.
+			p.writeError(w, providerUnknown, model, start, http.StatusBadRequest,
+				fmt.Sprintf("model %q is not enabled on provider %q; enabled routes: %s",
+					model, req.Provider, strings.Join(provider.EnabledRoutes(), ", ")),
+				"invalid_request_error")
+			return
+		}
+		// An allowed route whose provider never registered is a loader bug, not a
+		// bad request: the caller can do nothing about it, so it is a 500.
+		p.log.Error("provider resolution failed",
+			"provider", req.Provider, "model", model, "err", err.Error())
+		p.writeError(w, providerUnknown, model, start, http.StatusInternalServerError,
+			"provider unavailable", "upstream_error")
 		return
 	}
 	// Past this point every observation carries the RESOLVED adapter's name, not

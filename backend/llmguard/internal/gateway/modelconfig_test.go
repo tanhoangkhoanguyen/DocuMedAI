@@ -12,6 +12,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"documedai/llmguard/provider"
 	"testing"
 )
 
@@ -55,9 +57,12 @@ func TestLoadModelConfig(t *testing.T) {
 		t.Fatalf("loadModelConfig: %v", err)
 	}
 
-	if got := cfg.EnabledModels(); len(got) != 2 ||
-		got[0] != "gemini-2.5-flash" || got[1] != "gpt-4o-mini" {
-		t.Errorf("EnabledModels() = %v", got)
+	want := []provider.Route{
+		{Provider: "vertex-prod", Model: "gemini-2.5-flash"},
+		{Provider: "openrouter", Model: "gpt-4o-mini"},
+	}
+	if got := cfg.EnabledRoutes(); len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("EnabledRoutes() = %v, want %v", got, want)
 	}
 
 	// upstream_model overrides the identifier sent upstream; absent means "same".
@@ -73,6 +78,37 @@ func TestLoadModelConfig(t *testing.T) {
 	}
 	if _, ok := cfg.ProviderByName("nope"); ok {
 		t.Error("ProviderByName(nope) must not resolve")
+	}
+}
+
+// TestLoadModelConfigAllowsOneModelOnManyProviders pins the reason the allowlist
+// is keyed on a pair: the same model served by two upstreams is a valid config,
+// not a duplicate.
+//
+// A duplicate check on model_name alone would reject this, forcing an operator to
+// invent distinct aliases for what is genuinely one model.
+func TestLoadModelConfigAllowsOneModelOnManyProviders(t *testing.T) {
+	t.Setenv("TEST_OPENROUTER_KEY", "sk-test")
+
+	cfg, err := loadModelConfig(writeConfig(t, `
+version: 1
+providers:
+  - {name: vertex-prod, type: vertex, project_env: GOOGLE_CLOUD_PROJECT}
+  - {name: openrouter, type: openai-compat, base_url: https://openrouter.ai/api/v1, api_key_env: TEST_OPENROUTER_KEY}
+model_list:
+  - {model_name: gemini-2.5-flash, provider: vertex-prod}
+  - {model_name: gemini-2.5-flash, provider: openrouter}`))
+	if err != nil {
+		t.Fatalf("one model on two providers must be accepted: %v", err)
+	}
+
+	got := cfg.EnabledRoutes()
+	want := []provider.Route{
+		{Provider: "vertex-prod", Model: "gemini-2.5-flash"},
+		{Provider: "openrouter", Model: "gemini-2.5-flash"},
+	}
+	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("EnabledRoutes() = %v, want %v — both routes must survive", got, want)
 	}
 }
 
@@ -105,8 +141,10 @@ model_list: [{model_name: m, provider: p}]`,
 			wantMsg: "model_list must not be empty",
 		},
 		{
-			// Routing would depend on file order, which no reader expects.
-			name: "duplicate model_name",
+			// The same PAIR twice: routing would depend on file order, which no
+			// reader expects. The same model under two providers is legal and
+			// covered by TestLoadModelConfigAllowsOneModelOnManyProviders.
+			name: "duplicate model_name on one provider",
 			body: `
 version: 1
 providers: [{name: p, type: vertex, project_env: GOOGLE_CLOUD_PROJECT}]

@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"strings"
+	"sort"
 	"sync"
 )
 
@@ -56,14 +56,38 @@ func (e *UpstreamError) Error() string {
 // --- Registry ---
 
 var (
-	mu        sync.RWMutex
-	registry  = map[string]Provider{}
-	modelRule []rule
+	mu       sync.RWMutex
+	registry = map[string]Provider{}
+	// allowed (provider, model) pairs. The value is empty — this is a set, and
+	// the provider name is already the registry key, so nothing else is needed.
+	routes = map[Route]struct{}{}
 )
 
-type rule struct {
-	prefix   string
-	provider string
+// Route is one entry of the allowlist: a model, and the upstream serving it.
+//
+// A pair rather than a single string because one model can be served by several
+// upstreams, so the model alone does not identify a route. Comparable, so it is
+// usable as a map key directly — no separator to escape, and no ambiguity when a
+// vendor puts a slash in the model name itself ("openai/gpt-4o-mini").
+type Route struct {
+	Provider string
+	Model    string
+}
+
+func (r Route) String() string { return r.Provider + "/" + r.Model }
+
+// UnknownModelError reports a (provider, model) pair the allowlist does not
+// carry.
+//
+// A named type so the caller can tell a client mistake — asking for a pair the
+// operator never enabled, which deserves a 400 — from an internal wiring failure,
+// which does not.
+type UnknownModelError struct {
+	Route Route
+}
+
+func (e *UnknownModelError) Error() string {
+	return fmt.Sprintf("model %q is not enabled on provider %q", e.Route.Model, e.Route.Provider)
 }
 
 // Register adds a provider under its Name. Called from adapter constructors at
@@ -77,40 +101,60 @@ func Register(p Provider) {
 	registry[p.Name()] = p
 }
 
-// RouteModel maps a model-name prefix to a provider name, e.g. "gemini-" →
-// "vertex". Longer prefixes are matched first so specific rules beat general
-// ones regardless of registration order.
-func RouteModel(prefix, providerName string) {
+// SetRoutes replaces the allowlist wholesale.
+//
+// One atomic swap rather than an append-per-entry, so resolution never depends
+// on the order rules were added and a reload cannot leave a half-applied table.
+func SetRoutes(allowed []Route) {
 	mu.Lock()
 	defer mu.Unlock()
-	modelRule = append(modelRule, rule{prefix: prefix, provider: providerName})
-	for i := len(modelRule) - 1; i > 0; i-- {
-		if len(modelRule[i].prefix) > len(modelRule[i-1].prefix) {
-			modelRule[i], modelRule[i-1] = modelRule[i-1], modelRule[i]
-			continue
-		}
-		break
+	routes = make(map[Route]struct{}, len(allowed))
+	for _, r := range allowed {
+		routes[r] = struct{}{}
 	}
 }
 
-// For resolves the provider that should serve a model. It tries the routing
-// rules first, then falls back to fallbackName (the configured default) so an
-// unrecognized-but-valid model still reaches a provider rather than 400-ing.
-func For(model, fallbackName string) (Provider, error) {
+// For resolves the adapter serving one route. Exact match only: there is no
+// prefix matching and no fallback.
+//
+// An allowlist whose entries are prefixes is not an allowlist, and a fallback
+// would serve a model the operator never enabled — which is exactly the request
+// the allowlist exists to refuse. Both halves are checked together: a provider
+// that serves gemini-2.5-flash does not thereby serve every model, so matching
+// on the provider alone would grant more than the operator wrote.
+func For(route Route) (Provider, error) {
 	mu.RLock()
 	defer mu.RUnlock()
 
-	for _, r := range modelRule {
-		if strings.HasPrefix(model, r.prefix) {
-			if p, ok := registry[r.provider]; ok {
-				return p, nil
-			}
-		}
+	if _, ok := routes[route]; !ok {
+		return nil, &UnknownModelError{Route: route}
 	}
-	if p, ok := registry[fallbackName]; ok {
-		return p, nil
+	p, ok := registry[route.Provider]
+	if !ok {
+		// An allowed route naming a provider that was never registered is a loader
+		// bug, not a bad request, so deliberately NOT an UnknownModelError.
+		return nil, fmt.Errorf("route %s names provider %q, which is not registered",
+			route, route.Provider)
 	}
-	return nil, fmt.Errorf("no provider for model %q", model)
+	return p, nil
+}
+
+// EnabledRoutes lists every allowed route as "provider/model", sorted.
+//
+// Sorted because this is quoted back in the 400 body for an unknown model, and a
+// map's iteration order would make that response differ between identical calls.
+// Rendered as one string per route so the caller can join them for a message
+// without knowing the pair's shape.
+func EnabledRoutes() []string {
+	mu.RLock()
+	defer mu.RUnlock()
+
+	out := make([]string, 0, len(routes))
+	for r := range routes {
+		out = append(out, r.String())
+	}
+	sort.Strings(out)
+	return out
 }
 
 // Reset clears the registry. Tests only.
@@ -118,5 +162,5 @@ func Reset() {
 	mu.Lock()
 	defer mu.Unlock()
 	registry = map[string]Provider{}
-	modelRule = nil
+	routes = map[Route]struct{}{}
 }

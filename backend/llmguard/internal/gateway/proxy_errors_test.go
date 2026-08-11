@@ -45,9 +45,10 @@ func TestRequestValidation(t *testing.T) {
 			wantMsg:  "field 'model' is required",
 		},
 		{
-			name:     "empty messages",
-			method:   http.MethodPost,
-			body:     `{"model":"gemini-2.5-flash","messages":[]}`,
+			name:   "empty messages",
+			method: http.MethodPost,
+			// provider and model are both set, so messages is the only thing wrong.
+			body:     `{"provider":"mock","model":"gemini-2.5-flash","messages":[]}`,
 			wantCode: http.StatusBadRequest,
 			wantMsg:  "field 'messages' must not be empty",
 		},

@@ -24,7 +24,7 @@ func TestBufferedHappyPath(t *testing.T) {
 		},
 		{
 			name: "system plus multi-turn",
-			body: `{"model":"gemini-2.5-flash","messages":[` +
+			body: `{"provider":"mock","model":"gemini-2.5-flash","messages":[` +
 				`{"role":"system","content":"be terse"},` +
 				`{"role":"user","content":"hi"},` +
 				`{"role":"assistant","content":"hello"},` +

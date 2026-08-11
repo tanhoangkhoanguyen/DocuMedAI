@@ -203,6 +203,39 @@ func TestBuildRequestStreamTravelsInBody(t *testing.T) {
 	}
 }
 
+// TestBuildRequestStripsProvider pins that LLMGuard's own routing field does not
+// reach the upstream.
+//
+// This adapter marshals ChatRequest straight through, so a field added for
+// LLMGuard's benefit ships to the vendor by default. OpenAI rejects a body
+// carrying an unrecognized field, which would turn every request into a 400 —
+// and only against a real upstream, since a permissive mock would accept it.
+func TestBuildRequestStripsProvider(t *testing.T) {
+	t.Parallel()
+
+	p := newCompat(t, "https://api.openai.com/v1", "k")
+	req := &ChatRequest{Provider: "openrouter", Model: "m"}
+
+	httpReq, err := p.BuildRequest(context.Background(), req)
+	if err != nil {
+		t.Fatalf("BuildRequest: %v", err)
+	}
+	body, err := io.ReadAll(httpReq.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if bytes.Contains(body, []byte(`"provider"`)) {
+		t.Errorf("provider leaked to the upstream body: %s", body)
+	}
+
+	// The caller's request must be untouched: the retry loop reuses this struct
+	// across attempts, so stripping in place would blank the field that resolved
+	// the adapter and make attempt 2 differ from attempt 1.
+	if req.Provider != "openrouter" {
+		t.Errorf("req.Provider = %q, want it left intact for the retry loop", req.Provider)
+	}
+}
+
 // --- TranslateResponse ---
 
 // TestTranslateResponsePassesThroughIDAndCreated pins the difference from Vertex.
