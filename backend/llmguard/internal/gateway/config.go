@@ -12,16 +12,19 @@ import (
 // on the `la-llmguard` service. Defaults are chosen so it boots with
 // nothing but OPENAI_API_KEY set.
 type Config struct {
-	// Provider selects the default adapter for models that match no routing
-	// rule. Read from LLMGUARD_PROVIDER.
-	Provider string
-
 	// VertexProject / VertexLocation configure the Vertex AI adapter. These are
 	// the SAME env vars the Python backend reads (backend/utils/llm_config.py),
 	// so one .env configures both. Auth is Application Default Credentials —
 	// there is no API key: Vertex will not accept one.
 	VertexProject  string
 	VertexLocation string
+
+	// ModelConfigPath points at the YAML model allowlist (see modelconfig.go).
+	// Read from LLMGUARD_CONFIG.
+	//
+	// Required: the allowlist is the only authority over which models are
+	// callable, so main exits when it is missing or invalid.
+	ModelConfigPath string
 
 	// Port the proxy listens on (matches docker-compose + the client base_url).
 	Port string
@@ -31,8 +34,8 @@ type Config struct {
 	RedisURL string
 
 	// --- Rate limiting (token bucket, per API key + model) ---
-	RateLimitRPM   int // sustained requests/min that refill the bucket
-	RateLimitBurst int // max tokens the bucket can hold (allows short bursts)
+	RateLimitRPM   int           // sustained requests/min that refill the bucket
+	RateLimitBurst int           // max tokens the bucket can hold (allows short bursts)
 	RateWaitMax    time.Duration // how long a request blocks for a token before we 429
 
 	// --- Retry / backoff ---
@@ -41,9 +44,9 @@ type Config struct {
 	RetryMaxDly  time.Duration // cap on a single backoff sleep
 
 	// --- Circuit breaker ---
-	CircuitMinReqs    uint32        // min requests in a window before the breaker may trip
-	CircuitFailRatio  float64       // fraction of failures that trips the breaker
-	CircuitOpenFor    time.Duration // how long the breaker stays open before half-open probe
+	CircuitMinReqs   uint32        // min requests in a window before the breaker may trip
+	CircuitFailRatio float64       // fraction of failures that trips the breaker
+	CircuitOpenFor   time.Duration // how long the breaker stays open before half-open probe
 
 	// --- Upstream HTTP client ---
 	UpstreamTimeout time.Duration // per-attempt timeout to upstream
@@ -53,13 +56,13 @@ type Config struct {
 // loadConfig reads the environment and applies sensible production defaults.
 func loadConfig() Config {
 	return Config{
-		Provider:       getenv("LLMGUARD_PROVIDER", "vertex"),
-		VertexProject:  os.Getenv("GOOGLE_CLOUD_PROJECT"),
-		VertexLocation: getenv("GOOGLE_CLOUD_LOCATION", "us-central1"),
-		Port:           getenv("PROXY_PORT", "8081"),
-		RedisURL:       getenv("REDIS_URL", "redis://la-redis:6379/1"),
+		VertexProject:   os.Getenv("GOOGLE_CLOUD_PROJECT"),
+		VertexLocation:  getenv("GOOGLE_CLOUD_LOCATION", "us-central1"),
+		ModelConfigPath: getenv("LLMGUARD_CONFIG", "config.yaml"),
+		Port:            getenv("PROXY_PORT", "8081"),
+		RedisURL:        getenv("REDIS_URL", "redis://la-redis:6379/1"),
 
-		RateLimitRPM:   getenvInt("RATE_LIMIT_RPM", 480),                // 8 req/s sustained
+		RateLimitRPM:   getenvInt("RATE_LIMIT_RPM", 480), // 8 req/s sustained
 		RateLimitBurst: getenvInt("RATE_LIMIT_BURST", 60),
 		RateWaitMax:    getenvDur("RATE_WAIT_MAX", 5*time.Second),
 

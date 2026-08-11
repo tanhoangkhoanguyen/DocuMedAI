@@ -56,7 +56,9 @@ func isUpstreamErr(err error) bool {
 // own latency.
 func newBreaker(cfg Config, m *Metrics) *gobreaker.CircuitBreaker {
 	return gobreaker.NewCircuitBreaker(gobreaker.Settings{
-		Name:    cfg.Provider + "-upstream",
+		// One breaker shared across providers today; per-provider isolation is a
+		// separate change, since it also has to split the circuit_state gauge.
+		Name:    "upstream",
 		Timeout: cfg.CircuitOpenFor, // how long to stay open before half-open probe
 		ReadyToTrip: func(c gobreaker.Counts) bool {
 			if c.Requests < cfg.CircuitMinReqs {

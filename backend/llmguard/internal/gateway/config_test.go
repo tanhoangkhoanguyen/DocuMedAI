@@ -21,12 +21,13 @@ import (
 // the retry / breaker / rate-limit / upstream-client knobs the characterization
 // tests assert thresholds against.
 //
-// The four fields realDefaults() omits are excluded on purpose, because the
+// The fields realDefaults() omits are excluded on purpose, because the
 // harness has no server and no Redis to configure:
 //
-//	Provider       - the harness registers an adapter named "mock", not "vertex"
 //	VertexProject  - no credentials; the mock provider builds its own URL
 //	VertexLocation - same
+//	ModelConfigPath - the harness registers its adapter and routes directly,
+//	                  so there is no YAML file to point at
 //	Port           - the harness drives ServeHTTP directly, it never listens
 //	RedisURL       - offlineLimiter() points at a dead address on purpose
 var resilienceFields = []string{
@@ -87,7 +88,7 @@ func TestRealDefaultsMatchLoadConfig(t *testing.T) {
 func TestResilienceFieldsCoversConfig(t *testing.T) {
 	// Fields the harness intentionally does not mirror; see resilienceFields.
 	skipped := map[string]bool{
-		"Provider": true, "VertexProject": true, "VertexLocation": true,
+		"VertexProject": true, "VertexLocation": true, "ModelConfigPath": true,
 		"Port": true, "RedisURL": true,
 	}
 
