@@ -53,7 +53,7 @@ func TestEndpointHonorsRegion(t *testing.T) {
 }
 
 func TestNewVertexRequiresProject(t *testing.T) {
-	if _, err := NewVertex(context.Background(), "", "us-central1"); err == nil {
+	if _, err := NewVertex(context.Background(), "vertex-prod", "", "us-central1"); err == nil {
 		t.Fatal("expected an error when GOOGLE_CLOUD_PROJECT is empty")
 	}
 }

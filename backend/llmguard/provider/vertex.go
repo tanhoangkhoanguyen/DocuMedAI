@@ -18,6 +18,9 @@ import (
 // VertexScope is the OAuth2 scope every Vertex AI call needs.
 const VertexScope = "https://www.googleapis.com/auth/cloud-platform"
 
+// defaultVertexName is the registry key used when config.yaml names no provider.
+const defaultVertexName = "vertex"
+
 // Vertex adapts Google Vertex AI's generateContent API.
 //
 // Three things differ from an OpenAI-compatible upstream, and all three are why
@@ -27,6 +30,7 @@ const VertexScope = "https://www.googleapis.com/auth/cloud-platform"
 //   - auth is a short-lived OAuth2 access token from ADC, not a static key;
 //   - the wire format is contents/parts, not messages/choices.
 type Vertex struct {
+	name     string
 	project  string
 	location string
 	tokens   oauth2.TokenSource
@@ -83,11 +87,18 @@ func randomID() string {
 // NewVertex builds the adapter and resolves Application Default Credentials.
 // It fails fast: a process that cannot mint a token should not accept traffic.
 //
+// name is the registry key from config.yaml, as in NewOpenAICompat: the registry
+// keys on Name(), so a constant would make every entry named anything else
+// unroutable and panic Register on a second instance. Empty defaults to "vertex".
+//
 // ADC resolution order is the standard one — GOOGLE_APPLICATION_CREDENTIALS, then
 // gcloud user credentials, then the attached service account / workload identity.
-func NewVertex(ctx context.Context, project, location string) (*Vertex, error) {
+func NewVertex(ctx context.Context, name, project, location string) (*Vertex, error) {
 	if project == "" {
 		return nil, fmt.Errorf("vertex: GOOGLE_CLOUD_PROJECT is required")
+	}
+	if name == "" {
+		name = defaultVertexName
 	}
 	if location == "" {
 		location = "us-central1"
@@ -97,6 +108,7 @@ func NewVertex(ctx context.Context, project, location string) (*Vertex, error) {
 		return nil, fmt.Errorf("vertex: resolve ADC: %w", err)
 	}
 	return &Vertex{
+		name:     name,
 		project:  project,
 		location: location,
 		// ReuseTokenSource caches the token and refreshes it only once it is
@@ -110,10 +122,10 @@ func newVertexWithTokens(project, location string, ts oauth2.TokenSource) *Verte
 	if location == "" {
 		location = "us-central1"
 	}
-	return &Vertex{project: project, location: location, tokens: ts}
+	return &Vertex{name: defaultVertexName, project: project, location: location, tokens: ts}
 }
 
-func (v *Vertex) Name() string { return "vertex" }
+func (v *Vertex) Name() string { return v.name }
 
 // endpoint builds the fully-qualified Vertex URL for a model.
 func (v *Vertex) endpoint(model string, stream bool) string {

@@ -77,7 +77,7 @@ func buildAdapter(ctx context.Context, cfg Config, pc ProviderConfig) (provider.
 		if project == "" {
 			project = cfg.VertexProject
 		}
-		return provider.NewVertex(ctx, project, pc.Location)
+		return provider.NewVertex(ctx, pc.Name, project, pc.Location)
 
 	case providerTypeOpenAICompat:
 		// The secret is read here and handed straight to the adapter; it is never
