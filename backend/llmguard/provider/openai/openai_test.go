@@ -1,4 +1,4 @@
-package provider
+package openai
 
 import (
 	"bufio"
@@ -12,31 +12,28 @@ import (
 	"testing"
 
 	"documedai/llmguard/mockupstream"
+	"documedai/llmguard/provider"
 )
-
-// Compile-time proof the adapter satisfies the interface. Placed here rather
-// than in the source file so the adapter reads like vertex.go.
-var _ Provider = (*OpenAICompat)(nil)
 
 // newCompat builds an adapter or fails the test. Every case needs one, and a
 // constructor error is never the thing under test.
-func newCompat(t *testing.T, baseURL, apiKey string) *OpenAICompat {
+func newCompat(t *testing.T, baseURL, apiKey string) *Client {
 	t.Helper()
-	p, err := NewOpenAICompat("openai-compat", baseURL, apiKey)
+	p, err := New("openai-compat", baseURL, apiKey)
 	if err != nil {
-		t.Fatalf("NewOpenAICompat(%q): %v", baseURL, err)
+		t.Fatalf("New(%q): %v", baseURL, err)
 	}
 	return p
 }
 
-// wantUpstreamError asserts err is an *UpstreamError and returns it.
+// wantUpstreamError asserts err is an *provider.UpstreamError and returns it.
 //
 // It uses errors.As rather than a type assertion because that is how retry.go
 // and proxy.go actually inspect this error — a wrapped error would pass here and
 // fail there if the test asserted on the concrete type.
-func wantUpstreamError(t *testing.T, err error) *UpstreamError {
+func wantUpstreamError(t *testing.T, err error) *provider.UpstreamError {
 	t.Helper()
-	var ue *UpstreamError
+	var ue *provider.UpstreamError
 	if !errors.As(err, &ue) {
 		t.Fatalf("error = %T (%v), want *UpstreamError", err, err)
 	}
@@ -45,7 +42,7 @@ func wantUpstreamError(t *testing.T, err error) *UpstreamError {
 
 // --- construction ---
 
-func TestNewOpenAICompat(t *testing.T) {
+func TestNew(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -64,7 +61,7 @@ func TestNewOpenAICompat(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			p, err := NewOpenAICompat(tc.provName, tc.baseURL, "k")
+			p, err := New(tc.provName, tc.baseURL, "k")
 			if tc.wantErr {
 				if err == nil {
 					t.Fatal("expected an error")
@@ -72,7 +69,7 @@ func TestNewOpenAICompat(t *testing.T) {
 				return
 			}
 			if err != nil {
-				t.Fatalf("NewOpenAICompat: %v", err)
+				t.Fatalf("New: %v", err)
 			}
 			if p.Name() != tc.wantName {
 				t.Errorf("Name() = %q, want %q", p.Name(), tc.wantName)
@@ -128,7 +125,7 @@ func TestBuildRequestEndpoint(t *testing.T) {
 			t.Parallel()
 
 			p := newCompat(t, tc.baseURL, "k")
-			req, err := p.BuildRequest(context.Background(), &ChatRequest{Model: "m"})
+			req, err := p.BuildRequest(context.Background(), &provider.ChatRequest{Model: "m"})
 			if err != nil {
 				t.Fatalf("BuildRequest: %v", err)
 			}
@@ -161,7 +158,7 @@ func TestBuildRequestHeaders(t *testing.T) {
 			t.Parallel()
 
 			p := newCompat(t, "https://api.openai.com/v1", tc.apiKey)
-			req, err := p.BuildRequest(context.Background(), &ChatRequest{Model: "m"})
+			req, err := p.BuildRequest(context.Background(), &provider.ChatRequest{Model: "m"})
 			if err != nil {
 				t.Fatalf("BuildRequest: %v", err)
 			}
@@ -187,7 +184,7 @@ func TestBuildRequestStreamTravelsInBody(t *testing.T) {
 	t.Parallel()
 
 	p := newCompat(t, "https://api.openai.com/v1", "k")
-	req, err := p.BuildRequest(context.Background(), &ChatRequest{Model: "m", Stream: true})
+	req, err := p.BuildRequest(context.Background(), &provider.ChatRequest{Model: "m", Stream: true})
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
@@ -206,7 +203,7 @@ func TestBuildRequestStreamTravelsInBody(t *testing.T) {
 // TestBuildRequestStripsProvider pins that LLMGuard's own routing field does not
 // reach the upstream.
 //
-// This adapter marshals ChatRequest straight through, so a field added for
+// This adapter marshals provider.ChatRequest straight through, so a field added for
 // LLMGuard's benefit ships to the vendor by default. OpenAI rejects a body
 // carrying an unrecognized field, which would turn every request into a 400 —
 // and only against a real upstream, since a permissive mock would accept it.
@@ -214,7 +211,7 @@ func TestBuildRequestStripsProvider(t *testing.T) {
 	t.Parallel()
 
 	p := newCompat(t, "https://api.openai.com/v1", "k")
-	req := &ChatRequest{Provider: "openrouter", Model: "m"}
+	req := &provider.ChatRequest{Provider: "openrouter", Model: "m"}
 
 	httpReq, err := p.BuildRequest(context.Background(), req)
 	if err != nil {
@@ -243,7 +240,7 @@ func TestBuildRequestStripsProvider(t *testing.T) {
 // generateContent sends neither field, so the Vertex adapter ships them empty —
 // a pinned quirk. Here they are real upstream values, and OpenAI clients key off
 // the response id, so dropping them would break callers rather than merely look
-// different. The rest of ChatResponse is plain json.Unmarshal and is not asserted.
+// different. The rest of provider.ChatResponse is plain json.Unmarshal and is not asserted.
 func TestTranslateResponsePassesThroughIDAndCreated(t *testing.T) {
 	t.Parallel()
 
@@ -288,9 +285,9 @@ func TestTranslateResponseMalformedSuccessBody(t *testing.T) {
 	}
 }
 
-// TestTranslateResponseErrors covers the two branches openAICompatErrorEnvelope
+// TestTranslateResponseErrors covers the two branches errorEnvelope
 // owns. Status→type classification is NOT retested here: that is the shared
-// errorType(), already pinned by TestErrorTypeMapping in vertex_test.go.
+// ErrorType(), already pinned by TestErrorTypeMapping in provider_test.go.
 func TestTranslateResponseErrors(t *testing.T) {
 	t.Parallel()
 
@@ -302,7 +299,7 @@ func TestTranslateResponseErrors(t *testing.T) {
 		wantMsgPart string
 	}{
 		{
-			// The vendor's own type must NOT be overwritten by errorType(status),
+			// The vendor's own type must NOT be overwritten by ErrorType(status),
 			// which would flatten "rate_limit_exceeded" into "rate_limit".
 			name:        "vendor type survives",
 			status:      http.StatusTooManyRequests,
@@ -372,7 +369,7 @@ func TestTranslateStreamChunkSkips(t *testing.T) {
 			t.Parallel()
 
 			p := newCompat(t, "https://api.openai.com/v1", "k")
-			chunks, err := p.TranslateStreamChunk(&ChatRequest{Model: "m"}, []byte(tc.raw))
+			chunks, err := p.TranslateStreamChunk(&provider.ChatRequest{Model: "m"}, []byte(tc.raw))
 			if err != nil {
 				t.Fatalf("TranslateStreamChunk(%q): %v", tc.raw, err)
 			}
@@ -391,7 +388,7 @@ func TestTranslateStreamChunkFillsDefaults(t *testing.T) {
 
 	p := newCompat(t, "https://api.openai.com/v1", "k")
 	chunks, err := p.TranslateStreamChunk(
-		&ChatRequest{Model: "gpt-4o-mini"},
+		&provider.ChatRequest{Model: "gpt-4o-mini"},
 		[]byte(`{"choices":[{"index":0,"delta":{"content":"x"}}]}`))
 	if err != nil {
 		t.Fatalf("TranslateStreamChunk: %v", err)
@@ -411,7 +408,7 @@ func TestTranslateStreamChunkMalformed(t *testing.T) {
 	t.Parallel()
 
 	p := newCompat(t, "https://api.openai.com/v1", "k")
-	if _, err := p.TranslateStreamChunk(&ChatRequest{Model: "m"}, []byte("{not json")); err == nil {
+	if _, err := p.TranslateStreamChunk(&provider.ChatRequest{Model: "m"}, []byte("{not json")); err == nil {
 		t.Fatal("expected a decode error")
 	}
 }
@@ -430,7 +427,7 @@ func startMock(t *testing.T, cfg mockupstream.Config) *httptest.Server {
 
 // roundTrip drives one request through the adapter and the mock, returning the
 // raw upstream response for the caller to translate.
-func roundTrip(t *testing.T, srv *httptest.Server, p *OpenAICompat, req *ChatRequest) *http.Response {
+func roundTrip(t *testing.T, srv *httptest.Server, p *Client, req *provider.ChatRequest) *http.Response {
 	t.Helper()
 
 	httpReq, err := p.BuildRequest(context.Background(), req)
@@ -452,9 +449,9 @@ func TestRoundTripBuffered(t *testing.T) {
 	srv := startMock(t, cfg)
 	p := newCompat(t, srv.URL+"/v1", "sk-test")
 
-	resp := roundTrip(t, srv, p, &ChatRequest{
+	resp := roundTrip(t, srv, p, &provider.ChatRequest{
 		Model:    "gpt-4o-mini",
-		Messages: []Message{{Role: "user", Content: "hello there, mock upstream"}},
+		Messages: []provider.Message{{Role: "user", Content: "hello there, mock upstream"}},
 	})
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -500,9 +497,9 @@ func TestRoundTripStreaming(t *testing.T) {
 	srv := startMock(t, cfg)
 	p := newCompat(t, srv.URL+"/v1", "sk-test")
 
-	req := &ChatRequest{
+	req := &provider.ChatRequest{
 		Model:    "gpt-4o-mini",
-		Messages: []Message{{Role: "user", Content: "stream to me"}},
+		Messages: []provider.Message{{Role: "user", Content: "stream to me"}},
 		Stream:   true,
 	}
 	resp := roundTrip(t, srv, p, req)
@@ -571,9 +568,9 @@ func TestRoundTripUpstreamFailure(t *testing.T) {
 	srv := startMock(t, cfg)
 	p := newCompat(t, srv.URL+"/v1", "sk-test")
 
-	resp := roundTrip(t, srv, p, &ChatRequest{
+	resp := roundTrip(t, srv, p, &provider.ChatRequest{
 		Model:    "gpt-4o-mini",
-		Messages: []Message{{Role: "user", Content: "hi"}},
+		Messages: []provider.Message{{Role: "user", Content: "hi"}},
 	})
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {

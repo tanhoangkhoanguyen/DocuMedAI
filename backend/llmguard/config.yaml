@@ -14,15 +14,24 @@
 version: 1
 
 # --- Upstreams ---------------------------------------------------------------
-# Each entry is one upstream instance. `name` is yours to choose: it is what
-# clients send as `provider`, and the key for that upstream's metrics label and
-# its own circuit breaker. Two instances of one type can coexist under different
-# names (two openai-compat endpoints, say).
+# Each entry is one upstream INSTANCE, and the two fields do different jobs:
+#
+#   type  selects the adapter — vertex | openai-compat. A fixed set; it decides
+#         the URL shape, the auth scheme and the wire format, so there is no
+#         default and omitting it is a startup error rather than a guess.
+#   name  is yours to choose. It is what clients send as `provider`, and the key
+#         for this upstream's metrics label and its own circuit breaker.
+#
+# Because name is per-instance, two upstreams of ONE type coexist under different
+# names — `vertex-us` and `vertex-eu` on separate regions, or two openai-compat
+# endpoints. Give an instance a distinguishing name only when you have something
+# to distinguish it from; a lone Vertex upstream is just "vertex".
 providers:
-  - name: vertex-prod
+  - name: vertex
     type: vertex
     # The NAME of the env var holding the GCP project — not the project itself.
-    # Vertex authenticates with Application Default Credentials and takes no key.
+    # Vertex authenticates with Application Default Credentials and takes no key;
+    # see the README's auth table for the three ways ADC resolves.
     project_env: GOOGLE_CLOUD_PROJECT
     location: us-central1
 
@@ -42,7 +51,7 @@ providers:
 # --- Allowed models ----------------------------------------------------------
 # Access is granted per (provider, model) PAIR, because a client names both:
 #
-#   {"provider": "vertex-prod", "model": "gemini-2.5-flash", "messages": [...]}
+#   {"provider": "vertex", "model": "gemini-2.5-flash", "messages": [...]}
 #
 # So enabling a model on one upstream does not enable it on another. The same
 # model listed under two providers is two independent routes — that is the point
@@ -54,7 +63,7 @@ providers:
 # reason to refuse traffic.
 model_list:
   - model_name: gemini-2.5-flash
-    provider: vertex-prod
+    provider: vertex
     pricing:
       input_per_1k: 0.000075
       output_per_1k: 0.0003

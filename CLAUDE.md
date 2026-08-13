@@ -17,7 +17,7 @@ DocuMedAI is a full-stack AI-powered medical document analysis system. Users upl
 | Agent workflow | LangGraph StateGraph | `backend/services/chatbot/` |
 | Multi-agent | CrewAI | `nodes.py` — Agents node |
 | RAG pipeline | Qdrant retrieval + BAAI reranker | `backend/services/chatbot/tools/rag.py` |
-| LLMGuard | Go gateway (rate limit, retry, circuit breaker, dedup); OpenAI-compatible API → provider adapter → Vertex AI. Standalone; not in the app's request path | `backend/llmguard/` |
+| LLMGuard | Go gateway (rate limit, retry, circuit breaker, dedup); OpenAI-compatible API → provider adapter (`openai` generic / `vertex` native) → upstream. Standalone; not in the app's request path | `backend/llmguard/` |
 | Memory cache | Redis (TTL 1800s → flush to MongoDB) | `backend/services/utils/redis_client.py` |
 | Persistence | MongoDB | `backend/services/utils/mongo_client.py` |
 | Auth | JWT + Supabase SSR | `backend/services/app/auth_api.py`, `frontend/lib/supabase/` |
@@ -50,7 +50,34 @@ the shared `services.app.auth_deps.decode_bearer_any` (local HS256 + Supabase) a
 `Principal(source="mcp")` for the request scope. Absent token → anonymous (the two unscoped
 tools still work); invalid token → HTTP 401 before any tool runs.
 
-**LLMGuard**: A standalone Go gateway (port 8081) that exposes an OpenAI-compatible `/v1/chat/completions` and translates it to Vertex AI's native `generateContent` via a provider adapter (`backend/llmguard/provider/`). It is **not currently in the request path** — `backend/services/` calls Vertex directly with `ChatVertexAI(project=…, location=…)` (`backend/utils/llm_config.py`), and `crewai.LLM` reaches Vertex through litellm's `vertex_ai/` prefix. Embeddings and the reranker run locally. Both LLMGuard and the app read the same `GOOGLE_CLOUD_PROJECT` / `GOOGLE_CLOUD_LOCATION` vars and authenticate via ADC. See `backend/llmguard/README.md`.
+**LLMGuard**: A standalone Go gateway (port 8081) that exposes an OpenAI-compatible `/v1/chat/completions` and translates it to a vendor's native API via a provider adapter. It is **not currently in the request path** — `backend/services/` calls Vertex directly with `ChatVertexAI(project=…, location=…)` (`backend/utils/llm_config.py`), and `crewai.LLM` reaches Vertex through litellm's `vertex_ai/` prefix. Embeddings and the reranker run locally. Both LLMGuard and the app read the same `GOOGLE_CLOUD_PROJECT` / `GOOGLE_CLOUD_LOCATION` vars and authenticate via ADC. See `backend/llmguard/README.md`.
+
+**LLMGuard providers, two tiers — read this before adding a vendor.** `provider/`
+holds only what every adapter shares (the `Provider` interface, the registry, the
+normalized schema in `schema.go`, the error vocabulary in `errors.go`). Each vendor's
+translation lives in its own package, and there are exactly two because they are not
+peers:
+
+- **`provider/openai/`** — the **generic** adapter (`openai.New`, `openai.Client`).
+  Serves *every* upstream that already speaks OpenAI's `/chat/completions`: OpenAI,
+  OpenRouter, Groq, Together, DeepSeek, vLLM, and Gemini's own compat endpoint. Adding
+  one of those is **four lines of `config.yaml` and no Go code** — N vendors do not mean
+  N files. This is the default path.
+- **`provider/vertex/`** — a **native** adapter (`vertex.New`, `vertex.Client`), the
+  exception. Justified only because Vertex breaks the format three ways: region in the
+  hostname + model in the path (no single base URL), short-lived OAuth2/ADC token
+  instead of a static key, and `contents/parts` instead of `messages/choices`.
+
+`config.yaml`'s `type:` (`vertex` | `openai-compat`) picks the adapter and has **no
+default** — omitting it is a startup error, because it decides URL shape, auth and wire
+format. `name:` is operator-chosen and is the registry key, the metrics label and the
+per-provider circuit-breaker key; it defaults to the type's own name when blank. The
+registry keys on `Provider.Name()`, so an adapter constructor **must** take that
+configured name — a hardcoded constant makes every differently-named entry unroutable
+and panics `Register` on a second instance (the bug fixed in `5c9f5f6`, pinned by
+`TestRegisterRejectsDuplicateName`). Vertex auth is ADC only: the same binary reads a
+JSON key file locally via `GOOGLE_APPLICATION_CREDENTIALS` and the attached service
+account on GCP, with no code change and no `credentials_file` config field.
 
 ## Common Commands
 
@@ -154,6 +181,16 @@ the determinism the Phase 6 benchmark depends on. Two rules matter when editing 
   let a refactor silently change actual behavior.
 - Thresholds come from the real `loadConfig()` defaults (`RetryMax=4`, `CircuitMinReqs=10`,
   `CircuitFailRatio=0.6`, `RateLimitBurst=60`). Only the retry *delay* knobs are shortened.
+
+Under `provider/`, tests follow the package split: `provider_test.go` covers the registry
+(using a local `stubProvider` — the real adapters live in child packages that import the
+parent, so using one there would be a circular import) and `schema_test.go` pins the
+normalized wire shape. `provider/vertex/` owns the **golden fixtures** in `testdata/`,
+compared byte-for-byte with deliberately **no `-update` flag** — a regenerable golden turns
+"the bytes changed" into one command that re-blesses whatever the code now does. Edit a
+fixture by hand and justify it in review. `.gitattributes` pins
+`backend/llmguard/provider/vertex/testdata/**` to LF; **move that path if the fixtures ever
+move**, or a Windows checkout rewrites them to CRLF and the golden tests break.
 
 Failure modes are driven through `mockupstream`'s knobs (error rate, status, latency, outage
 window) over a real loopback socket rather than hand-written responses. `mockupstream` is a

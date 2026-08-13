@@ -50,6 +50,7 @@ import (
 
 	"documedai/llmguard/mockupstream"
 	"documedai/llmguard/provider"
+	"documedai/llmguard/provider/vertex"
 )
 
 // mockUpstream is a mockupstream instance on a loopback server, plus a counter
@@ -202,7 +203,7 @@ func newHarnessWithHandler(
 	// The provider registry is global; keep tests serial and reset around each.
 	provider.Reset()
 	t.Cleanup(provider.Reset)
-	provider.Register(&mockProvider{base: up.server.URL, inner: &provider.Vertex{}})
+	provider.Register(&mockProvider{base: up.server.URL, inner: &vertex.Client{}})
 	// Routing is allowlist-only now, so the harness must enable the route its
 	// tests call. Without this every request 400s before reaching the pipeline.
 	provider.SetRoutes([]provider.Route{{Provider: "mock", Model: "gemini-2.5-flash"}})

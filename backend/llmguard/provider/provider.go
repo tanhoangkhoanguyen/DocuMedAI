@@ -32,27 +32,6 @@ type Provider interface {
 	TranslateStreamChunk(req *ChatRequest, raw []byte) ([]StreamChunk, error)
 }
 
-// UpstreamError is a non-2xx response from a provider. Core inspects Status to
-// decide whether to retry, and passes Body through to the caller.
-type UpstreamError struct {
-	Status int
-	Body   ErrorEnvelope
-
-	// RetryAfter is the vendor's Retry-After header, verbatim, when it sent
-	// one. It rides on the error because that is the only thing that survives
-	// the breaker and deduper on the failure path — the *upstreamResult holding
-	// the response headers is discarded there. Core forwards it to the client
-	// so a caller can honor the provider's pacing instead of guessing.
-	//
-	// Empty when absent. Not parsed here: core needs the raw value to pass on,
-	// and both RFC 9110 forms (delta-seconds and HTTP-date) are valid to echo.
-	RetryAfter string
-}
-
-func (e *UpstreamError) Error() string {
-	return fmt.Sprintf("upstream %d: %s", e.Status, e.Body.Error.Message)
-}
-
 // --- Registry ---
 
 var (
