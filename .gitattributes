@@ -5,4 +5,4 @@
 # Golden fixtures are compared byte-for-byte. core.autocrlf would rewrite them on
 # a Windows checkout, so pin LF: the test normalizes newlines when reading, but
 # only this stops a CRLF fixture from being committed and confusing the next reader.
-backend/llmguard/provider/testdata/** text eol=lf
+backend/llmguard/provider/vertex/testdata/** text eol=lf

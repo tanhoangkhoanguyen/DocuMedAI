@@ -14,6 +14,7 @@ import (
 	"documedai/llmguard/internal/testutil"
 	"documedai/llmguard/mockupstream"
 	"documedai/llmguard/provider"
+	"documedai/llmguard/provider/vertex"
 )
 
 // Pins CircuitMinReqs=10 and CircuitFailRatio=0.6. The breaker wraps the WHOLE
@@ -251,7 +252,7 @@ func TestCircuitBreakerIsolatesProviders(t *testing.T) {
 	// A second upstream that answers normally, behind a second adapter.
 	healthy := newMockUpstream(t, mockupstream.DefaultConfig())
 	provider.Register(&healthyProvider{mockProvider: &mockProvider{
-		base: healthy.server.URL, inner: &provider.Vertex{},
+		base: healthy.server.URL, inner: &vertex.Client{},
 	}})
 	provider.SetRoutes([]provider.Route{
 		{Provider: "mock", Model: "gemini-2.5-flash"},

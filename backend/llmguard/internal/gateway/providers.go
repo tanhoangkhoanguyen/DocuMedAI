@@ -7,6 +7,8 @@ import (
 	"os"
 
 	"documedai/llmguard/provider"
+	"documedai/llmguard/provider/openai"
+	"documedai/llmguard/provider/vertex"
 )
 
 // setupProviders builds one adapter per declared provider, registers it, and
@@ -77,13 +79,13 @@ func buildAdapter(ctx context.Context, cfg Config, pc ProviderConfig) (provider.
 		if project == "" {
 			project = cfg.VertexProject
 		}
-		return provider.NewVertex(ctx, project, pc.Location)
+		return vertex.New(ctx, pc.Name, project, pc.Location)
 
 	case providerTypeOpenAICompat:
 		// The secret is read here and handed straight to the adapter; it is never
 		// stored on ProviderConfig, so nothing that logs or serializes the config
 		// can leak it.
-		return provider.NewOpenAICompat(pc.Name, pc.BaseURL, os.Getenv(pc.APIKeyEnv))
+		return openai.New(pc.Name, pc.BaseURL, os.Getenv(pc.APIKeyEnv))
 
 	default:
 		return nil, fmt.Errorf("unknown type %q", pc.Type)
