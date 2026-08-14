@@ -17,7 +17,7 @@ DocuMedAI is a full-stack AI-powered medical document analysis system. Users upl
 | Agent workflow | LangGraph StateGraph | `backend/services/chatbot/` |
 | Multi-agent | CrewAI | `nodes.py` — Agents node |
 | RAG pipeline | Qdrant retrieval + BAAI reranker | `backend/services/chatbot/tools/rag.py` |
-| LLMGuard | Go gateway (rate limit, retry, circuit breaker, dedup); OpenAI-compatible API → provider adapter (`openai` generic / `vertex` native) → upstream. Standalone; not in the app's request path | `backend/llmguard/` |
+| LLMGuard | Go gateway (admission control, rate limit, retry, circuit breaker, dedup); OpenAI-compatible API → provider adapter (`openai` generic / `vertex` native) → upstream. Standalone; not in the app's request path | `backend/llmguard/` |
 | Memory cache | Redis (TTL 1800s → flush to MongoDB) | `backend/services/utils/redis_client.py` |
 | Persistence | MongoDB | `backend/services/utils/mongo_client.py` |
 | Auth | JWT + Supabase SSR | `backend/services/app/auth_api.py`, `frontend/lib/supabase/` |
@@ -165,7 +165,20 @@ go test -run TestX -count=1 .             # single test, root package only
 make run-mock          # standalone mockupstream on :8090
 ```
 
-The pipeline lives in `internal/gateway/` (config, proxy, retry, dedup, ratelimit, metrics);
+**Self-protection vs upstream-protection.** Retry, the breaker and dedup shield the *upstream* from
+LLMGuard. `admission.go` shields *LLMGuard from its callers*, and it bounds a different quantity than
+the rate limiter: `RATE_LIMIT_RPM` caps arrival **rate**, `MAX_IN_FLIGHT` (256) caps **concurrency**.
+Concurrency is what maps to memory — each in-flight request holds a goroutine, a buffer up to 10 MiB
+and an upstream connection — and the two diverge when upstream slows, because the same admitted RPM
+then yields far more concurrent requests. Acquiring is non-blocking (a queued request still holds what
+the ceiling bounds) and a shed is **429 + `Retry-After`**, not 503, since the upstream is healthy and
+the gateway is full. It sits before the rate limiter (which can block for `RateWaitMax`) and after
+`provider.For` (so a shed request names a real route). `llmguard_shed_total` is separate from
+`llmguard_rate_limited_total`: both are 429s, but one is a caller over quota and the other an operator
+capacity problem.
+
+The pipeline lives in `internal/gateway/` (config, proxy, admission, retry, dedup, ratelimit,
+metrics);
 `main.go` at the module root is a thin composition root, and `internal/gateway/gateway.go` is the
 entire exported surface between them. Everything else in the package stays unexported, and tests
 sit beside the code they exercise so nothing is exported merely to be testable.

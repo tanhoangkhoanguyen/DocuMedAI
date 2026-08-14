@@ -52,8 +52,9 @@ func readUpstreamBody(r io.Reader) ([]byte, error) {
 // and delegates every vendor-specific detail (URL, auth, wire format) to a
 // provider.Provider.
 type Proxy struct {
-	cfg     Config
-	client  *http.Client // shared, keep-alive pooled
+	cfg      Config
+	client   *http.Client // shared, keep-alive pooled
+	admitter *admitter
 	limiter  *RateLimiter
 	deduper  *Deduper
 	breakers *breakerGroup
@@ -73,6 +74,7 @@ func newProxy(cfg Config, limiter *RateLimiter, deduper *Deduper, m *Metrics, lo
 	return &Proxy{
 		cfg:      cfg,
 		client:   &http.Client{Transport: transport, Timeout: cfg.UpstreamTimeout},
+		admitter: newAdmitter(cfg.MaxInFlight, m),
 		limiter:  limiter,
 		deduper:  deduper,
 		breakers: newBreakerGroup(cfg, m),
@@ -156,6 +158,40 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// cfg.Provider. Once routing is config-driven those differ, and labelling with
 	// the configured default would silently attribute traffic to the wrong upstream.
 	provName := prov.Name()
+
+	// --- Admission control (concurrency ceiling) ---
+	//
+	// Ordered BEFORE the rate limiter, which is not the obvious placement. The
+	// limiter can block for up to RateWaitMax waiting for a token, and a request
+	// blocked there already holds a goroutine and this request's buffers — exactly
+	// the resource the semaphore bounds. Admitting first therefore covers the wait
+	// itself; the reverse order would leave an unbounded number of requests
+	// queueing outside the ceiling that is supposed to contain them.
+	//
+	// It runs AFTER provider.For, so a shed request is attributed to the route it
+	// was actually for rather than to providerUnknown — a capacity incident is
+	// diagnosed by which traffic was refused.
+	release, admitted := p.admitter.tryAcquire()
+	if !admitted {
+		p.metrics.shed.WithLabelValues(provName, model).Inc()
+		// Retry-After turns a refusal into a usable instruction. Without it every
+		// shed client retries on its own schedule and they re-arrive together —
+		// the same thundering herd the buffered path already passes upstream
+		// hints to avoid. One second because the queue we are shedding drains in
+		// roughly one upstream call.
+		w.Header().Set("Retry-After", "1")
+		// 429, not 503: the upstream is fine and the request is well-formed — the
+		// gateway is out of capacity and the caller should come back. 503 would
+		// tell the client the provider is down and, for clients that fail over on
+		// it, send traffic away from a healthy upstream.
+		p.writeError(w, provName, model, start, http.StatusTooManyRequests,
+			"gateway at capacity — too many concurrent requests", "rate_limit")
+		return
+	}
+	// Deferred rather than released at each exit: the streaming path returns from
+	// several places and can panic mid-stream, and a slot leaked once is leaked for
+	// the process's lifetime — the ceiling would silently ratchet down to zero.
+	defer release()
 
 	// --- Rate limit (token bucket, per key+model) ---
 	rlKey := apiKeyHint(r) + ":" + model
