@@ -218,7 +218,11 @@ func newHarnessWithHandler(
 	provider.SetRoutes([]provider.Route{{Provider: "mock", Model: "gemini-2.5-flash"}})
 
 	m := newMetricsWith(prometheus.NewRegistry())
-	p := newProxy(cfg, limiter, newDeduper(), m,
+	// nil sharer: cross-replica breaker propagation needs Redis, and these tests
+	// assert on ONE process's breaker. A nil sharer is a no-op, so the local
+	// breaker behaves exactly as it did before it existed. breakershare_test.go
+	// covers the shared path against a real Redis.
+	p := newProxy(cfg, limiter, newDeduper(), nil, m,
 		slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	return &harness{proxy: p, metrics: m, up: up}

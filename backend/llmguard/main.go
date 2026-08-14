@@ -62,7 +62,12 @@ func main() {
 	metrics := gateway.NewMetrics()
 	limiter := gateway.NewRateLimiter(rdb, cfg.RateLimitRPM, cfg.RateLimitBurst)
 	deduper := gateway.NewDeduper()
-	proxy := gateway.NewProxy(cfg, limiter, deduper, metrics, log)
+	// Shares the trip signal across replicas, so an upstream outage costs one
+	// replica's worth of failed requests to detect rather than N. The flag's
+	// lifetime is CircuitOpenFor — the same window the local breaker stays open —
+	// so the two cannot disagree about how long "recently down" lasts.
+	breakerSharer := gateway.NewBreakerSharer(rdb, cfg.CircuitOpenFor)
+	proxy := gateway.NewProxy(cfg, limiter, deduper, breakerSharer, metrics, log)
 
 	mux := http.NewServeMux()
 	// All OpenAI-compatible traffic. Clients point their base_url at

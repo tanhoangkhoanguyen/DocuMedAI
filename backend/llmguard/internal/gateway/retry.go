@@ -67,14 +67,26 @@ type breakerGroup struct {
 	cfg      Config
 	metrics  *Metrics
 	breakers map[string]*gobreaker.CircuitBreaker
+	// sharer propagates trips to other replicas. Nil in a single-replica
+	// deployment and throughout the test suite, where it is a no-op — see
+	// breakershare.go.
+	sharer *BreakerSharer
 }
 
-func newBreakerGroup(cfg Config, m *Metrics) *breakerGroup {
+func newBreakerGroup(cfg Config, m *Metrics, sharer *BreakerSharer) *breakerGroup {
 	return &breakerGroup{
 		cfg:      cfg,
 		metrics:  m,
 		breakers: map[string]*gobreaker.CircuitBreaker{},
+		sharer:   sharer,
 	}
+}
+
+// openElsewhere reports whether another replica has recently found this provider
+// unhealthy. Kept on breakerGroup so proxy.go asks one thing about breaker state
+// rather than reaching into the sharer itself.
+func (g *breakerGroup) openElsewhere(ctx context.Context, providerName string) bool {
+	return g.sharer.isOpenElsewhere(ctx, providerName)
 }
 
 // get returns the breaker for one provider, creating it on first use.
@@ -89,7 +101,7 @@ func (g *breakerGroup) get(providerName string) *gobreaker.CircuitBreaker {
 	if b, ok := g.breakers[providerName]; ok {
 		return b
 	}
-	b := newBreaker(providerName, g.cfg, g.metrics)
+	b := newBreaker(providerName, g.cfg, g.metrics, g.sharer)
 	g.breakers[providerName] = b
 	return b
 }
@@ -98,7 +110,9 @@ func (g *breakerGroup) get(providerName string) *gobreaker.CircuitBreaker {
 // When that provider is failing hard, the breaker OPENS and we fail fast with
 // 503 instead of piling on more doomed requests — protecting both upstream and
 // our own latency.
-func newBreaker(providerName string, cfg Config, m *Metrics) *gobreaker.CircuitBreaker {
+func newBreaker(
+	providerName string, cfg Config, m *Metrics, sharer *BreakerSharer,
+) *gobreaker.CircuitBreaker {
 	return gobreaker.NewCircuitBreaker(gobreaker.Settings{
 		Name:    providerName,
 		Timeout: cfg.CircuitOpenFor, // how long to stay open before half-open probe
@@ -144,6 +158,23 @@ func newBreaker(providerName string, cfg Config, m *Metrics) *gobreaker.CircuitB
 				gauge.Set(1)
 			case gobreaker.StateOpen:
 				gauge.Set(2)
+				// Tell the other replicas, so they can shed on this replica's
+				// evidence instead of each collecting CircuitMinReqs failures of
+				// their own against an upstream already known to be down.
+				//
+				// Published only on OPEN, never cleared on CLOSED: the flag
+				// carries its own TTL and recovery is governed by each replica's
+				// own half-open probe. An explicit clear would let the first
+				// replica to recover speak for all of them, before the others
+				// have evidence the upstream is actually healthy.
+				//
+				// A fresh context, not the request's: gobreaker invokes this
+				// callback synchronously from whichever request tripped the
+				// breaker, and that request's context may already be cancelled —
+				// which is exactly the case where publishing matters most.
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
+				sharer.publishOpen(ctx, name)
 			}
 		},
 	})

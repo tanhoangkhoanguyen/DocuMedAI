@@ -18,6 +18,7 @@ package gateway
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -52,11 +53,23 @@ func NewRateLimiter(rdb *redis.Client, rpm, burst int) *RateLimiter {
 // NewDeduper builds the in-process singleflight deduper.
 func NewDeduper() *Deduper { return newDeduper() }
 
+// NewBreakerSharer builds the cross-replica circuit-breaker signal. It shares the
+// Redis client with the rate limiter; a nil client yields a nil sharer, which is a
+// working no-op for a single-replica deployment.
+func NewBreakerSharer(rdb *redis.Client, openFor time.Duration) *BreakerSharer {
+	return newBreakerSharer(rdb, openFor)
+}
+
 // NewProxy assembles the /v1/chat/completions handler. Dependencies are passed
 // in rather than constructed inside, which is what makes the pipeline testable
 // without a live Redis or a real provider.
-func NewProxy(cfg Config, limiter *RateLimiter, deduper *Deduper, m *Metrics, log *slog.Logger) *Proxy {
-	return newProxy(cfg, limiter, deduper, m, log)
+//
+// sharer may be nil, disabling cross-replica breaker propagation.
+func NewProxy(
+	cfg Config, limiter *RateLimiter, deduper *Deduper,
+	sharer *BreakerSharer, m *Metrics, log *slog.Logger,
+) *Proxy {
+	return newProxy(cfg, limiter, deduper, sharer, m, log)
 }
 
 // Getenv reads an environment variable with a fallback. Exported so `main`'s

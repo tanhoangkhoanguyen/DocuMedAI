@@ -62,7 +62,13 @@ type Proxy struct {
 	log      *slog.Logger
 }
 
-func newProxy(cfg Config, limiter *RateLimiter, deduper *Deduper, m *Metrics, log *slog.Logger) *Proxy {
+// newProxy assembles the handler. The breaker sharer is passed in rather than
+// built here, and may be nil: a single-replica deployment and the whole test
+// suite run without one, and a nil sharer is a no-op rather than a special case.
+func newProxy(
+	cfg Config, limiter *RateLimiter, deduper *Deduper,
+	sharer *BreakerSharer, m *Metrics, log *slog.Logger,
+) *Proxy {
 	// One shared client with a tuned transport so TCP/TLS connections upstream
 	// are reused across requests instead of re-handshaking every call.
 	transport := &http.Transport{
@@ -77,7 +83,7 @@ func newProxy(cfg Config, limiter *RateLimiter, deduper *Deduper, m *Metrics, lo
 		admitter: newAdmitter(cfg.MaxInFlight, m),
 		limiter:  limiter,
 		deduper:  deduper,
-		breakers: newBreakerGroup(cfg, m),
+		breakers: newBreakerGroup(cfg, m, sharer),
 		metrics:  m,
 		log:      log,
 	}
