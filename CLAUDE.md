@@ -177,8 +177,19 @@ the gateway is full. It sits before the rate limiter (which can block for `RateW
 `llmguard_rate_limited_total`: both are 429s, but one is a caller over quota and the other an operator
 capacity problem.
 
-The pipeline lives in `internal/gateway/` (config, proxy, admission, retry, dedup, ratelimit,
-metrics);
+**Breaker state is cross-replica; dedup is not.** `breakershare.go` publishes
+`llmguard:breaker:open:<provider>` (TTL `CIRCUIT_OPEN_FOR`) when a local breaker opens, so N replicas
+don't each burn `CIRCUIT_MIN_REQUESTS` failures learning the same outage. What crosses is the **trip
+signal, not the counters** — sharing counters would put Redis on every request's hot path. Only the
+**positive** reading is cached: caching "healthy" would delay a replica's entry into an outage, which
+is exactly the lateness the flag removes. Redis errors fail open (same posture as `ratelimit.go`), and
+nothing clears the flag early — recovery is each replica's own half-open probe. A `nil *BreakerSharer`
+is a working no-op, which is how single-replica runs and the whole test suite avoid needing Redis.
+The check runs **after** admission and the rate limiter: it costs a Redis `EXISTS`, so it is not paid
+until the request is known to have both capacity and a token.
+
+The pipeline lives in `internal/gateway/` (config, proxy, admission, retry, breakershare, dedup,
+ratelimit, metrics);
 `main.go` at the module root is a thin composition root, and `internal/gateway/gateway.go` is the
 entire exported surface between them. Everything else in the package stays unexported, and tests
 sit beside the code they exercise so nothing is exported merely to be testable.
@@ -187,12 +198,13 @@ The suite is **characterization tests**, each sitting beside the source file it 
 (`retry_test.go`, `dedup_test.go`, `ratelimit_test.go`, `circuitbreaker_test.go`; `proxy.go`'s
 larger surface is split into `proxy_buffered_test.go`, `proxy_streaming_test.go`,
 `proxy_errors_test.go`, plus `usage_test.go`) and sharing a harness in `harness_test.go`.
-`admission_test.go` is the **exception** to the characterization rule: that behavior is new, so there
-is no prior conduct to preserve and the tests state the intended contract (a shed is 429 +
-`Retry-After`, counted apart from quota 429s; a slot always comes back). `config_test.go` guards the
-harness/production invariant and **fails when a new `Config` field is added** without a decision about
-whether `realDefaults()` mirrors it — by design, not an obstacle. `mockupstream/` has its own tests
-pinning the determinism the Phase 6 benchmark depends on. Two rules matter when editing them:
+`admission_test.go` and `breakershare_test.go` are the **exceptions** to the characterization rule:
+that behavior is new, so there is no prior conduct to preserve and the tests state the intended
+contract (a shed is 429 + `Retry-After`, counted apart from quota 429s, and a slot always comes back;
+only the positive breaker reading is cached, and a Redis error never sheds). `config_test.go` guards
+the harness/production invariant and **fails when a new `Config` field is added** without a decision
+about whether `realDefaults()` mirrors it — by design, not an obstacle. `mockupstream/` has its own
+tests pinning the determinism the Phase 6 benchmark depends on. Two rules matter when editing them:
 
 - They pin what the proxy does **today**, not what it should do. Surprising behavior is locked
   in as-is with a `QUIRK` comment. Don't "fix" a test to encode intended behavior — that would

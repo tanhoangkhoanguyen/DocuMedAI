@@ -156,6 +156,20 @@ func realDefaults() Config {
 	}
 }
 
+// deadRedis is a client pointed at an address where nothing listens, for the
+// tests that assert fail-open behavior — the rate limiter admitting when it
+// cannot reach Redis, the breaker sharer refusing to shed on a Redis error.
+//
+// Both need "Redis is down" rather than "Redis is empty", and neither can get
+// that from a live server.
+func deadRedis() *redis.Client {
+	return redis.NewClient(&redis.Options{
+		Addr:        "127.0.0.1:1", // reserved, nothing listens
+		DialTimeout: 5 * time.Millisecond,
+		MaxRetries:  -1,
+	})
+}
+
 // offlineLimiter is a rate limiter whose Redis is unreachable.
 //
 // Acquire fails OPEN on a Redis error (ratelimit.go), so every request is
@@ -163,12 +177,7 @@ func realDefaults() Config {
 // requiring a Redis server. Shedding itself is covered separately against a
 // real Redis, because only a live bucket can return "no token".
 func offlineLimiter() *RateLimiter {
-	rdb := redis.NewClient(&redis.Options{
-		Addr:        "127.0.0.1:1", // reserved, nothing listens
-		DialTimeout: 5 * time.Millisecond,
-		MaxRetries:  -1,
-	})
-	return newRateLimiter(rdb, 480, 60)
+	return newRateLimiter(deadRedis(), 480, 60)
 }
 
 type harness struct {
@@ -209,7 +218,11 @@ func newHarnessWithHandler(
 	provider.SetRoutes([]provider.Route{{Provider: "mock", Model: "gemini-2.5-flash"}})
 
 	m := newMetricsWith(prometheus.NewRegistry())
-	p := newProxy(cfg, limiter, newDeduper(), m,
+	// nil sharer: cross-replica breaker propagation needs Redis, and these tests
+	// assert on ONE process's breaker. A nil sharer is a no-op, so the local
+	// breaker behaves exactly as it did before it existed. breakershare_test.go
+	// covers the shared path against a real Redis.
+	p := newProxy(cfg, limiter, newDeduper(), nil, m,
 		slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	return &harness{proxy: p, metrics: m, up: up}

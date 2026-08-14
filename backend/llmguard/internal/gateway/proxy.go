@@ -62,7 +62,13 @@ type Proxy struct {
 	log      *slog.Logger
 }
 
-func newProxy(cfg Config, limiter *RateLimiter, deduper *Deduper, m *Metrics, log *slog.Logger) *Proxy {
+// newProxy assembles the handler. The breaker sharer is passed in rather than
+// built here, and may be nil: a single-replica deployment and the whole test
+// suite run without one, and a nil sharer is a no-op rather than a special case.
+func newProxy(
+	cfg Config, limiter *RateLimiter, deduper *Deduper,
+	sharer *BreakerSharer, m *Metrics, log *slog.Logger,
+) *Proxy {
 	// One shared client with a tuned transport so TCP/TLS connections upstream
 	// are reused across requests instead of re-handshaking every call.
 	transport := &http.Transport{
@@ -77,7 +83,7 @@ func newProxy(cfg Config, limiter *RateLimiter, deduper *Deduper, m *Metrics, lo
 		admitter: newAdmitter(cfg.MaxInFlight, m),
 		limiter:  limiter,
 		deduper:  deduper,
-		breakers: newBreakerGroup(cfg, m),
+		breakers: newBreakerGroup(cfg, m, sharer),
 		metrics:  m,
 		log:      log,
 	}
@@ -199,6 +205,26 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		p.metrics.rateLimited.WithLabelValues(provName, model).Inc()
 		p.writeError(w, provName, model, start, http.StatusTooManyRequests,
 			"proxy rate limit exceeded", "rate_limit")
+		return
+	}
+
+	// --- Cross-replica breaker check ---
+	//
+	// Another replica has recently found this provider down. Fail fast on its
+	// evidence rather than collecting our own: at N replicas an upstream otherwise
+	// absorbs N × CircuitMinReqs doomed requests before anything trips, and a
+	// replica restarted mid-outage starts over from zero.
+	//
+	// Placed before dispatch so it covers the streaming path too — which has no
+	// retry loop to protect it.
+	//
+	// 503, matching what a locally-open breaker produces: the provider is
+	// unavailable, which is a different claim from the 429s above. The local
+	// breaker remains the authority on recovery, so this never blocks a half-open
+	// probe from running once the flag lapses.
+	if p.breakers.openElsewhere(r.Context(), provName) {
+		p.writeError(w, provName, model, start, http.StatusServiceUnavailable,
+			"upstream unavailable (circuit open)", "upstream_error")
 		return
 	}
 
