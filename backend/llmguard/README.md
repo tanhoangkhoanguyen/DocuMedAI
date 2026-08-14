@@ -102,6 +102,7 @@ spend — LLMGuard is a reliability gateway and does nothing with those numbers.
 | `CIRCUIT_MIN_REQUESTS` / `CIRCUIT_FAIL_RATIO` / `CIRCUIT_OPEN_FOR` | `10` / `0.6` / `20s` | Breaker |
 | `MAX_IN_FLIGHT` | `256` | Concurrency ceiling — see below. `0` disables it |
 | `UPSTREAM_TIMEOUT` / `MAX_IDLE_CONNS` | `120s` / `100` | HTTP client |
+| `SERVER_IDLE_TIMEOUT` | `120s` | Idle keep-alive connections. There is deliberately no write timeout — see `main.go` |
 
 ### Admission control
 
@@ -255,3 +256,6 @@ on something the operator chose.
 
 - Cross-replica dedup via Redis marker (extension point in
   `internal/gateway/dedup.go`).
+- A per-write SSE deadline (`http.ResponseController.SetWriteDeadline`), so a hung
+  stream reader is bounded without truncating healthy long streams. Until then
+  `WriteTimeout` is deliberately unset — see `main.go`.

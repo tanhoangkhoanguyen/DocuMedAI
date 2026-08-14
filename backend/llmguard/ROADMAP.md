@@ -564,10 +564,16 @@ Prometheus counters say *what*; traces say *why p99 was slow*.
 
 ---
 
-## Phase 5 — Horizontal scalability (multi-replica correctness)
+## Phase 5 — Horizontal scalability & self-protection
 
-**Why:** dedup is currently in-process `singleflight` (`dedup.go`) — **wrong across replicas**.
-Making the gateway stateless + correct at N replicas is the production-readiness milestone.
+**Why:** two separate gaps, both about the gateway holding up rather than the upstream.
+
+*Across replicas:* dedup is in-process `singleflight` (`dedup.go`) — **wrong at N replicas**. Making
+the gateway stateless and correct at N is the production-readiness milestone.
+
+*Within one replica:* retry, breaker and dedup all protect the upstream **from** LLMGuard; nothing
+protects LLMGuard from its callers. Concurrency, not arrival rate, is what maps to memory, and
+nothing bounds it — so the gateway is currently a candidate for being the outage. Issue 5.3.
 
 ### Issue 5.1 — Redis-backed cross-replica dedup
 - **Goal:** identical concurrent requests coalesce even when they hit different replicas.
@@ -579,6 +585,49 @@ Making the gateway stateless + correct at N replicas is the production-readiness
   - Two replicas receiving the same request concurrently → only one upstream call (verified with the
     mock upstream's call counter).
   - Redis down → both still succeed independently (fail-open), asserted by a test.
+
+### Issue 5.3 — Admission control & backpressure
+- **Why:** every existing protection (retry, breaker, dedup) shields the **upstream** from LLMGuard.
+  Nothing shields **LLMGuard from its own callers**. The rate limiter looks like it should, but it
+  bounds the arrival *rate* (RPM), not the number of requests running concurrently — and those
+  diverge exactly when it matters. At 480 RPM with 20s calls, ~160 are legitimately in flight; if
+  upstream slows to 60s the same admitted rate produces ~480, each holding a goroutine, a buffer up
+  to `maxUpstreamBody` (10 MiB), and an upstream connection. Arrival rate never signals that, so the
+  limiter keeps admitting while memory runs out. A gateway whose claim is *reliable LLM calls* must
+  not become the new failure: refusing some requests beats an OOM that fails all of them, including
+  the ones already half-served. This is also what makes **Scenario 6.3-D** testable — it currently
+  has no enforcing code.
+- **What to do:**
+  - A `MAX_IN_FLIGHT` counting semaphore, acquired **non-blocking**. Queueing would be a second rate
+    limiter and a worse one: a request parked waiting still owns a goroutine and its buffers, growing
+    the very resource the ceiling bounds while adding latency to a caller already being refused.
+  - Refuse with **429 + `Retry-After`**, not 503. The upstream is healthy and the request is
+    well-formed — the gateway is out of capacity. 503 would tell clients the provider is down and
+    send fail-over traffic away from a healthy upstream.
+  - Place it **before** the rate limiter (which can block for `RateWaitMax`) and **after**
+    `provider.For`, so the wait is inside the ceiling and a shed request is attributed to a real route.
+  - Metrics: an unlabelled `llmguard_in_flight` gauge (the semaphore is one process-wide pool, so a
+    per-provider split would match no single limit) and `llmguard_shed_total{provider,model}` kept
+    **separate from `rate_limited_total`** — both return 429 but one is a caller exceeding quota and
+    the other is an operator capacity problem.
+  - Default `MAX_IN_FLIGHT=256` = `(RPM/60) × p95_seconds × 1.5` at 480 RPM / 20s p95, so a
+    bucket-legal burst is never shed; it engages only when requests drain slower than they arrive, or
+    when Redis is down and the limiter is failing open. Calibrate for real in Phase 6.
+  - Add `IdleTimeout` to the HTTP server. A client that opens connections and goes quiet pins a
+    goroutine and socket each, and admission control cannot see it — those requests already finished.
+  - **`WriteTimeout` stays unset, as a decision.** It is an absolute deadline from the start of the
+    response, so any value low enough to cut off a hung SSE reader also truncates healthy long
+    streams. The real fix is a per-write deadline refreshed on each flushed frame
+    (`http.ResponseController.SetWriteDeadline`), which measures time since the last successful
+    write. That touches the streaming loop and belongs in its own change.
+- **AC:**
+  - Past the ceiling → clean 429 + `Retry-After`, and the shed request never reaches upstream.
+  - Slots are returned on success, on error, and on the streaming path's early failures — a leaked
+    slot would ratchet capacity down to zero over the process's lifetime.
+  - Successes + sheds account for every caller under concurrent load; nothing dropped or
+    double-counted.
+  - `MAX_IN_FLIGHT=0` restores unbounded behavior.
+  - Overload yields no OOM and no p99 regression for admitted requests (measured in Phase 6).
 
 ### Issue 5.2 — Confirm rate-limit is already cross-replica; run multi-replica
 - **Goal:** prove the stack scales horizontally.
@@ -630,7 +679,10 @@ fixed-QPS, coordinated-omission-aware latency measured from scheduled send time.
   - **B. Resilience:** 20% injected 503s → client success rate (direct vs gateway); latency-through-an-
     outage-window showing breaker trip → fail-fast → recovery.
   - **C. Cost saved:** duplicate-heavy workload → dedup hit-rate → upstream calls avoided.
-  - **D. Graceful degradation:** past capacity → clean 429 + `Retry-After`, no collapse.
+  - **D. Graceful degradation:** past capacity → clean 429 + `Retry-After`, no collapse. Depends on
+    Issue 5.3 — without an in-flight ceiling there is nothing to shed and the arm measures an OOM.
+    This is also where `MAX_IN_FLIGHT` gets calibrated against real p95 latency instead of the
+    formula's estimate; chart `llmguard_in_flight` against the ceiling and `llmguard_shed_total`.
   - **E. Feature cost:** overhead delta with rate-limit/dedup/tracing on vs off.
   - Generate 3–4 charts + a Grafana dashboard.
 - **AC:**
