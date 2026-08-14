@@ -30,6 +30,10 @@ import (
 //	                  so there is no YAML file to point at
 //	Port           - the harness drives ServeHTTP directly, it never listens
 //	RedisURL       - offlineLimiter() points at a dead address on purpose
+//	IdleTimeout    - a server knob; the harness has no http.Server, same as Port
+//	MaxInFlight    - mirroring it would apply a concurrency ceiling to every test
+//	                 in the suite, none of which is about concurrency; the
+//	                 admission tests set it explicitly instead. See the skip list.
 var resilienceFields = []string{
 	"RateLimitRPM",
 	"RateLimitBurst",
@@ -59,6 +63,7 @@ func TestRealDefaultsMatchLoadConfig(t *testing.T) {
 		"RETRY_MAX", "RETRY_BASE_DELAY", "RETRY_MAX_DELAY",
 		"CIRCUIT_MIN_REQUESTS", "CIRCUIT_FAIL_RATIO", "CIRCUIT_OPEN_FOR",
 		"UPSTREAM_TIMEOUT", "MAX_IDLE_CONNS",
+		"MAX_IN_FLIGHT", "SERVER_IDLE_TIMEOUT",
 	} {
 		t.Setenv(key, "")
 	}
@@ -87,9 +92,18 @@ func TestRealDefaultsMatchLoadConfig(t *testing.T) {
 // rather than as a missing default.
 func TestResilienceFieldsCoversConfig(t *testing.T) {
 	// Fields the harness intentionally does not mirror; see resilienceFields.
+	//
+	// MaxInFlight is skipped rather than mirrored for a reason worth stating: it is
+	// a real production default (256), not an unconfigured knob. Mirroring it would
+	// impose a concurrency ceiling on the whole characterization suite, where the
+	// dedup and breaker tests deliberately run many requests at once to observe
+	// coalescing and tripping. A shed request there would look like a retry that
+	// never happened. Leaving it 0 keeps those tests measuring what they were
+	// written to measure; admission_test.go sets the ceiling per test.
 	skipped := map[string]bool{
 		"VertexProject": true, "VertexLocation": true, "ModelConfigPath": true,
 		"Port": true, "RedisURL": true,
+		"IdleTimeout": true, "MaxInFlight": true,
 	}
 
 	covered := make(map[string]bool, len(resilienceFields))
