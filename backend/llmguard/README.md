@@ -191,6 +191,7 @@ compose is the only supported build path.
 | `internal/gateway/admission.go` | In-flight ceiling (counting semaphore) + shedding |
 | `internal/gateway/ratelimit.go` | Redis token bucket (atomic Lua) |
 | `internal/gateway/retry.go` | Backoff + jitter + Retry-After + per-provider circuit breakers |
+| `internal/gateway/breakershare.go` | Propagates a breaker trip to other replicas via Redis |
 | `internal/gateway/dedup.go` | In-flight de-duplication (singleflight) |
 | `internal/gateway/metrics.go` | Prometheus collectors |
 | `provider/` | What every adapter shares: normalized schema, `Provider` interface + registry, error vocabulary |

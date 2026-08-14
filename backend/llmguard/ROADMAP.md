@@ -568,8 +568,9 @@ Prometheus counters say *what*; traces say *why p99 was slow*.
 
 **Why:** two separate gaps, both about the gateway holding up rather than the upstream.
 
-*Across replicas:* dedup is in-process `singleflight` (`dedup.go`) — **wrong at N replicas**. Making
-the gateway stateless and correct at N is the production-readiness milestone.
+*Across replicas:* dedup is in-process `singleflight` (`dedup.go`) and the circuit breaker is
+per-process (`retry.go`) — both **wrong at N replicas**. Making the gateway stateless and correct at N
+is the production-readiness milestone. Issues 5.1 and 5.1b.
 
 *Within one replica:* retry, breaker and dedup all protect the upstream **from** LLMGuard; nothing
 protects LLMGuard from its callers. Concurrency, not arrival rate, is what maps to memory, and
@@ -585,6 +586,33 @@ nothing bounds it — so the gateway is currently a candidate for being the outa
   - Two replicas receiving the same request concurrently → only one upstream call (verified with the
     mock upstream's call counter).
   - Redis down → both still succeed independently (fail-open), asserted by a test.
+
+### Issue 5.1b — Cross-replica circuit-breaker state
+- **Why:** dedup is not the only per-process state. The breaker in `retry.go` is per replica, so at
+  N replicas an upstream absorbs **N × `CircuitMinReqs`** doomed requests before anything trips, and
+  a replica restarted mid-outage begins from a clean slate and hammers a provider the others already
+  know is down. Both defeat the point of having a breaker.
+- **Design decision — share the trip SIGNAL, not the counters.** Shared counters would put a Redis
+  round trip on every request and make Redis a hard dependency of a component that currently has
+  none. A trip is one fact with a natural lifetime (`CircuitOpenFor`) and needs no consensus: "this
+  provider was found down recently" is safe for any replica to act on, and the local breaker still
+  governs recovery through its own half-open probe.
+- **What to do:**
+  - Publish `llmguard:breaker:open:<provider>` with TTL = `CircuitOpenFor` when a local breaker opens.
+    TTL rather than an explicit clear, so a replica that crashes while holding it cannot leave the
+    others shedding forever.
+  - Read it before dispatch; fail fast with 503 when another replica has it set. It runs **after**
+    admission control and the rate limiter: the read costs a Redis `EXISTS`, so it is not paid until
+    the request is known to have both a capacity slot and a token.
+  - Cache **only the positive** reading. A cached negative would delay this replica's entry into an
+    outage by a whole trust window — exactly the lateness the shared flag removes.
+  - Fail open on any Redis error, matching `ratelimit.go`: a Redis outage must never be able to shed
+    traffic on its own.
+- **AC:**
+  - Replica A trips → replica B sheds without collecting its own `CircuitMinReqs` failures.
+  - A trip on one provider does not shed traffic bound for another.
+  - Redis unreachable → nothing is shed by the sharer; the local breaker still protects upstream.
+  - The flag expires on its own, so a crashed replica cannot pin the others open.
 
 ### Issue 5.3 — Admission control & backpressure
 - **Why:** every existing protection (retry, breaker, dedup) shields the **upstream** from LLMGuard.
