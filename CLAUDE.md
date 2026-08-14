@@ -177,8 +177,19 @@ the gateway is full. It sits before the rate limiter (which can block for `RateW
 `llmguard_rate_limited_total`: both are 429s, but one is a caller over quota and the other an operator
 capacity problem.
 
-The pipeline lives in `internal/gateway/` (config, proxy, admission, retry, dedup, ratelimit,
-metrics);
+**Breaker state is cross-replica; dedup is not.** `breakershare.go` publishes
+`llmguard:breaker:open:<provider>` (TTL `CIRCUIT_OPEN_FOR`) when a local breaker opens, so N replicas
+don't each burn `CIRCUIT_MIN_REQUESTS` failures learning the same outage. What crosses is the **trip
+signal, not the counters** — sharing counters would put Redis on every request's hot path. Only the
+**positive** reading is cached: caching "healthy" would delay a replica's entry into an outage, which
+is exactly the lateness the flag removes. Redis errors fail open (same posture as `ratelimit.go`), and
+nothing clears the flag early — recovery is each replica's own half-open probe. A `nil *BreakerSharer`
+is a working no-op, which is how single-replica runs and the whole test suite avoid needing Redis.
+The check runs **after** admission and the rate limiter: it costs a Redis `EXISTS`, so it is not paid
+until the request is known to have both capacity and a token.
+
+The pipeline lives in `internal/gateway/` (config, proxy, admission, retry, breakershare, dedup,
+ratelimit, metrics);
 `main.go` at the module root is a thin composition root, and `internal/gateway/gateway.go` is the
 entire exported surface between them. Everything else in the package stays unexported, and tests
 sit beside the code they exercise so nothing is exported merely to be testable.

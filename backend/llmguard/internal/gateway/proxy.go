@@ -208,6 +208,26 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// --- Cross-replica breaker check ---
+	//
+	// Another replica has recently found this provider down. Fail fast on its
+	// evidence rather than collecting our own: at N replicas an upstream otherwise
+	// absorbs N × CircuitMinReqs doomed requests before anything trips, and a
+	// replica restarted mid-outage starts over from zero.
+	//
+	// Placed before dispatch so it covers the streaming path too — which has no
+	// retry loop to protect it.
+	//
+	// 503, matching what a locally-open breaker produces: the provider is
+	// unavailable, which is a different claim from the 429s above. The local
+	// breaker remains the authority on recovery, so this never blocks a half-open
+	// probe from running once the flag lapses.
+	if p.breakers.openElsewhere(r.Context(), provName) {
+		p.writeError(w, provName, model, start, http.StatusServiceUnavailable,
+			"upstream unavailable (circuit open)", "upstream_error")
+		return
+	}
+
 	// Streaming requests cannot be buffered/deduped/replayed as a unit — they
 	// get breaker protection but no retry/dedup.
 	if req.Stream {

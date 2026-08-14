@@ -8,7 +8,7 @@ client (base_url=…)  →  la-llmguard :8081  →  provider adapter  →  Verte
                          ├ admission control (in-flight ceiling, sheds 429)
                          ├ rate limit (Redis token bucket)
                          ├ retry + backoff (honors Retry-After)
-                         ├ circuit breaker (one per provider, fail fast on outage)
+                         ├ circuit breaker (one per provider, shared across replicas)
                          ├ in-flight dedup (singleflight)
                          └ Prometheus /metrics
 ```
@@ -99,7 +99,7 @@ spend — LLMGuard is a reliability gateway and does nothing with those numbers.
 | `REDIS_URL` | `redis://la-redis:6379/1` | DB 1 — separate from the app cache (DB 0) |
 | `RATE_LIMIT_RPM` / `RATE_LIMIT_BURST` / `RATE_WAIT_MAX` | `480` / `60` / `5s` | Token bucket |
 | `RETRY_MAX` / `RETRY_BASE_DELAY` / `RETRY_MAX_DELAY` | `4` / `300ms` / `8s` | Backoff |
-| `CIRCUIT_MIN_REQUESTS` / `CIRCUIT_FAIL_RATIO` / `CIRCUIT_OPEN_FOR` | `10` / `0.6` / `20s` | Breaker |
+| `CIRCUIT_MIN_REQUESTS` / `CIRCUIT_FAIL_RATIO` / `CIRCUIT_OPEN_FOR` | `10` / `0.6` / `20s` | Breaker. `CIRCUIT_OPEN_FOR` is also the TTL of the cross-replica open flag |
 | `MAX_IN_FLIGHT` | `256` | Concurrency ceiling — see below. `0` disables it |
 | `UPSTREAM_TIMEOUT` / `MAX_IDLE_CONNS` | `120s` / `100` | HTTP client |
 | `SERVER_IDLE_TIMEOUT` | `120s` | Idle keep-alive connections. There is deliberately no write timeout — see `main.go` |
@@ -253,10 +253,26 @@ on something the operator chose.
   and has no OpenAI field, so it is folded into `completion_tokens`.
 - The streaming path now accounts tokens; the pre-Vertex byte-pipe could not.
 
+## Multi-replica
+
+Breaker state crosses replicas: when a local breaker opens it publishes
+`llmguard:breaker:open:<provider>` with TTL `CIRCUIT_OPEN_FOR`, and the others fail
+fast on that instead of each collecting `CIRCUIT_MIN_REQUESTS` failures of their own
+against an upstream already known to be down.
+
+What crosses is the **trip signal, not the counters**: sharing counters would put a
+Redis round trip on every request, while a trip is one fact with a natural lifetime
+and needs no consensus. Only the *positive* reading is cached — remembering "healthy"
+would delay a replica's entry into an outage, which is the lateness the flag exists to
+remove. Any Redis error fails open, so a Redis outage can never shed traffic by itself.
+
+Recovery stays local: nothing clears the flag early, and each replica's own half-open
+probe decides when it trusts the upstream again.
+
 ## Deferred
 
-- Cross-replica dedup via Redis marker (extension point in
-  `internal/gateway/dedup.go`).
+- Cross-replica **dedup** via Redis marker (extension point in
+  `internal/gateway/dedup.go`). Breaker state is already shared; dedup is not.
 - A per-write SSE deadline (`http.ResponseController.SetWriteDeadline`), so a hung
   stream reader is bounded without truncating healthy long streams. Until then
   `WriteTimeout` is deliberately unset — see `main.go`.
