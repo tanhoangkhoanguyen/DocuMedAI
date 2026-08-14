@@ -186,8 +186,13 @@ sit beside the code they exercise so nothing is exported merely to be testable.
 The suite is **characterization tests**, each sitting beside the source file it exercises
 (`retry_test.go`, `dedup_test.go`, `ratelimit_test.go`, `circuitbreaker_test.go`; `proxy.go`'s
 larger surface is split into `proxy_buffered_test.go`, `proxy_streaming_test.go`,
-`proxy_errors_test.go`, plus `usage_test.go`) and sharing a harness in `harness_test.go`. `mockupstream/` has its own tests pinning
-the determinism the Phase 6 benchmark depends on. Two rules matter when editing them:
+`proxy_errors_test.go`, plus `usage_test.go`) and sharing a harness in `harness_test.go`.
+`admission_test.go` is the **exception** to the characterization rule: that behavior is new, so there
+is no prior conduct to preserve and the tests state the intended contract (a shed is 429 +
+`Retry-After`, counted apart from quota 429s; a slot always comes back). `config_test.go` guards the
+harness/production invariant and **fails when a new `Config` field is added** without a decision about
+whether `realDefaults()` mirrors it — by design, not an obstacle. `mockupstream/` has its own tests
+pinning the determinism the Phase 6 benchmark depends on. Two rules matter when editing them:
 
 - They pin what the proxy does **today**, not what it should do. Surprising behavior is locked
   in as-is with a `QUIRK` comment. Don't "fix" a test to encode intended behavior — that would
