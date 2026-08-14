@@ -48,9 +48,36 @@ type Config struct {
 	CircuitFailRatio float64       // fraction of failures that trips the breaker
 	CircuitOpenFor   time.Duration // how long the breaker stays open before half-open probe
 
+	// --- Admission control ---
+	//
+	// MaxInFlight caps CONCURRENT requests, which is a different quantity from the
+	// rate limit's requests-per-minute and is the one that maps to memory: each
+	// in-flight request holds a goroutine, a response buffer up to
+	// maxUpstreamBody, and an upstream connection. Arrival rate says nothing about
+	// how many are running when upstream slows down.
+	//
+	// Tune it as: (RateLimitRPM / 60) × p95_upstream_seconds × 1.5. The default
+	// 256 is that formula at 480 RPM and a 20s p95, so a bucket-legal burst is
+	// never shed — it only engages when requests pile up faster than they drain,
+	// or when Redis is down and the limiter is failing open.
+	//
+	// 0 or less disables admission control, restoring the unbounded behavior for
+	// an operator who wants it.
+	MaxInFlight int
+
 	// --- Upstream HTTP client ---
 	UpstreamTimeout time.Duration // per-attempt timeout to upstream
 	MaxIdleConns    int           // connection-pool size for keep-alive reuse
+
+	// --- HTTP server ---
+	//
+	// IdleTimeout bounds how long an idle keep-alive connection is held. Without
+	// it a client that opens connections and goes quiet pins one goroutine and one
+	// socket each, indefinitely — a slow resource leak that admission control
+	// cannot see, because those requests already finished.
+	//
+	// There is deliberately no WriteTimeout: see main.go.
+	IdleTimeout time.Duration
 }
 
 // loadConfig reads the environment and applies sensible production defaults.
@@ -74,8 +101,12 @@ func loadConfig() Config {
 		CircuitFailRatio: getenvFloat("CIRCUIT_FAIL_RATIO", 0.6),
 		CircuitOpenFor:   getenvDur("CIRCUIT_OPEN_FOR", 20*time.Second),
 
+		MaxInFlight: getenvInt("MAX_IN_FLIGHT", 256),
+
 		UpstreamTimeout: getenvDur("UPSTREAM_TIMEOUT", 120*time.Second), // LLM calls can be slow
 		MaxIdleConns:    getenvInt("MAX_IDLE_CONNS", 100),
+
+		IdleTimeout: getenvDur("SERVER_IDLE_TIMEOUT", 120*time.Second),
 	}
 }
 

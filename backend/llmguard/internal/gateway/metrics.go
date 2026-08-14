@@ -48,6 +48,26 @@ type Metrics struct {
 	circuitState *prometheus.GaugeVec
 	// tokensUsed sums prompt+completion tokens parsed from upstream `usage`.
 	tokensUsed *prometheus.CounterVec // labels: provider, model, kind(prompt|completion)
+	// inFlight is how many requests currently hold an admission slot.
+	//
+	// Unlabelled, unlike every other vector here: the semaphore it mirrors is one
+	// process-wide pool, so splitting it per provider would produce numbers that
+	// no single limit corresponds to — you could not compare any series against
+	// MaxInFlight. This is the gauge to chart next to that ceiling, and the one
+	// whose saturation predicts shedding before it starts.
+	inFlight prometheus.Gauge
+	// shed counts requests refused by admission control, by provider + model.
+	//
+	// Labelled where inFlight is not, because the actionable question about a
+	// refusal is WHICH traffic got refused, while the actionable question about
+	// occupancy is how full the single pool is.
+	//
+	// Distinct from rateLimited on purpose: both return 429, but they say
+	// different things. rateLimited means the caller exceeded its quota — expected,
+	// self-inflicted, per-key. shed means the gateway is out of capacity — every
+	// caller is affected regardless of quota, and it is an operator problem. One
+	// counter for both would hide a capacity incident inside normal throttling.
+	shed *prometheus.CounterVec
 }
 
 // newMetrics registers the collectors on the DEFAULT registry, which is what
@@ -91,5 +111,13 @@ func newMetricsWith(reg prometheus.Registerer) *Metrics {
 			Name: "llmguard_tokens_total",
 			Help: "Tokens reported by upstream usage, by provider, model and kind.",
 		}, []string{"provider", "model", "kind"}),
+		inFlight: auto.NewGauge(prometheus.GaugeOpts{
+			Name: "llmguard_in_flight",
+			Help: "Requests currently holding an admission slot (compare against MAX_IN_FLIGHT).",
+		}),
+		shed: auto.NewCounterVec(prometheus.CounterOpts{
+			Name: "llmguard_shed_total",
+			Help: "Requests refused by admission control because the gateway was at capacity.",
+		}, []string{"provider", "model"}),
 	}
 }

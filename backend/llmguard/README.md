@@ -5,6 +5,7 @@ An **OpenAI-API-compatible** gateway in front of the LLM provider.
 ```
 client (base_url=…)  →  la-llmguard :8081  →  provider adapter  →  Vertex AI
                          ├ model allowlist (exact, per provider+model)
+                         ├ admission control (in-flight ceiling, sheds 429)
                          ├ rate limit (Redis token bucket)
                          ├ retry + backoff (honors Retry-After)
                          ├ circuit breaker (one per provider, fail fast on outage)
@@ -99,7 +100,37 @@ spend — LLMGuard is a reliability gateway and does nothing with those numbers.
 | `RATE_LIMIT_RPM` / `RATE_LIMIT_BURST` / `RATE_WAIT_MAX` | `480` / `60` / `5s` | Token bucket |
 | `RETRY_MAX` / `RETRY_BASE_DELAY` / `RETRY_MAX_DELAY` | `4` / `300ms` / `8s` | Backoff |
 | `CIRCUIT_MIN_REQUESTS` / `CIRCUIT_FAIL_RATIO` / `CIRCUIT_OPEN_FOR` | `10` / `0.6` / `20s` | Breaker |
+| `MAX_IN_FLIGHT` | `256` | Concurrency ceiling — see below. `0` disables it |
 | `UPSTREAM_TIMEOUT` / `MAX_IDLE_CONNS` | `120s` / `100` | HTTP client |
+| `SERVER_IDLE_TIMEOUT` | `120s` | Idle keep-alive connections. There is deliberately no write timeout — see `main.go` |
+
+### Admission control
+
+The rate limit and the in-flight ceiling bound **different quantities**, which is why both exist.
+`RATE_LIMIT_RPM` bounds how fast requests *arrive*; `MAX_IN_FLIGHT` bounds how many are *running*.
+Arrival rate is what a caller's quota is written in. Concurrency is what maps to memory, since each
+in-flight request holds a goroutine, a response buffer up to 10 MiB, and an upstream connection.
+
+They diverge exactly when it matters. At 480 RPM with 20s completions ~160 requests are legitimately
+in flight; if the upstream slows to 60s, the same admitted rate produces ~480. Arrival rate never
+signals that, so a rate limiter alone keeps admitting while memory runs out.
+
+Past the ceiling LLMGuard refuses immediately with **429 + `Retry-After`** — not 503, because the
+upstream is healthy and the request is fine; the gateway is full, and 503 would send fail-over traffic
+away from a working provider. The refusal is non-blocking on purpose: a queued request still holds the
+resources the ceiling exists to bound.
+
+Tune it as:
+
+```
+MAX_IN_FLIGHT ≈ (RATE_LIMIT_RPM / 60) × p95_upstream_seconds × 1.5
+```
+
+The default 256 is that formula at 480 RPM and a 20s p95, so a bucket-legal burst is never shed. It
+engages when requests drain slower than they arrive, or when Redis is down and the rate limiter is
+failing open. Watch `llmguard_in_flight` against the ceiling; `llmguard_shed_total` is counted apart
+from `llmguard_rate_limited_total` because a caller over quota and a gateway out of capacity are
+different incidents that happen to share a status code.
 
 ### Auth
 
@@ -156,7 +187,8 @@ compose is the only supported build path.
 | `internal/gateway/config.go` | Env-driven config + defaults |
 | `internal/gateway/modelconfig.go` | Parses + validates `config.yaml` (the allowlist) |
 | `internal/gateway/providers.go` | Adapter construction + installing the allowlist's routes |
-| `internal/gateway/proxy.go` | Rate limit → dedup → breaker → retry; SSE translation loop |
+| `internal/gateway/proxy.go` | Admit → rate limit → dedup → breaker → retry; SSE translation loop |
+| `internal/gateway/admission.go` | In-flight ceiling (counting semaphore) + shedding |
 | `internal/gateway/ratelimit.go` | Redis token bucket (atomic Lua) |
 | `internal/gateway/retry.go` | Backoff + jitter + Retry-After + per-provider circuit breakers |
 | `internal/gateway/dedup.go` | In-flight de-duplication (singleflight) |
@@ -224,3 +256,6 @@ on something the operator chose.
 
 - Cross-replica dedup via Redis marker (extension point in
   `internal/gateway/dedup.go`).
+- A per-write SSE deadline (`http.ResponseController.SetWriteDeadline`), so a hung
+  stream reader is bounded without truncating healthy long streams. Until then
+  `WriteTimeout` is deliberately unset — see `main.go`.

@@ -77,11 +77,32 @@ func main() {
 	mux.Handle("/metrics", promhttp.Handler())
 
 	srv := &http.Server{
-		Addr:    ":" + cfg.Port,
-		Handler: mux,
-		// No global write timeout: LLM calls are long. Per-attempt timeout is
-		// enforced by the upstream http.Client instead.
+		Addr:              ":" + cfg.Port,
+		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
+
+		// Bounds an idle keep-alive connection. Without it a client that opens
+		// connections and goes quiet holds one goroutine and one socket each for
+		// as long as it likes. Admission control cannot see that: those requests
+		// already completed and returned their slots, so the leak accumulates
+		// entirely outside the in-flight ceiling.
+		IdleTimeout: cfg.IdleTimeout,
+
+		// WriteTimeout is deliberately LEFT UNSET, and that is a decision rather
+		// than an omission.
+		//
+		// It is an absolute deadline measured from the start of the response, not
+		// an inactivity timeout. A streaming completion legitimately writes for
+		// minutes, so any value low enough to cut off a hung SSE reader would also
+		// truncate healthy long streams — turning a rare leak into a routine
+		// failure of the feature.
+		//
+		// The correct fix is a per-write deadline refreshed on each flushed SSE
+		// frame (http.ResponseController.SetWriteDeadline), which measures the
+		// thing that actually matters: time since the last successful write. That
+		// touches the streaming loop in proxy.go and belongs in its own change.
+		// Until then a stalled reader is bounded by UPSTREAM_TIMEOUT, because the
+		// stream ends when the upstream response does.
 	}
 
 	// Graceful shutdown on SIGINT/SIGTERM so in-flight calls aren't cut off.
