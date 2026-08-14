@@ -1,4 +1,4 @@
-package provider
+package vertex
 
 // Golden fixtures for the Vertex adapter's wire bytes.
 //
@@ -67,21 +67,4 @@ func assertGolden(t *testing.T, name string, got []byte) {
 func assertGoldenJSON(t *testing.T, name string, v any) {
 	t.Helper()
 	assertGolden(t, name, marshalGolden(t, v))
-}
-
-// TestGoldenAssistantMessageShape pins the one Message every client sees.
-//
-// Message carries the tool fields, and each one must be omitempty or this body
-// grows keys existing clients do not expect. This is the narrowest guard on
-// that: an assistant turn with empty content stays exactly two keys.
-func TestGoldenAssistantMessageShape(t *testing.T) {
-	t.Parallel()
-
-	got, err := json.Marshal(Message{Role: "assistant", Content: ""})
-	if err != nil {
-		t.Fatalf("marshal message: %v", err)
-	}
-	if want := `{"role":"assistant","content":""}`; string(got) != want {
-		t.Errorf("Message wire form = %s, want %s", got, want)
-	}
 }

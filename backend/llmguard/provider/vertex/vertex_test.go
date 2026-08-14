@@ -1,14 +1,15 @@
-package provider
+package vertex
 
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 	"testing"
 
 	"golang.org/x/oauth2"
+
+	"documedai/llmguard/provider"
 )
 
 func f64(v float64) *float64 { return &v }
@@ -21,8 +22,8 @@ func (s staticTokens) Token() (*oauth2.Token, error) {
 	return &oauth2.Token{AccessToken: s.tok, TokenType: "Bearer"}, nil
 }
 
-func testVertex() *Vertex {
-	return newVertexWithTokens("proj-1", "us-central1", staticTokens{tok: "test-token"})
+func testVertex() *Client {
+	return newWithTokens("proj-1", "us-central1", staticTokens{tok: "test-token"})
 }
 
 // --- URL construction ---
@@ -44,7 +45,7 @@ func TestEndpoint(t *testing.T) {
 }
 
 func TestEndpointHonorsRegion(t *testing.T) {
-	v := newVertexWithTokens("p", "europe-west4", staticTokens{tok: "t"})
+	v := newWithTokens("p", "europe-west4", staticTokens{tok: "t"})
 	got := v.endpoint("gemini-2.5-flash", false)
 	want := "https://europe-west4-aiplatform.googleapis.com/v1/projects/p/locations/europe-west4/publishers/google/models/gemini-2.5-flash:generateContent"
 	if got != want {
@@ -52,8 +53,8 @@ func TestEndpointHonorsRegion(t *testing.T) {
 	}
 }
 
-func TestNewVertexRequiresProject(t *testing.T) {
-	if _, err := NewVertex(context.Background(), "vertex-prod", "", "us-central1"); err == nil {
+func TestNewRequiresProject(t *testing.T) {
+	if _, err := New(context.Background(), "vertex", "", "us-central1"); err == nil {
 		t.Fatal("expected an error when GOOGLE_CLOUD_PROJECT is empty")
 	}
 }
@@ -61,9 +62,9 @@ func TestNewVertexRequiresProject(t *testing.T) {
 // --- request translation ---
 
 func TestToNativeSystemHoisting(t *testing.T) {
-	req := &ChatRequest{
+	req := &provider.ChatRequest{
 		Model: "gemini-2.5-flash",
-		Messages: []Message{
+		Messages: []provider.Message{
 			{Role: "system", Content: "You are terse."},
 			{Role: "user", Content: "hi"},
 			{Role: "assistant", Content: "hello"},
@@ -90,7 +91,7 @@ func TestToNativeSystemHoisting(t *testing.T) {
 }
 
 func TestToNativeJoinsMultipleSystemMessages(t *testing.T) {
-	got := toNative(&ChatRequest{Messages: []Message{
+	got := toNative(&provider.ChatRequest{Messages: []provider.Message{
 		{Role: "system", Content: "A"},
 		{Role: "system", Content: "B"},
 		{Role: "user", Content: "q"},
@@ -101,8 +102,8 @@ func TestToNativeJoinsMultipleSystemMessages(t *testing.T) {
 }
 
 func TestToNativeGenerationConfig(t *testing.T) {
-	got := toNative(&ChatRequest{
-		Messages:    []Message{{Role: "user", Content: "x"}},
+	got := toNative(&provider.ChatRequest{
+		Messages:    []provider.Message{{Role: "user", Content: "x"}},
 		Temperature: f64(0.2),
 		MaxTokens:   iptr(256),
 		Stop:        []string{"END"},
@@ -122,7 +123,7 @@ func TestToNativeGenerationConfig(t *testing.T) {
 }
 
 func TestToNativeOmitsEmptyGenerationConfig(t *testing.T) {
-	got := toNative(&ChatRequest{Messages: []Message{{Role: "user", Content: "x"}}})
+	got := toNative(&provider.ChatRequest{Messages: []provider.Message{{Role: "user", Content: "x"}}})
 	if got.GenerationConfig != nil {
 		t.Error("generationConfig must be omitted when no params are set")
 	}
@@ -130,8 +131,8 @@ func TestToNativeOmitsEmptyGenerationConfig(t *testing.T) {
 
 // Temperature 0 must survive: it is meaningfully different from unset.
 func TestToNativeZeroTemperatureIsKept(t *testing.T) {
-	got := toNative(&ChatRequest{
-		Messages:    []Message{{Role: "user", Content: "x"}},
+	got := toNative(&provider.ChatRequest{
+		Messages:    []provider.Message{{Role: "user", Content: "x"}},
 		Temperature: f64(0),
 	})
 	if got.GenerationConfig == nil || got.GenerationConfig.Temperature == nil {
@@ -144,9 +145,9 @@ func TestToNativeZeroTemperatureIsKept(t *testing.T) {
 
 func TestBuildRequestSetsAuthAndURL(t *testing.T) {
 	v := testVertex()
-	req, err := v.BuildRequest(context.Background(), &ChatRequest{
+	req, err := v.BuildRequest(context.Background(), &provider.ChatRequest{
 		Model:    "gemini-2.5-flash",
-		Messages: []Message{{Role: "user", Content: "hi"}},
+		Messages: []provider.Message{{Role: "user", Content: "hi"}},
 	})
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
@@ -260,7 +261,7 @@ func TestUsageDerivesTotalWhenAbsent(t *testing.T) {
 }
 
 func TestUsageNilIsZero(t *testing.T) {
-	if got := toUsage(nil); got != (Usage{}) {
+	if got := toUsage(nil); got != (provider.Usage{}) {
 		t.Errorf("toUsage(nil) = %+v, want zero", got)
 	}
 }
@@ -273,9 +274,9 @@ func TestTranslateResponseUpstreamError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an error for status 429")
 	}
-	ue, ok := err.(*UpstreamError)
+	ue, ok := err.(*provider.UpstreamError)
 	if !ok {
-		t.Fatalf("error type = %T, want *UpstreamError", err)
+		t.Fatalf("error type = %T, want *provider.UpstreamError", err)
 	}
 	if ue.Status != 429 {
 		t.Errorf("status = %d", ue.Status)
@@ -290,9 +291,9 @@ func TestTranslateResponseUpstreamError(t *testing.T) {
 
 func TestTranslateResponseNonJSONError(t *testing.T) {
 	_, err := testVertex().TranslateResponse(502, []byte("upstream exploded"))
-	ue, ok := err.(*UpstreamError)
+	ue, ok := err.(*provider.UpstreamError)
 	if !ok {
-		t.Fatalf("error type = %T, want *UpstreamError", err)
+		t.Fatalf("error type = %T, want *provider.UpstreamError", err)
 	}
 	if ue.Body.Error.Message != "upstream exploded" {
 		t.Errorf("message = %q", ue.Body.Error.Message)
@@ -302,26 +303,11 @@ func TestTranslateResponseNonJSONError(t *testing.T) {
 	}
 }
 
-func TestErrorTypeMapping(t *testing.T) {
-	cases := map[int]string{
-		429: "rate_limit",
-		401: "auth_error",
-		403: "auth_error",
-		500: "upstream_error",
-		400: "invalid_request_error",
-	}
-	for status, want := range cases {
-		if got := errorType(status); got != want {
-			t.Errorf("errorType(%d) = %q, want %q", status, got, want)
-		}
-	}
-}
-
 // --- streaming ---
 
 func TestTranslateStreamChunk(t *testing.T) {
 	v := testVertex()
-	req := &ChatRequest{Model: "gemini-2.5-flash"}
+	req := &provider.ChatRequest{Model: "gemini-2.5-flash"}
 
 	raw := `{"candidates":[{"content":{"role":"model","parts":[{"text":"Hel"}]},"index":0}],"modelVersion":"gemini-2.5-flash"}`
 	chunks, err := v.TranslateStreamChunk(req, []byte(raw))
@@ -345,7 +331,7 @@ func TestTranslateStreamChunk(t *testing.T) {
 func TestTranslateStreamChunkFinalCarriesUsage(t *testing.T) {
 	raw := `{"candidates":[{"content":{"parts":[{"text":"!"}]},"finishReason":"STOP"}],
 	         "usageMetadata":{"promptTokenCount":4,"candidatesTokenCount":6,"totalTokenCount":10}}`
-	chunks, err := testVertex().TranslateStreamChunk(&ChatRequest{Model: "m"}, []byte(raw))
+	chunks, err := testVertex().TranslateStreamChunk(&provider.ChatRequest{Model: "m"}, []byte(raw))
 	if err != nil {
 		t.Fatalf("TranslateStreamChunk: %v", err)
 	}
@@ -361,7 +347,7 @@ func TestTranslateStreamChunkFinalCarriesUsage(t *testing.T) {
 }
 
 func TestTranslateStreamChunkEmptyIsSkipped(t *testing.T) {
-	chunks, err := testVertex().TranslateStreamChunk(&ChatRequest{Model: "m"}, []byte("   "))
+	chunks, err := testVertex().TranslateStreamChunk(&provider.ChatRequest{Model: "m"}, []byte("   "))
 	if err != nil {
 		t.Fatalf("empty payload should not error: %v", err)
 	}
@@ -372,165 +358,8 @@ func TestTranslateStreamChunkEmptyIsSkipped(t *testing.T) {
 
 func TestTranslateStreamChunkFallsBackToRequestModel(t *testing.T) {
 	raw := `{"candidates":[{"content":{"parts":[{"text":"x"}]}}]}`
-	chunks, _ := testVertex().TranslateStreamChunk(&ChatRequest{Model: "gemini-2.5-flash"}, []byte(raw))
+	chunks, _ := testVertex().TranslateStreamChunk(&provider.ChatRequest{Model: "gemini-2.5-flash"}, []byte(raw))
 	if chunks[0].Model != "gemini-2.5-flash" {
 		t.Errorf("model = %q, want the request's model when the frame omits it", chunks[0].Model)
-	}
-}
-
-// --- registry ---
-
-func TestRegistryRoutesExactly(t *testing.T) {
-	Reset()
-	defer Reset()
-
-	Register(testVertex())
-	SetRoutes([]Route{{Provider: "vertex", Model: "gemini-2.5-flash"}})
-
-	got, err := For(Route{Provider: "vertex", Model: "gemini-2.5-flash"})
-	if err != nil {
-		t.Fatalf("For: %v", err)
-	}
-	if got.Name() != "vertex" {
-		t.Errorf("provider = %q, want vertex", got.Name())
-	}
-}
-
-// TestRegistryRoutesPerProvider is why the key is a pair rather than a model:
-// one model served by two upstreams must resolve to two different adapters.
-//
-// Keyed on the model alone these two entries collide and one silently wins,
-// sending traffic to an upstream the caller did not ask for.
-func TestRegistryRoutesPerProvider(t *testing.T) {
-	Reset()
-	defer Reset()
-
-	Register(testVertex())
-	other, err := NewOpenAICompat("openrouter", "https://openrouter.ai/api/v1", "sk-test")
-	if err != nil {
-		t.Fatalf("NewOpenAICompat: %v", err)
-	}
-	Register(other)
-
-	SetRoutes([]Route{
-		{Provider: "vertex", Model: "gemini-2.5-flash"},
-		{Provider: "openrouter", Model: "gemini-2.5-flash"},
-	})
-
-	for _, want := range []string{"vertex", "openrouter"} {
-		got, err := For(Route{Provider: want, Model: "gemini-2.5-flash"})
-		if err != nil {
-			t.Fatalf("For(%s): %v", want, err)
-		}
-		if got.Name() != want {
-			t.Errorf("provider = %q, want %q — the two routes must not collide",
-				got.Name(), want)
-		}
-	}
-}
-
-// TestRegistryRejectsUnlistedModel is the allowlist's whole purpose: a model the
-// operator did not enable must not reach any provider.
-//
-// The error is typed so proxy.go can answer 400 for this while still answering
-// 500 for a wiring failure — the caller can fix one and not the other.
-func TestRegistryRejectsUnlistedModel(t *testing.T) {
-	Reset()
-	defer Reset()
-
-	Register(testVertex())
-	SetRoutes([]Route{{Provider: "vertex", Model: "gemini-2.5-flash"}})
-
-	// A prefix of a listed model, which a prefix-matching registry would serve.
-	unlisted := Route{Provider: "vertex", Model: "gemini-2.5-flash-preview"}
-	_, err := For(unlisted)
-	var unknown *UnknownModelError
-	if !errors.As(err, &unknown) {
-		t.Fatalf("err = %v (%T), want *UnknownModelError", err, err)
-	}
-	if unknown.Route != unlisted {
-		t.Errorf("Route = %v, want %v", unknown.Route, unlisted)
-	}
-}
-
-// TestRegistryRejectsListedModelOnWrongProvider pins that BOTH halves are
-// checked. Enabling a model on one upstream must not enable it on every other
-// upstream the operator happens to have declared.
-func TestRegistryRejectsListedModelOnWrongProvider(t *testing.T) {
-	Reset()
-	defer Reset()
-
-	Register(testVertex())
-	other, err := NewOpenAICompat("openrouter", "https://openrouter.ai/api/v1", "sk-test")
-	if err != nil {
-		t.Fatalf("NewOpenAICompat: %v", err)
-	}
-	Register(other)
-
-	// Only the vertex route is granted.
-	SetRoutes([]Route{{Provider: "vertex", Model: "gemini-2.5-flash"}})
-
-	// Same model, registered provider, but the pair was never allowed.
-	_, err = For(Route{Provider: "openrouter", Model: "gemini-2.5-flash"})
-	var unknown *UnknownModelError
-	if !errors.As(err, &unknown) {
-		t.Fatalf("err = %v (%T), want *UnknownModelError", err, err)
-	}
-}
-
-// TestRegistryUnregisteredProviderIsNotAClientError separates the two failures a
-// caller must be able to tell apart: an unlisted model is the client's mistake,
-// a route pointing at a provider that never registered is ours.
-func TestRegistryUnregisteredProviderIsNotAClientError(t *testing.T) {
-	Reset()
-	defer Reset()
-
-	SetRoutes([]Route{{Provider: "never-registered", Model: "m"}})
-
-	_, err := For(Route{Provider: "never-registered", Model: "m"})
-	if err == nil {
-		t.Fatal("expected an error")
-	}
-	var unknown *UnknownModelError
-	if errors.As(err, &unknown) {
-		t.Error("a loader bug must not be reported as an unknown model")
-	}
-}
-
-// TestSetRoutesReplaces pins that routing is a wholesale swap, not an append: a
-// model dropped from the config must stop resolving.
-func TestSetRoutesReplaces(t *testing.T) {
-	Reset()
-	defer Reset()
-
-	Register(testVertex())
-	SetRoutes([]Route{{Provider: "vertex", Model: "old"}})
-	SetRoutes([]Route{{Provider: "vertex", Model: "new"}})
-
-	if _, err := For(Route{Provider: "vertex", Model: "old"}); err == nil {
-		t.Error("a model removed from the config must no longer resolve")
-	}
-	if _, err := For(Route{Provider: "vertex", Model: "new"}); err != nil {
-		t.Errorf("For(new): %v", err)
-	}
-}
-
-func TestEnabledRoutesIsSorted(t *testing.T) {
-	Reset()
-	defer Reset()
-
-	Register(testVertex())
-	SetRoutes([]Route{
-		{Provider: "vertex", Model: "zeta"},
-		{Provider: "vertex", Model: "alpha"},
-		{Provider: "vertex", Model: "mid"},
-	})
-
-	// Sorted, because this list is quoted back in a 400 body and map iteration
-	// order would make that response differ between identical calls.
-	got := EnabledRoutes()
-	want := []string{"vertex/alpha", "vertex/mid", "vertex/zeta"}
-	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
-		t.Errorf("EnabledRoutes() = %v, want %v", got, want)
 	}
 }

@@ -30,7 +30,7 @@ func writeConfig(t *testing.T, body string) string {
 const validConfig = `
 version: 1
 providers:
-  - name: vertex-prod
+  - name: vertex
     type: vertex
     project_env: GOOGLE_CLOUD_PROJECT
     location: us-central1
@@ -40,7 +40,7 @@ providers:
     api_key_env: TEST_OPENROUTER_KEY
 model_list:
   - model_name: gemini-2.5-flash
-    provider: vertex-prod
+    provider: vertex
     pricing: {input_per_1k: 0.000075, output_per_1k: 0.0003}
   - model_name: gpt-4o-mini
     provider: openrouter
@@ -58,7 +58,7 @@ func TestLoadModelConfig(t *testing.T) {
 	}
 
 	want := []provider.Route{
-		{Provider: "vertex-prod", Model: "gemini-2.5-flash"},
+		{Provider: "vertex", Model: "gemini-2.5-flash"},
 		{Provider: "openrouter", Model: "gpt-4o-mini"},
 	}
 	if got := cfg.EnabledRoutes(); len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
@@ -93,10 +93,10 @@ func TestLoadModelConfigAllowsOneModelOnManyProviders(t *testing.T) {
 	cfg, err := loadModelConfig(writeConfig(t, `
 version: 1
 providers:
-  - {name: vertex-prod, type: vertex, project_env: GOOGLE_CLOUD_PROJECT}
+  - {name: vertex, type: vertex, project_env: GOOGLE_CLOUD_PROJECT}
   - {name: openrouter, type: openai-compat, base_url: https://openrouter.ai/api/v1, api_key_env: TEST_OPENROUTER_KEY}
 model_list:
-  - {model_name: gemini-2.5-flash, provider: vertex-prod}
+  - {model_name: gemini-2.5-flash, provider: vertex}
   - {model_name: gemini-2.5-flash, provider: openrouter}`))
 	if err != nil {
 		t.Fatalf("one model on two providers must be accepted: %v", err)
@@ -104,7 +104,7 @@ model_list:
 
 	got := cfg.EnabledRoutes()
 	want := []provider.Route{
-		{Provider: "vertex-prod", Model: "gemini-2.5-flash"},
+		{Provider: "vertex", Model: "gemini-2.5-flash"},
 		{Provider: "openrouter", Model: "gemini-2.5-flash"},
 	}
 	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {

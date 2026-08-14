@@ -1,4 +1,4 @@
-package provider
+package vertex
 
 import (
 	"encoding/json"
@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"documedai/llmguard/provider"
 )
 
 // goldenCreated is the pinned `created` timestamp for fixtures. generateContent
@@ -22,9 +24,9 @@ const goldenCreated int64 = 1735689600
 // Ids are sequential rather than random so fixtures stay byte-stable — the same
 // reason the clock is frozen. The counter is per-adapter, so each test that calls
 // goldenVertex() starts from 0 and fixtures do not depend on execution order.
-func goldenVertex() *Vertex {
+func goldenVertex() *Client {
 	var n int
-	return &Vertex{
+	return &Client{
 		project:  "test-project",
 		location: "us-central1",
 		now:      func() time.Time { return time.Unix(goldenCreated, 0).UTC() },
@@ -38,8 +40,8 @@ func goldenVertex() *Vertex {
 // realIDVertex is goldenVertex with the production id source, for the tests that
 // are ABOUT id generation — uniqueness and prefix — where a pinned counter would
 // assert the fake instead of the code.
-func realIDVertex() *Vertex {
-	return &Vertex{
+func realIDVertex() *Client {
+	return &Client{
 		project:  "test-project",
 		location: "us-central1",
 		now:      func() time.Time { return time.Unix(goldenCreated, 0).UTC() },
@@ -50,9 +52,9 @@ func realIDVertex() *Vertex {
 
 func TestGoldenRequestText(t *testing.T) {
 	temp := 0.2
-	req := &ChatRequest{
+	req := &provider.ChatRequest{
 		Model: "gemini-2.5-flash",
-		Messages: []Message{
+		Messages: []provider.Message{
 			{Role: "system", Content: "You are terse."},
 			{Role: "user", Content: "What is the capital of France?"},
 			{Role: "assistant", Content: "Paris."},
@@ -67,18 +69,18 @@ func TestGoldenRequestText(t *testing.T) {
 // covers all three translations in one transcript: the tool catalogue, the
 // model's call, and the result being handed back.
 func TestGoldenRequestTools(t *testing.T) {
-	req := &ChatRequest{
+	req := &provider.ChatRequest{
 		Model: "gemini-2.5-flash",
-		Messages: []Message{
+		Messages: []provider.Message{
 			{Role: "system", Content: "Use tools when they help."},
 			{Role: "user", Content: "Weather in Hanoi?"},
 			{
 				// Assistant turn that called a function instead of replying.
 				Role: "assistant",
-				ToolCalls: []ToolCall{{
+				ToolCalls: []provider.ToolCall{{
 					ID:   "call_0_get_weather",
 					Type: "function",
-					Function: FunctionCall{
+					Function: provider.FunctionCall{
 						Name:      "get_weather",
 						Arguments: `{"city":"Hanoi","unit":"celsius"}`,
 					},
@@ -91,9 +93,9 @@ func TestGoldenRequestTools(t *testing.T) {
 				Content:    `{"temp_c":31,"conditions":"humid"}`,
 			},
 		},
-		Tools: []Tool{{
+		Tools: []provider.Tool{{
 			Type: "function",
-			Function: FunctionDef{
+			Function: provider.FunctionDef{
 				Name:        "get_weather",
 				Description: "Current weather for a city.",
 				Parameters: json.RawMessage(
@@ -169,9 +171,9 @@ func TestGoldenResponseToolCall(t *testing.T) {
 // The `data: ` framing and the trailing `[DONE]` are written by proxy.go
 // (proxy.go:320-331) and asserted by proxy_streaming_test.go; reconstructing
 // them here would pin a copy of the proxy rather than the adapter.
-func translateStream(t *testing.T, v *Vertex, req *ChatRequest, frames []string) []StreamChunk {
+func translateStream(t *testing.T, v *Client, req *provider.ChatRequest, frames []string) []provider.StreamChunk {
 	t.Helper()
-	var out []StreamChunk
+	var out []provider.StreamChunk
 	for _, f := range frames {
 		chunks, err := v.TranslateStreamChunk(req, []byte(f))
 		if err != nil {
@@ -191,7 +193,7 @@ func TestGoldenStreamText(t *testing.T) {
 			`"modelVersion":"gemini-2.5-flash-002"}`,
 	}
 
-	chunks := translateStream(t, goldenVertex(), &ChatRequest{Model: "gemini-2.5-flash"}, frames)
+	chunks := translateStream(t, goldenVertex(), &provider.ChatRequest{Model: "gemini-2.5-flash"}, frames)
 	assertGoldenJSON(t, "stream/text.json", chunks)
 }
 
@@ -203,7 +205,7 @@ func TestGoldenStreamToolCall(t *testing.T) {
 			`"modelVersion":"gemini-2.5-flash-002"}`,
 	}
 
-	chunks := translateStream(t, goldenVertex(), &ChatRequest{Model: "gemini-2.5-flash"}, frames)
+	chunks := translateStream(t, goldenVertex(), &provider.ChatRequest{Model: "gemini-2.5-flash"}, frames)
 	assertGoldenJSON(t, "stream/tool_call.json", chunks)
 }
 
@@ -212,7 +214,7 @@ func TestGoldenStreamToolCall(t *testing.T) {
 // the proxy's to write.
 func TestStreamTerminationIsCallerOwned(t *testing.T) {
 	chunks, err := goldenVertex().TranslateStreamChunk(
-		&ChatRequest{Model: "gemini-2.5-flash"},
+		&provider.ChatRequest{Model: "gemini-2.5-flash"},
 		[]byte(`{"modelVersion":"gemini-2.5-flash-002"}`))
 	if err != nil {
 		t.Fatalf("TranslateStreamChunk: %v", err)
@@ -226,12 +228,12 @@ func TestStreamTerminationIsCallerOwned(t *testing.T) {
 
 func TestToNativeToolDeclarations(t *testing.T) {
 	params := json.RawMessage(`{"type":"object","properties":{"city":{"type":"string"}}}`)
-	native := toNative(&ChatRequest{
+	native := toNative(&provider.ChatRequest{
 		Model:    "gemini-2.5-flash",
-		Messages: []Message{{Role: "user", Content: "hi"}},
-		Tools: []Tool{
-			{Type: "function", Function: FunctionDef{Name: "a", Description: "does a", Parameters: params}},
-			{Type: "function", Function: FunctionDef{Name: "b"}},
+		Messages: []provider.Message{{Role: "user", Content: "hi"}},
+		Tools: []provider.Tool{
+			{Type: "function", Function: provider.FunctionDef{Name: "a", Description: "does a", Parameters: params}},
+			{Type: "function", Function: provider.FunctionDef{Name: "b"}},
 		},
 	})
 
@@ -256,13 +258,13 @@ func TestToNativeToolDeclarations(t *testing.T) {
 }
 
 func TestToNativeAssistantToolCall(t *testing.T) {
-	native := toNative(&ChatRequest{
-		Messages: []Message{{
+	native := toNative(&provider.ChatRequest{
+		Messages: []provider.Message{{
 			Role: "assistant",
-			ToolCalls: []ToolCall{{
+			ToolCalls: []provider.ToolCall{{
 				ID:       "call_0_get_weather",
 				Type:     "function",
-				Function: FunctionCall{Name: "get_weather", Arguments: `{"city":"Hanoi"}`},
+				Function: provider.FunctionCall{Name: "get_weather", Arguments: `{"city":"Hanoi"}`},
 			}},
 		}},
 	})
@@ -291,13 +293,13 @@ func TestToNativeAssistantToolCall(t *testing.T) {
 }
 
 func TestToNativeKeepsTextAlongsideToolCall(t *testing.T) {
-	native := toNative(&ChatRequest{
-		Messages: []Message{{
+	native := toNative(&provider.ChatRequest{
+		Messages: []provider.Message{{
 			Role:    "assistant",
 			Content: "Let me check.",
-			ToolCalls: []ToolCall{{
+			ToolCalls: []provider.ToolCall{{
 				ID:       "call_0_f",
-				Function: FunctionCall{Name: "f", Arguments: `{}`},
+				Function: provider.FunctionCall{Name: "f", Arguments: `{}`},
 			}},
 		}},
 	})
@@ -314,13 +316,13 @@ func TestToNativeKeepsTextAlongsideToolCall(t *testing.T) {
 }
 
 func TestToNativeToolResult(t *testing.T) {
-	native := toNative(&ChatRequest{
-		Messages: []Message{
+	native := toNative(&provider.ChatRequest{
+		Messages: []provider.Message{
 			{
 				Role: "assistant",
-				ToolCalls: []ToolCall{{
-					ID:       "call_abc123",           // an id we did NOT mint
-					Function: FunctionCall{Name: "get_weather", Arguments: `{}`},
+				ToolCalls: []provider.ToolCall{{
+					ID:       "call_abc123", // an id we did NOT mint
+					Function: provider.FunctionCall{Name: "get_weather", Arguments: `{}`},
 				}},
 			},
 			{Role: "tool", ToolCallID: "call_abc123", Content: `{"temp_c":31}`},
@@ -558,7 +560,7 @@ func TestTranslateResponsePopulatesIDAndCreated(t *testing.T) {
 // TestTimestampToleratesNilClock guards the zero-value construction that
 // internal/gateway's test harness relies on.
 func TestTimestampToleratesNilClock(t *testing.T) {
-	out, err := (&Vertex{}).TranslateResponse(http.StatusOK, []byte(nativeTextResponse))
+	out, err := (&Client{}).TranslateResponse(http.StatusOK, []byte(nativeTextResponse))
 	if err != nil {
 		t.Fatalf("TranslateResponse on a zero-value Vertex: %v", err)
 	}
@@ -573,7 +575,7 @@ func TestTranslateStreamChunkToolCall(t *testing.T) {
 	frame := `{"candidates":[{"content":{"parts":[{"functionCall":{"name":"get_weather","args":{"city":"Hanoi"}}}]},` +
 		`"finishReason":"STOP","index":0}],"modelVersion":"gemini-2.5-flash-002"}`
 
-	chunks, err := goldenVertex().TranslateStreamChunk(&ChatRequest{Model: "gemini-2.5-flash"}, []byte(frame))
+	chunks, err := goldenVertex().TranslateStreamChunk(&provider.ChatRequest{Model: "gemini-2.5-flash"}, []byte(frame))
 	if err != nil {
 		t.Fatalf("TranslateStreamChunk: %v", err)
 	}
@@ -612,7 +614,7 @@ func TestTranslateStreamChunkToolCall(t *testing.T) {
 // content keeps its (empty) text part, so adding the oneof did not silently
 // change the text-only path.
 func TestToNativeEmptyContentStillEmitsPart(t *testing.T) {
-	native := toNative(&ChatRequest{Messages: []Message{{Role: "user", Content: ""}}})
+	native := toNative(&provider.ChatRequest{Messages: []provider.Message{{Role: "user", Content: ""}}})
 	if len(native.Contents) != 1 {
 		t.Fatalf("contents = %d, want 1", len(native.Contents))
 	}
@@ -625,7 +627,7 @@ func TestToNativeEmptyContentStillEmitsPart(t *testing.T) {
 }
 
 func TestToNativeWithoutToolsOmitsToolFields(t *testing.T) {
-	native := toNative(&ChatRequest{Messages: []Message{{Role: "user", Content: "hi"}}})
+	native := toNative(&provider.ChatRequest{Messages: []provider.Message{{Role: "user", Content: "hi"}}})
 	if native.Tools != nil {
 		t.Errorf("tools = %+v, want nil", native.Tools)
 	}

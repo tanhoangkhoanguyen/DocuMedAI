@@ -44,7 +44,7 @@ func main() {
 	// Resolve the providers up front: a process that cannot mint credentials
 	// should fail at startup, not on the first request. For Vertex this reaches
 	// out to Application Default Credentials.
-	if err := gateway.SetupProviders(context.Background(), cfg, mc); err != nil {
+	if err = gateway.SetupProviders(context.Background(), cfg, mc); err != nil {
 		log.Error("provider setup failed", "err", err.Error())
 		os.Exit(1)
 	}

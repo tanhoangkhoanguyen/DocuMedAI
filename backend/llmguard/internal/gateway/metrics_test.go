@@ -11,6 +11,7 @@ import (
 	"documedai/llmguard/internal/testutil"
 	"documedai/llmguard/mockupstream"
 	"documedai/llmguard/provider"
+	"documedai/llmguard/provider/vertex"
 )
 
 // routedProvider is a mockProvider under a second name, so a request can be
@@ -33,7 +34,7 @@ func TestProviderLabelUsesResolvedAdapter(t *testing.T) {
 	// second adapter and enable the SAME model on it too — the case the pair key
 	// exists for, and the one where a mislabelled series is visible.
 	provider.Register(&routedProvider{mockProvider: &mockProvider{
-		base: h.up.server.URL, inner: &provider.Vertex{},
+		base: h.up.server.URL, inner: &vertex.Client{},
 	}})
 	provider.SetRoutes([]provider.Route{
 		{Provider: "mock", Model: "gemini-2.5-flash"},

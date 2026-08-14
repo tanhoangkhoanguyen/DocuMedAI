@@ -1,4 +1,20 @@
-package provider
+// Package vertex adapts Google Vertex AI's native generateContent API.
+//
+// This is a NATIVE adapter, the exception rather than the default. Three things
+// put Vertex outside what provider/openai can serve by configuration alone:
+//   - the region is in the HOSTNAME and the model is in the PATH, so there is no
+//     single "upstream base" to concatenate against;
+//   - auth is a short-lived OAuth2 access token from ADC, not a static key;
+//   - the wire format is contents/parts, not messages/choices.
+//
+// Only a vendor that breaks the OpenAI format this way needs a package here.
+// Anything that speaks /chat/completions — including Gemini's own compat
+// endpoint — belongs in config.yaml as a `type: openai-compat` entry instead.
+//
+// Credentials come from Application Default Credentials, so the same binary
+// authenticates from a JSON key file locally (GOOGLE_APPLICATION_CREDENTIALS)
+// and from the attached service account on GCP, with no code change.
+package vertex
 
 import (
 	"bytes"
@@ -13,23 +29,19 @@ import (
 
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
+
+	"documedai/llmguard/provider"
 )
 
-// VertexScope is the OAuth2 scope every Vertex AI call needs.
-const VertexScope = "https://www.googleapis.com/auth/cloud-platform"
+// Scope is the OAuth2 scope every Vertex AI call needs.
+const Scope = "https://www.googleapis.com/auth/cloud-platform"
 
-// defaultVertexName is the registry key used when config.yaml names no provider.
-const defaultVertexName = "vertex"
+// defaultName is the registry key used when config.yaml names no provider.
+const defaultName = "vertex"
 
-// Vertex adapts Google Vertex AI's generateContent API.
-//
-// Three things differ from an OpenAI-compatible upstream, and all three are why
-// a URL-prefix proxy cannot serve Vertex:
-//   - the region is in the HOSTNAME and the model is in the PATH, so there is no
-//     single "upstream base" to concatenate against;
-//   - auth is a short-lived OAuth2 access token from ADC, not a static key;
-//   - the wire format is contents/parts, not messages/choices.
-type Vertex struct {
+// Client adapts one Vertex AI project+region. See the package doc for why
+// Vertex needs a native adapter at all.
+type Client struct {
 	name     string
 	project  string
 	location string
@@ -48,11 +60,11 @@ type Vertex struct {
 
 // timestamp is the `created` value for a translated response.
 //
-// It tolerates a nil clock because a zero-value &Vertex{} is a legitimate way to
+// It tolerates a nil clock because a zero-value &Client{} is a legitimate way to
 // construct the adapter for translation-only use — internal/gateway's test
 // harness does exactly that — and a nil-func panic there would be a landmine
 // under code that never touches the network.
-func (v *Vertex) timestamp() int64 {
+func (v *Client) timestamp() int64 {
 	if v.now == nil {
 		return time.Now().Unix()
 	}
@@ -60,7 +72,7 @@ func (v *Vertex) timestamp() int64 {
 }
 
 // id returns one random identifier, nil-tolerant for the same reason timestamp is.
-func (v *Vertex) id() string {
+func (v *Client) id() string {
 	if v.newID == nil {
 		return randomID()
 	}
@@ -84,30 +96,30 @@ func randomID() string {
 	return hex.EncodeToString(b[:])
 }
 
-// NewVertex builds the adapter and resolves Application Default Credentials.
+// New builds the adapter and resolves Application Default Credentials.
 // It fails fast: a process that cannot mint a token should not accept traffic.
 //
-// name is the registry key from config.yaml, as in NewOpenAICompat: the registry
+// name is the registry key from config.yaml, as in openai.New: the registry
 // keys on Name(), so a constant would make every entry named anything else
 // unroutable and panic Register on a second instance. Empty defaults to "vertex".
 //
 // ADC resolution order is the standard one — GOOGLE_APPLICATION_CREDENTIALS, then
 // gcloud user credentials, then the attached service account / workload identity.
-func NewVertex(ctx context.Context, name, project, location string) (*Vertex, error) {
+func New(ctx context.Context, name, project, location string) (*Client, error) {
 	if project == "" {
 		return nil, fmt.Errorf("vertex: GOOGLE_CLOUD_PROJECT is required")
 	}
 	if name == "" {
-		name = defaultVertexName
+		name = defaultName
 	}
 	if location == "" {
 		location = "us-central1"
 	}
-	ts, err := google.DefaultTokenSource(ctx, VertexScope)
+	ts, err := google.DefaultTokenSource(ctx, Scope)
 	if err != nil {
 		return nil, fmt.Errorf("vertex: resolve ADC: %w", err)
 	}
-	return &Vertex{
+	return &Client{
 		name:     name,
 		project:  project,
 		location: location,
@@ -117,18 +129,18 @@ func NewVertex(ctx context.Context, name, project, location string) (*Vertex, er
 	}, nil
 }
 
-// newVertexWithTokens is the test seam: same adapter, injected token source.
-func newVertexWithTokens(project, location string, ts oauth2.TokenSource) *Vertex {
+// newWithTokens is the test seam: same adapter, injected token source.
+func newWithTokens(project, location string, ts oauth2.TokenSource) *Client {
 	if location == "" {
 		location = "us-central1"
 	}
-	return &Vertex{name: defaultVertexName, project: project, location: location, tokens: ts}
+	return &Client{name: defaultName, project: project, location: location, tokens: ts}
 }
 
-func (v *Vertex) Name() string { return v.name }
+func (v *Client) Name() string { return v.name }
 
 // endpoint builds the fully-qualified Vertex URL for a model.
-func (v *Vertex) endpoint(model string, stream bool) string {
+func (v *Client) endpoint(model string, stream bool) string {
 	method := "generateContent"
 	suffix := ""
 	if stream {
@@ -249,7 +261,7 @@ type vertexErrorBody struct {
 // and toNative keys results by id — so ids derived from content would collide and
 // one result would be attached to the wrong call. Random also keeps ids opaque
 // and uniform with the response id.
-func (v *Vertex) toolCallID() string {
+func (v *Client) toolCallID() string {
 	return "call-" + v.id()
 }
 
@@ -308,7 +320,7 @@ func toolResultPayload(content string) json.RawMessage {
 // The empty text part is kept when the message has no tool calls, preserving the
 // pre-tool behavior exactly; it is dropped only when a functionCall would
 // otherwise share the part with it, which the oneof forbids.
-func messageParts(m Message) []vertexPart {
+func messageParts(m provider.Message) []vertexPart {
 	var parts []vertexPart
 	if m.Content != "" || len(m.ToolCalls) == 0 {
 		parts = append(parts, vertexPart{Text: m.Content})
@@ -329,7 +341,7 @@ func messageParts(m Message) []vertexPart {
 // by call ID, and the id is opaque — a client replaying a real OpenAI transcript
 // sends ids we never minted, and ours are random. Reading the assistant turns is
 // therefore the only mapping available.
-func toolNamesByCallID(messages []Message) map[string]string {
+func toolNamesByCallID(messages []provider.Message) map[string]string {
 	names := make(map[string]string)
 	for _, m := range messages {
 		for _, tc := range m.ToolCalls {
@@ -384,7 +396,7 @@ func toolChoiceConfig(raw json.RawMessage) *vertexToolConfig {
 
 // toNativeTools flattens OpenAI's one-entry-per-function array into Gemini's
 // single tool holding every declaration.
-func toNativeTools(tools []Tool) []vertexTool {
+func toNativeTools(tools []provider.Tool) []vertexTool {
 	if len(tools) == 0 {
 		return nil
 	}
@@ -412,7 +424,7 @@ func toNativeTools(tools []Tool) []vertexTool {
 // systemInstruction. Consecutive system messages are joined with a blank line.
 // "tool" is not a role either: a tool result becomes a functionResponse part on a
 // "user" content, which is how Google's own SDKs return results to the model.
-func toNative(req *ChatRequest) *vertexRequest {
+func toNative(req *provider.ChatRequest) *vertexRequest {
 	out := &vertexRequest{}
 	names := toolNamesByCallID(req.Messages)
 
@@ -472,7 +484,7 @@ func toNative(req *ChatRequest) *vertexRequest {
 }
 
 // BuildRequest implements Provider.
-func (v *Vertex) BuildRequest(ctx context.Context, req *ChatRequest) (*http.Request, error) {
+func (v *Client) BuildRequest(ctx context.Context, req *provider.ChatRequest) (*http.Request, error) {
 	body, err := json.Marshal(toNative(req))
 	if err != nil {
 		return nil, fmt.Errorf("vertex: encode request: %w", err)
@@ -535,8 +547,8 @@ func joinParts(parts []vertexPart) string {
 // JSON string, so the raw bytes are carried across as-is rather than re-encoded.
 // An absent args becomes "{}" — OpenAI clients parse this field, and "" is not
 // valid JSON.
-func (v *Vertex) toolCalls(parts []vertexPart) []ToolCall {
-	var calls []ToolCall
+func (v *Client) toolCalls(parts []vertexPart) []provider.ToolCall {
+	var calls []provider.ToolCall
 	for _, p := range parts {
 		if p.FunctionCall == nil {
 			continue
@@ -545,10 +557,10 @@ func (v *Vertex) toolCalls(parts []vertexPart) []ToolCall {
 		if len(p.FunctionCall.Args) > 0 {
 			args = string(p.FunctionCall.Args)
 		}
-		calls = append(calls, ToolCall{
+		calls = append(calls, provider.ToolCall{
 			ID:   v.toolCallID(),
 			Type: "function",
-			Function: FunctionCall{
+			Function: provider.FunctionCall{
 				Name:      p.FunctionCall.Name,
 				Arguments: args,
 			},
@@ -583,17 +595,17 @@ func finishReasonFor(native string, calls int) string {
 // frames, indices would restart at 0 and a client would merge distinct calls.
 // Not observed today — Gemini emits them together — and fixing it properly means
 // giving the interface per-turn state, which belongs with the proxy.
-func toolCallDeltas(calls []ToolCall) []ToolCallDelta {
+func toolCallDeltas(calls []provider.ToolCall) []provider.ToolCallDelta {
 	if len(calls) == 0 {
 		return nil
 	}
-	deltas := make([]ToolCallDelta, 0, len(calls))
+	deltas := make([]provider.ToolCallDelta, 0, len(calls))
 	for i, c := range calls {
-		deltas = append(deltas, ToolCallDelta{
+		deltas = append(deltas, provider.ToolCallDelta{
 			Index: i,
 			ID:    c.ID,
 			Type:  c.Type,
-			Function: &FunctionCallDelta{
+			Function: &provider.FunctionCallDelta{
 				Name:      c.Function.Name,
 				Arguments: c.Function.Arguments,
 			},
@@ -607,7 +619,7 @@ func toolCallDeltas(calls []ToolCall) []ToolCallDelta {
 // Random rather than a hash of the response bytes: clients use this id to trace
 // and de-duplicate, so two callers who happen to receive identical content must
 // still get distinct ids. The "chatcmpl-" prefix is part of OpenAI's contract.
-func (v *Vertex) responseID() string {
+func (v *Client) responseID() string {
 	return "chatcmpl-" + v.id()
 }
 
@@ -616,16 +628,16 @@ func (v *Vertex) responseID() string {
 // thoughtsTokenCount (thinking models) is folded into completion tokens: it is
 // billed as output and OpenAI has no field for it, so hiding it would understate
 // cost.
-func toUsage(m *vertexUsageMetadata) Usage {
+func toUsage(m *vertexUsageMetadata) provider.Usage {
 	if m == nil {
-		return Usage{}
+		return provider.Usage{}
 	}
 	completion := m.CandidatesTokenCount + m.ThoughtsTokenCount
 	total := m.TotalTokenCount
 	if total == 0 {
 		total = m.PromptTokenCount + completion
 	}
-	return Usage{
+	return provider.Usage{
 		PromptTokens:     m.PromptTokenCount,
 		CompletionTokens: completion,
 		TotalTokens:      total,
@@ -633,9 +645,9 @@ func toUsage(m *vertexUsageMetadata) Usage {
 }
 
 // TranslateResponse implements Provider.
-func (v *Vertex) TranslateResponse(status int, body []byte) (*ChatResponse, error) {
+func (v *Client) TranslateResponse(status int, body []byte) (*provider.ChatResponse, error) {
 	if status < 200 || status > 299 {
-		return nil, &UpstreamError{Status: status, Body: vertexErrorEnvelope(status, body)}
+		return nil, &provider.UpstreamError{Status: status, Body: vertexErrorEnvelope(status, body)}
 	}
 
 	var native vertexResponse
@@ -643,12 +655,12 @@ func (v *Vertex) TranslateResponse(status int, body []byte) (*ChatResponse, erro
 		return nil, fmt.Errorf("vertex: decode response: %w", err)
 	}
 
-	out := &ChatResponse{
+	out := &provider.ChatResponse{
 		ID:      v.responseID(),
 		Object:  "chat.completion",
 		Created: v.timestamp(),
 		Model:   native.ModelVersion,
-		Choices: make([]Choice, 0, len(native.Candidates)),
+		Choices: make([]provider.Choice, 0, len(native.Candidates)),
 		Usage:   toUsage(native.UsageMetadata),
 	}
 	for i, c := range native.Candidates {
@@ -657,9 +669,9 @@ func (v *Vertex) TranslateResponse(status int, body []byte) (*ChatResponse, erro
 			idx = i
 		}
 		calls := v.toolCalls(c.Content.Parts)
-		out.Choices = append(out.Choices, Choice{
+		out.Choices = append(out.Choices, provider.Choice{
 			Index: idx,
-			Message: Message{
+			Message: provider.Message{
 				Role:      "assistant",
 				Content:   joinParts(c.Content.Parts),
 				ToolCalls: calls,
@@ -672,36 +684,23 @@ func (v *Vertex) TranslateResponse(status int, body []byte) (*ChatResponse, erro
 
 // vertexErrorEnvelope turns a Vertex error body into the OpenAI error shape,
 // falling back to the raw body when it isn't the expected JSON.
-func vertexErrorEnvelope(status int, body []byte) ErrorEnvelope {
+func vertexErrorEnvelope(status int, body []byte) provider.ErrorEnvelope {
 	var ve vertexErrorBody
 	if err := json.Unmarshal(body, &ve); err == nil && ve.Error.Message != "" {
-		return NewErrorEnvelope(ve.Error.Message, errorType(status))
+		return provider.NewErrorEnvelope(ve.Error.Message, provider.ErrorType(status))
 	}
 	msg := strings.TrimSpace(string(body))
 	if msg == "" {
 		msg = fmt.Sprintf("upstream returned status %d", status)
 	}
-	return NewErrorEnvelope(msg, errorType(status))
-}
-
-func errorType(status int) string {
-	switch {
-	case status == http.StatusTooManyRequests:
-		return "rate_limit"
-	case status == http.StatusUnauthorized || status == http.StatusForbidden:
-		return "auth_error"
-	case status >= 500:
-		return "upstream_error"
-	default:
-		return "invalid_request_error"
-	}
+	return provider.NewErrorEnvelope(msg, provider.ErrorType(status))
 }
 
 // --- translation: streaming ---
 
 // TranslateStreamChunk implements Provider. `raw` is the payload of one SSE
 // `data:` line, already stripped of the prefix by the caller.
-func (v *Vertex) TranslateStreamChunk(req *ChatRequest, raw []byte) ([]StreamChunk, error) {
+func (v *Client) TranslateStreamChunk(req *provider.ChatRequest, raw []byte) ([]provider.StreamChunk, error) {
 	raw = bytes.TrimSpace(raw)
 	if len(raw) == 0 {
 		return nil, nil
@@ -717,10 +716,10 @@ func (v *Vertex) TranslateStreamChunk(req *ChatRequest, raw []byte) ([]StreamChu
 		model = req.Model
 	}
 
-	chunk := StreamChunk{
+	chunk := provider.StreamChunk{
 		Object:  "chat.completion.chunk",
 		Model:   model,
-		Choices: make([]ChunkChoice, 0, len(native.Candidates)),
+		Choices: make([]provider.ChunkChoice, 0, len(native.Candidates)),
 	}
 	for i, c := range native.Candidates {
 		idx := c.Index
@@ -728,9 +727,9 @@ func (v *Vertex) TranslateStreamChunk(req *ChatRequest, raw []byte) ([]StreamChu
 			idx = i
 		}
 		calls := v.toolCalls(c.Content.Parts)
-		chunk.Choices = append(chunk.Choices, ChunkChoice{
+		chunk.Choices = append(chunk.Choices, provider.ChunkChoice{
 			Index: idx,
-			Delta: Delta{
+			Delta: provider.Delta{
 				Content:   joinParts(c.Content.Parts),
 				ToolCalls: toolCallDeltas(calls),
 			},
@@ -750,7 +749,7 @@ func (v *Vertex) TranslateStreamChunk(req *ChatRequest, raw []byte) ([]StreamChu
 	if len(chunk.Choices) == 0 && chunk.Usage == nil {
 		return nil, nil
 	}
-	return []StreamChunk{chunk}, nil
+	return []provider.StreamChunk{chunk}, nil
 }
 
 func hasFinish(cands []vertexCandidate) bool {
