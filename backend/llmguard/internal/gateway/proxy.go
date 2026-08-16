@@ -9,7 +9,9 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"documedai/llmguard/provider"
@@ -385,13 +387,31 @@ func (p *Proxy) serveStreaming(
 		return
 	}
 
+	// A cancellable child of the request context, so an idle upstream can be cut
+	// without waiting for the client to disconnect. Cancelling it aborts the
+	// in-flight body read, which is the only way to interrupt a scanner.Scan()
+	// that is blocked waiting for bytes that are not coming.
+	//
+	// The cancel is deferred rather than called at each exit: the loop below
+	// returns from several places, and a context left uncancelled leaks its
+	// goroutine and timer for the life of the process.
+	streamCtx, cancelStream := context.WithCancel(r.Context())
+	defer cancelStream()
+
+	// abortReason records WHY the stream was cut, written by the idle watchdog and
+	// read after the loop. It exists because cancellation is indistinguishable
+	// from any other read error by the time the scanner reports it: without this,
+	// a deadline abort and a genuine transport failure produce the same error and
+	// the metric could not tell them apart.
+	var abortReason atomic.Pointer[string]
+
 	var usage provider.Usage
 	// Whether WriteHeader has gone out. Past that point the status is locked in
 	// and everything already flushed belongs to the client, so a failure can only
 	// be APPENDED to the stream — never rewritten as an error envelope.
 	var wroteHeader bool
 	_, err := p.breakers.get(provName).Execute(func() (interface{}, error) {
-		httpReq, berr := prov.BuildRequest(r.Context(), req)
+		httpReq, berr := prov.BuildRequest(streamCtx, req)
 		if berr != nil {
 			return nil, berr
 		}
@@ -423,11 +443,40 @@ func (p *Proxy) serveStreaming(
 		wroteHeader = true
 		p.metrics.requests.WithLabelValues(provName, model, statusLabel(http.StatusOK)).Inc()
 
+		// --- Inter-frame watchdog ---
+		//
+		// Bounds the gap between two frames FROM UPSTREAM. Nothing else measures
+		// it: a provider that sends one frame and then goes quiet — without
+		// erroring and without closing — holds this slot at its own pace, and to
+		// any total-duration bound it is indistinguishable from a slow generation.
+		// Inter-frame time is the quantity that separates the two.
+		//
+		// A timer RESET per frame rather than a deadline: reset is what makes a
+		// long healthy stream survive. An absolute bound of the same size would cut
+		// exactly the long generations the streaming client exists to protect.
+		//
+		// Armed only after the header is out, so it covers the streaming phase and
+		// not connect/TLS, which streamClient's own timeout already bounds.
+		idle := newIdleWatchdog(p.cfg.StreamIdleTimeout, func() {
+			reason := abortUpstreamIdle
+			abortReason.Store(&reason)
+			// Cancels the read the scanner is blocked in, which is what actually
+			// unwinds the handler and returns the admission slot.
+			cancelStream()
+		})
+		defer idle.stop()
+
 		// Scan the provider's SSE frames line by line. Vertex sends
 		// `data: {...}` per frame; blank lines separate events.
 		scanner := bufio.NewScanner(resp.Body)
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024) // a frame can be large
 		for scanner.Scan() {
+			// Reset on EVERY line, including the blank separators and frames that
+			// fail to translate below. The watchdog asks whether the upstream is
+			// still sending, not whether what it sends is useful — a provider
+			// emitting keepalives is alive, and cutting it would be wrong.
+			idle.reset()
+
 			line := strings.TrimSpace(scanner.Text())
 			if line == "" || !strings.HasPrefix(line, "data:") {
 				continue
@@ -457,6 +506,14 @@ func (p *Proxy) serveStreaming(
 				flusher.Flush()
 			}
 		}
+		// Checked BEFORE scanner.Err(), because a cancelled read does not reliably
+		// surface as one: depending on where the cancellation lands, the body can
+		// report a clean EOF instead, and the loop would fall through to [DONE] —
+		// reporting a truncated stream as a complete one, which is the failure mode
+		// this whole change exists to remove.
+		if reason := abortReason.Load(); reason != nil {
+			return nil, fmt.Errorf("stream aborted: %s", *reason)
+		}
 		if serr := scanner.Err(); serr != nil {
 			return nil, serr
 		}
@@ -466,6 +523,13 @@ func (p *Proxy) serveStreaming(
 		return nil, nil
 	})
 	if err != nil {
+		// Counted before the branch below, because a deadline abort is a distinct
+		// fault from an upstream error and the branch only distinguishes "did
+		// anything reach the client". Recorded here rather than in the watchdog so
+		// it fires exactly once per aborted stream, on the path that ends it.
+		if reason := streamAbortReason(abortReason.Load(), err, wroteHeader); reason != "" {
+			p.metrics.streamAborts.WithLabelValues(provName, model, reason).Inc()
+		}
 		p.log.Warn("streaming upstream failed",
 			"provider", provName, "model", model, "err", err.Error())
 
@@ -514,6 +578,41 @@ func (p *Proxy) serveStreaming(
 	// The streaming path now accounts tokens too — the old byte-pipe could not.
 	p.recordUsage(provName, model, usage)
 	p.metrics.latency.WithLabelValues(provName, model).Observe(time.Since(start).Seconds())
+}
+
+// streamAbortReason names which deadline ended a stream, or "" when the failure
+// was not a deadline at all.
+//
+// Two sources, because the deadlines are enforced in two different places and
+// only one of them can announce itself:
+//
+//   - The watchdogs set `explicit` before cancelling, so they are self-reporting
+//     and always win. Checked first for that reason.
+//   - StreamAbsoluteMax is http.Client.Timeout, enforced beneath us. It cannot
+//     set anything; it just surfaces as a deadline error indistinguishable from
+//     any other. Inferring it is the only way it gets a name — and it is the
+//     reason that most needs one, because it fires only when the other two have
+//     already failed to.
+//
+// wroteHeader gates the inference: before the header goes out the same deadline
+// error means connect/TLS/first-byte was slow, which is an upstream problem
+// rather than a stream that overran. Attributing that to the backstop would put
+// ordinary upstream slowness into the counter that is supposed to mean "the
+// streaming deadlines are broken".
+func streamAbortReason(explicit *string, err error, wroteHeader bool) string {
+	if explicit != nil {
+		return *explicit
+	}
+	if !wroteHeader {
+		return ""
+	}
+	// Both forms appear depending on where the deadline lands: the transport
+	// reports os.ErrDeadlineExceeded on the socket, while a cancelled request
+	// context reports context.DeadlineExceeded.
+	if errors.Is(err, os.ErrDeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
+		return abortAbsoluteMax
+	}
+	return ""
 }
 
 // recordUsage adds normalized token counts to metrics.

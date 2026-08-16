@@ -68,6 +68,20 @@ type Metrics struct {
 	// caller is affected regardless of quota, and it is an operator problem. One
 	// counter for both would hide a capacity incident inside normal throttling.
 	shed *prometheus.CounterVec
+	// streamAborts counts streams cut by a streaming deadline, by provider +
+	// model + reason.
+	//
+	// Needed because an aborted stream is otherwise INVISIBLE here. The header
+	// goes out with the first frame, so requests_total already recorded a 2xx, and
+	// the failure reaches the client as an in-band SSE frame that no server-side
+	// counter observes. Without this, an upstream stalling on every request looks
+	// exactly like ordinary successful traffic.
+	//
+	// The reason label is what makes it actionable, because the causes live on
+	// opposite sides of the gateway: upstream_idle is a provider going quiet
+	// mid-stream, write_idle is clients that stopped reading. One counter for both
+	// would report that streams are being cut without saying who to go fix.
+	streamAborts *prometheus.CounterVec
 }
 
 // newMetrics registers the collectors on the DEFAULT registry, which is what
@@ -119,5 +133,38 @@ func newMetricsWith(reg prometheus.Registerer) *Metrics {
 			Name: "llmguard_shed_total",
 			Help: "Requests refused by admission control because the gateway was at capacity.",
 		}, []string{"provider", "model"}),
+		streamAborts: auto.NewCounterVec(prometheus.CounterOpts{
+			Name: "llmguard_stream_aborts_total",
+			Help: "Streams cut by a streaming deadline, by reason (upstream_idle|write_idle).",
+		}, []string{"provider", "model", "reason"}),
 	}
 }
+
+// Abort reasons for streamAborts. Named constants because each is written in one
+// place and asserted in another, and a typo in either would silently produce a
+// second, permanently-zero series rather than a failure.
+//
+// These must cover EVERY way a stream can be cut, or the gap is invisible: an
+// unlabelled abort still returns HTTP 200 (the header left with the first frame)
+// and reports itself only as an in-band SSE frame, so it lands in no counter at
+// all.
+const (
+	// The upstream went quiet between frames — a provider problem.
+	abortUpstreamIdle = "upstream_idle"
+	// The client stopped reading and writes backed up — a client problem.
+	abortWriteIdle = "write_idle"
+	// StreamAbsoluteMax elapsed.
+	//
+	// This one is a LLMGuard problem, not either endpoint's. The backstop only
+	// fires once the two inactivity bounds above have failed to, so any value here
+	// means a stream ran 30 minutes while looking active the whole way — either
+	// the write deadline degraded to a no-op behind a ResponseWriter wrapper, or
+	// an upstream is dribbling frames just fast enough to keep resetting the
+	// watchdog. Both are bugs in the protection itself.
+	//
+	// Precisely because it should never fire, it is the reason that most needs a
+	// name: left unlabelled it surfaces as an ordinary transport error and the
+	// dashboard shows a few upstream failures rather than "the deadlines are not
+	// working".
+	abortAbsoluteMax = "absolute_max"
+)
