@@ -23,7 +23,6 @@ jobs:
           cat > .env <<'EOF'
           UUID_NAMESPACE="b1343753-a4f3-4be8-94c6-9780ee37ab61"
           AUTH_JWT_SECRET=test-auth-secret
-          SUPABASE_JWT_SECRET=test-supabase-secret
           EOF
 
       - name: Start core stack

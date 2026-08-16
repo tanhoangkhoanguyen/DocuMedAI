@@ -14,21 +14,13 @@ gcp-sa.json
 **/logs
 /.pytest_cache
 
-# Documents
+# Documents / ingested corpora.
+# Scoped to the directories that actually hold them. A bare `**.json` here
+# matches EVERY .json in the repo — it silently swallowed package.json,
+# tsconfig.json and the Go golden fixtures, each of which then needed its own
+# negation to claw back. Keep these rules narrow rather than re-adding them.
 **.pdf
-**.json
-**.jsonl
-
-# Vector database benchmark results files
-!/backend/vector_database_tests/sweep_results/**
-!/backend/vector_database_tests/throughput_results/**
-!/backend/vector_database_tests/upload_results/**
-
-# Keep project manifests that tooling (npm, tsc) requires.
-!**/package.json
-!**/package-lock.json
-!**/tsconfig.json
-
-# Keep Go golden fixtures. These are hand-authored test inputs, not output —
-# without this the **.json rule above drops them and CI fails on a missing file.
-!/backend/llmguard/provider/vertex/testdata/**
+**/data/**.json
+**/data/**.jsonl
+**/documents/**.json
+**/documents/**.jsonl

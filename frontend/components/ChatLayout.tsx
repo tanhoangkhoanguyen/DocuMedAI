@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { createClient } from "@/lib/utils/browser_client";
 import ChatSidebar from "@/components/utils/ChatSidebar";
 import MessageList from "@/components/utils/MessageList";
 import MessageInput from "@/components/utils/MessageInput";
@@ -265,8 +264,6 @@ export default function ChatLayout({ userEmail }: { userEmail: string }) {
 
   async function signOut() {
     await fetch("/api/auth/logout", { method: "POST" });
-    const supabase = createClient();
-    await supabase.auth.signOut();
     window.location.href = "/login";
   }
 

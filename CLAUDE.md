@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-DocuMedAI is a full-stack AI-powered medical document analysis system. Users upload medical documents, then ask questions via a chat interface. The backend uses a multi-agent LangGraph workflow with RAG retrieval across vector databases. The system supports persistent conversation memory, Redis caching, and JWT + Supabase authentication.
+DocuMedAI is a full-stack AI-powered medical document analysis system. Users upload medical documents, then ask questions via a chat interface. The backend uses a multi-agent LangGraph workflow with RAG retrieval across vector databases. The system supports persistent conversation memory, Redis caching, and local JWT authentication (HS256, delivered to the browser as an httpOnly cookie).
 
 **Key concept**: The LangGraph `StateGraph` is a **strictly linear pipeline** (no conditional edges — see `workflow.py:88-93`): TopicChecker → MessageAnalysis → LongTermMemoryRetriever → Agents (CrewAI) → SchemaUpdater. The branching (topic-change early-return, revision loop) lives *inside* the nodes, not in graph routing. RAG uses Qdrant retrieval with cross-encoder reranking. When a topic change is detected inside `TopicChecker`, the prior conversation is summarized and archived to a Qdrant long-term memory collection.
 
@@ -20,13 +20,13 @@ DocuMedAI is a full-stack AI-powered medical document analysis system. Users upl
 | LLMGuard | Go gateway (admission control, rate limit, retry, circuit breaker, dedup); OpenAI-compatible API → provider adapter (`openai` generic / `vertex` native) → upstream. Standalone; not in the app's request path | `backend/llmguard/` |
 | Memory cache | Redis (TTL 1800s → flush to MongoDB) | `backend/services/utils/redis_client.py` |
 | Persistence | MongoDB | `backend/services/utils/mongo_client.py` |
-| Auth | JWT + Supabase SSR | `backend/services/app/auth_api.py`, `frontend/lib/supabase/` |
+| Auth | Local JWT (HS256) in an httpOnly cookie; Next.js route handlers attach the Bearer header server-side | `backend/services/app/auth_api.py`, `frontend/lib/backend-bearer.ts` |
 | Vector DB | Qdrant (default); alternatives benchmarked in `backend/vector_database_tests/` | `backend/toolcore/tools/` |
 | Tool Core | In-memory tool registry + the single enforcement point (`MCPServer.call_tool`) | `backend/toolcore/core.py` |
 | MCP server | Real MCP protocol (JSON-RPC 2.0 over streamable-HTTP, official `mcp` SDK) at `/mcp` on port 8090 | `backend/mcp_server/` |
 | ID hashing | `pattern_cipher.py` does NOT encrypt — it's `uuid5` deterministic IDs + bcrypt helpers (the bcrypt helpers are currently unused; auth stores plaintext passwords). No message encryption exists anywhere. | `backend/services/utils/pattern_cipher.py` |
 
-**Important**: `backend/services/app/` holds the FastAPI routes and workspace layer. `backend/services/chatbot/` holds the LangGraph graph, nodes, and tools. `backend/services/utils/` holds shared DB clients (MongoDB, Redis, Supabase).
+**Important**: `backend/services/app/` holds the FastAPI routes and workspace layer. `backend/services/chatbot/` holds the LangGraph graph, nodes, and tools. `backend/services/utils/` holds shared DB clients (MongoDB, Redis).
 
 **Tool Core, one core / two surfaces**: `toolcore/core.py` holds the three RAG tools
 (`identity`, `search_medical_knowledge`, `search_user_documents`) and is reached two ways:
@@ -46,7 +46,7 @@ return identical content.
 
 **MCP auth**: The MCP boundary is the *only* auth surface — `source="internal"` callers
 bypass it. An ASGI step in `mcp_server/auth.py` verifies `Authorization: Bearer <jwt>` via
-the shared `services.app.auth_deps.decode_bearer_any` (local HS256 + Supabase) and binds a
+the shared `services.app.auth_deps.decode_bearer_any` (local HS256) and binds a
 `Principal(source="mcp")` for the request scope. Absent token → anonymous (the two unscoped
 tools still work); invalid token → HTTP 401 before any tool runs.
 
@@ -296,10 +296,7 @@ OPENAI_API_KEY=
 GEMINI_API_KEY=
 LANGCHAIN_API_KEY=
 LANGCHAIN_TRACING_V2=true
-SUPABASE_JWT_SECRET=
 AUTH_JWT_SECRET=
-NEXT_PUBLIC_SUPABASE_URL=
-NEXT_PUBLIC_SUPABASE_ANON_KEY=
 ```
 
 ## Data Flow: Chat Message

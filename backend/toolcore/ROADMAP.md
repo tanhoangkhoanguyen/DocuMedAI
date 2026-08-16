@@ -107,7 +107,7 @@ Both adapters call the **same** `ToolCore.call_tool`. That single fact is the en
 ### Issue 2.2 — JWT enforcement for external MCP clients
 - **Problem:** external clients are untrusted; internal callers are already authenticated. The two must not share a trust assumption.
 - **What to do:**
-  - Reuse the **existing** verifier `decode_bearer_any` ([`auth_deps.py:72-116`](../services/app/auth_deps.py#L72-L116)) — do not fork JWT logic. It already handles local HS256 (`type=local`, `id`) and Supabase tokens (`stable_supabase_user_id`).
+  - Reuse the **existing** verifier `decode_bearer_any` ([`auth_deps.py`](../services/app/auth_deps.py)) — do not fork JWT logic. It handles local HS256 tokens (`type=local`, `id`), the only kind the backend issues.
   - streamable-HTTP: read `Authorization: Bearer`, verify, build `Principal(user_id=claims["id"], source="mcp")`, attach to the MCP session; reject `tools/call` on principal-requiring tools (`search_user_documents`) without valid claims → JSON-RPC error / 401.
   - stdio: accept the token via env var / init option (stdio has no HTTP headers), verified through the same function.
   - **Enforcement lives in the MCP adapter only** — internal `source="internal"` calls bypass it entirely.
@@ -132,7 +132,7 @@ Both adapters call the **same** `ToolCore.call_tool`. That single fact is the en
 - **Problem:** the current registry has **zero** dedicated tests.
 - **What to do:** new `ci_tests/integration/tool_core/`: schema validity per tool; `ToolInputError` on bad args; `requires_principal` refusal path; principal isolation (user A vs user B against Qdrant, mirroring `test_qdrant_user_isolation` in [`test_qdrant_client.py`](../../ci_tests/integration/vector_db/test_qdrant_client.py)).
 - **Criteria:** invalid args never reach a supporter; no-principal `search_user_documents` returns empty/refused; cross-user retrieval leaks nothing.
-- **Tech:** pytest `integration` marker ([`pytest.ini`](../../pytest.ini)); reuse `fixtures/vector_db.py` seeding + `auth_headers`/`supabase_jwt` fixtures ([`conftest.py`](../../ci_tests/conftest.py)).
+- **Tech:** pytest `integration` marker ([`pytest.ini`](../../pytest.ini)); reuse `fixtures/vector_db.py` seeding + the `auth_headers` fixture ([`conftest.py`](../../ci_tests/conftest.py)).
 
 ### Issue 3.2 — MCP protocol conformance tests
 - **Problem:** must guarantee real JSON-RPC / lifecycle correctness, not just "it ran once."

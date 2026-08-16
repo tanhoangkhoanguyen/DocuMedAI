@@ -5,8 +5,8 @@ This is the ONLY auth surface for the external MCP server. Internal `source="int
 callers never reach here — they build their own principal in `toolcore.core`.
 
 The JWT logic is NOT forked: we reuse `services.app.auth_deps.decode_bearer_any`, which
-already verifies both local HS256 tokens (`type=local`, `id`) and Supabase tokens
-(normalized to `id` via `stable_supabase_user_id`). That verifier raises FastAPI's
+verifies local HS256 tokens (`type=local`, `id`) — the only kind the backend issues.
+That verifier raises FastAPI's
 `HTTPException` on failure; since the MCP adapter is not FastAPI, we translate it into a
 transport-neutral `MCPAuthError`, which the ASGI auth step maps to a 401 before the
 session manager runs.

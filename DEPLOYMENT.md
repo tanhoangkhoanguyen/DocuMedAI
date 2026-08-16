@@ -184,8 +184,6 @@ Environment variables:
 
 ```dotenv
 INTERNAL_API_BASE=https://documedai-backend.duckdns.org   # backend URL from §7
-NEXT_PUBLIC_SUPABASE_URL=https://<project>.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=<anon-key>
 ```
 
 ---

@@ -72,12 +72,3 @@ def test_me_requires_auth(api_client):
         headers={"Authorization": "Bearer access_token"},
     )
     assert res.status_code == 401
-
-
-def test_supabase_sync(api_client, supabase_jwt):
-    res = api_client.post(
-        "/auth/supabase-sync",
-        headers={"Authorization": f"Bearer {supabase_jwt}"},
-    )
-    assert res.status_code == 200
-    assert "user_id" in res.json()

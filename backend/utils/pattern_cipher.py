@@ -27,9 +27,6 @@ class PatternCipher:
     def stable_local_user_id(self, email: str) -> str:
         return str(uuid.uuid5(self.__namespace, "local:" + email.strip().lower()))
 
-    def stable_supabase_user_id(self, sub: str) -> str:                                 # sub is stable per user
-        return str(uuid.uuid5(self.__namespace, "supabase:" + sub.strip()))
-
     def verify_password(self, plain: str, hashed: str) -> bool:
         return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
 

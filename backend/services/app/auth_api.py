@@ -6,11 +6,9 @@ warnings.filterwarnings("ignore")
 
 from logger import get_logger
 from services.app.auth_deps import (
-    claims_sub_email,
     get_workspace,
     mint_access_token,
     require_bearer_claims,
-    require_supabase_claims,
 )
 from services.app.chatbot_workspace import ChatbotWorkspace
 from services.chatbot.constants.schemas import RegisterState
@@ -56,25 +54,6 @@ def auth_register(
         "access_token": token,
         "token_type": "bearer",
     }
-
-@auth_router.post("/auth/supabase-sync")
-def supabase_sync(
-        # Before calling supabase_sync, execute
-        # - require_supabase_claims
-        # - get_workpace
-        claims: Dict[str, Any] = Depends(require_supabase_claims),
-        workspace: ChatbotWorkspace = Depends(get_workspace),
-    ) -> Dict[str, str]:
-    sub, email = claims_sub_email(claims)
-    try:
-        user_id = workspace.ensure_user(sub, email)
-    except Exception as exc:
-        _LOGGER.exception("supabase_sync failed: %s", exc)
-        raise HTTPException(
-            status_code = 500,
-            detail = "Failed to sync user account",
-        ) from exc
-    return {"user_id": user_id}
 
 @auth_router.post("/auth/login")
 def auth_login(

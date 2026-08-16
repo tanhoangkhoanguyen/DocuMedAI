@@ -51,8 +51,8 @@ Two gotchas worth knowing up front:
 ## Auth
 
 The MCP boundary is the **only** auth surface — internal `source="internal"` callers bypass
-it. Tokens are verified by the shared `services.app.auth_deps.decode_bearer_any` (local HS256
-+ Supabase), turned into a `Principal(source="mcp")` in [`auth.py`](auth.py), and threaded
+it. Tokens are verified by the shared `services.app.auth_deps.decode_bearer_any` (local
+HS256), turned into a `Principal(source="mcp")` in [`auth.py`](auth.py), and threaded
 into every `tools/call`. An ASGI step verifies the token per request and binds the principal
 for that request's scope before the session manager runs.
 

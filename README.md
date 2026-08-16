@@ -11,7 +11,6 @@
   <img src="https://img.shields.io/badge/Qdrant-DC244C?logo=qdrant&logoColor=white" alt="Qdrant">
   <img src="https://img.shields.io/badge/Redis-FF4438?logo=redis&logoColor=white" alt="Redis">
   <img src="https://img.shields.io/badge/MongoDB-47A248?logo=mongodb&logoColor=white" alt="MongoDB">
-  <img src="https://img.shields.io/badge/Supabase-3FCF8E?logo=supabase&logoColor=white" alt="Supabase">
   <img src="https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white" alt="Docker">
 </p>
 
@@ -25,7 +24,7 @@ multi-agent workflow, and runs on production-grade infrastructure.
 
 - **Grounded** - RAG over your docs (Qdrant + cross-encoder reranking); weak matches are dropped, not fabricated.
 - **Persistent** - short-term context plus long-term memory recalled across topics.
-- **Hardened** - Go LLM gateway (rate limit, retry, circuit breaker), encrypted messages, JWT + Supabase auth.
+- **Hardened** - Go LLM gateway (rate limit, retry, circuit breaker), encrypted messages, JWT auth over httpOnly cookies.
 
 ## Stack
 
@@ -43,12 +42,13 @@ Each message flows: **TopicChecker → MessageAnalysis → LongTermMemory → Ag
 
 | Method | Path | |
 |--------|------|--|
-| POST | `/auth/register` · `/auth/login` · `/auth/supabase-sync` | auth |
+| POST | `/auth/register` · `/auth/login` | auth |
 | GET | `/auth/me` | current user |
 | GET · POST | `/chats` | list / create |
-| PATCH | `/chats/{id}` | rename |
+| PATCH · DELETE | `/chats/{id}` | rename / delete |
 | GET · POST | `/chats/{id}/messages` | history / send |
 | POST | `/chats/{id}/messages/stream` | stream reply (SSE) |
+| POST · GET · DELETE | `/documents` | upload / status / remove |
 | GET | `/health` | liveness |
 
 **Frontend** (`:2011`) — chat UI + `/api/*` routes proxying the backend.

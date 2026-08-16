@@ -1,4 +1,4 @@
-import os, uuid, jwt, pytest
+import uuid, pytest
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, HumanMessage
 from unittest.mock import MagicMock
@@ -35,17 +35,6 @@ def api_client(mock_graph):
 @pytest.fixture
 def unique_email():
     return f"test-{uuid.uuid4().hex[:8]}@example.com"
-
-
-@pytest.fixture
-def supabase_jwt():
-    secret = os.environ["SUPABASE_JWT_SECRET"]
-    payload = {
-        "sub": f"supabase-{uuid.uuid4().hex[:8]}",
-        "email": f"supa-{uuid.uuid4().hex[:8]}@example.com",
-        "aud": "authenticated",
-    }
-    return jwt.encode(payload, secret, algorithm="HS256")
 
 
 @pytest.fixture

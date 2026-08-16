@@ -367,19 +367,6 @@ class ChatbotWorkspace:
             )
         return doc
 
-    def ensure_user(self, sub: str, email: str) -> str:
-        user_id = self.__pattern_cipher.stable_supabase_user_id(sub)
-        username = self._extract_email_name(email)
-        self.__mongo_client.ensure_account(
-            user_id = user_id,
-            username = username,
-            email = email.strip(),
-            password = "",
-            sub = sub,
-            plan = "Free",
-        )
-        return user_id
-
     def register_user(self, email: str, password: str, sub: str) -> Tuple[str, str]:
         em = email.strip()
         if self.__mongo_client.user_exists(
