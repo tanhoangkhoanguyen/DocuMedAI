@@ -52,9 +52,12 @@ func readUpstreamBody(r io.Reader) ([]byte, error) {
 // and delegates every vendor-specific detail (URL, auth, wire format) to a
 // provider.Provider.
 type Proxy struct {
-	cfg      Config
-	client   *http.Client // shared, keep-alive pooled
-	admitter *admitter
+	cfg    Config
+	client *http.Client // shared, keep-alive pooled
+	// streamClient is the buffered client's twin for the streaming path, differing
+	// ONLY in its Timeout. See newProxy for why the two cannot be one.
+	streamClient *http.Client
+	admitter     *admitter
 	limiter  *RateLimiter
 	deduper  *Deduper
 	breakers *breakerGroup
@@ -69,8 +72,8 @@ func newProxy(
 	cfg Config, limiter *RateLimiter, deduper *Deduper,
 	sharer *BreakerSharer, m *Metrics, log *slog.Logger,
 ) *Proxy {
-	// One shared client with a tuned transport so TCP/TLS connections upstream
-	// are reused across requests instead of re-handshaking every call.
+	// One shared transport so TCP/TLS connections upstream are reused across
+	// requests instead of re-handshaking every call.
 	transport := &http.Transport{
 		MaxIdleConns:        cfg.MaxIdleConns,
 		MaxIdleConnsPerHost: cfg.MaxIdleConns,
@@ -78,8 +81,27 @@ func newProxy(
 		ForceAttemptHTTP2:   true,
 	}
 	return &Proxy{
-		cfg:      cfg,
-		client:   &http.Client{Transport: transport, Timeout: cfg.UpstreamTimeout},
+		cfg:    cfg,
+		client: &http.Client{Transport: transport, Timeout: cfg.UpstreamTimeout},
+
+		// Two clients over ONE transport, because http.Client.Timeout is per-client
+		// but the connection pool lives on the transport. Sharing the transport keeps
+		// MaxIdleConns a single budget; giving each its own would silently double it.
+		//
+		// They must differ because Timeout is an ABSOLUTE deadline that covers the
+		// body read, which means one value cannot serve both paths. For a buffered
+		// call the body arrives in one piece and 120s is a correct ceiling. For a
+		// stream the body IS the response, delivered over its whole lifetime, so the
+		// same 120s truncates any healthy generation that runs longer — cutting the
+		// stream mid-sentence and reporting it as an upstream failure.
+		//
+		// So the streaming client's ceiling is StreamAbsoluteMax (30m), a backstop
+		// set beyond any real completion. What actually bounds a stream is
+		// inactivity — the write and inter-frame deadlines in serveStreaming — which
+		// is the quantity that distinguishes a stalled stream from a slow one. A 0
+		// here disables the backstop and leaves only those.
+		streamClient: &http.Client{Transport: transport, Timeout: cfg.StreamAbsoluteMax},
+
 		admitter: newAdmitter(cfg.MaxInFlight, m),
 		limiter:  limiter,
 		deduper:  deduper,
@@ -373,7 +395,7 @@ func (p *Proxy) serveStreaming(
 		if berr != nil {
 			return nil, berr
 		}
-		resp, berr := p.client.Do(httpReq)
+		resp, berr := p.streamClient.Do(httpReq)
 		if berr != nil {
 			return nil, berr
 		}
