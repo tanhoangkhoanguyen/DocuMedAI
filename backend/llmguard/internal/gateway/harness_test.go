@@ -153,6 +153,13 @@ func realDefaults() Config {
 		CircuitOpenFor:   20 * time.Second,
 		UpstreamTimeout:  120 * time.Second,
 		MaxIdleConns:     100,
+
+		// Mirrored like every other threshold: a streaming test that wants a short
+		// deadline overrides it explicitly, so the ones that do not are asserting
+		// against the values production runs with.
+		StreamWriteIdle:   30 * time.Second,
+		StreamIdleTimeout: 60 * time.Second,
+		StreamAbsoluteMax: 30 * time.Minute,
 	}
 }
 
