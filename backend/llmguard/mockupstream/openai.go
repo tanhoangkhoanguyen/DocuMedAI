@@ -192,6 +192,12 @@ func (s *Server) streamChatCompletion(
 	}
 
 	for i, word := range words {
+		// Counts CONTENT chunks only, ignoring the role-announcing opener above, so
+		// StallAfter means the same thing on both surfaces even though only this one
+		// sends a preamble.
+		if stallNow(cfg, r, i) {
+			return
+		}
 		// Word-boundary spacing lives in the deltas, so a client that simply
 		// concatenates them reproduces the buffered text exactly.
 		chunkText := word

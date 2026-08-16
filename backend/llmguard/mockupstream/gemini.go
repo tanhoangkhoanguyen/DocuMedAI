@@ -177,6 +177,11 @@ func (s *Server) geminiStream(
 	}
 
 	for i, word := range words {
+		// Checked before the write, so StallAfter=N delivers exactly N chunks and
+		// then goes silent — a consumer asserting on what it received can count.
+		if stallNow(cfg, r, i) {
+			return
+		}
 		text := word
 		if i > 0 {
 			text = " " + word

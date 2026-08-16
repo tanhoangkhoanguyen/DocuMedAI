@@ -54,6 +54,20 @@ type Config struct {
 	// time-to-first-token without changing any response bytes.
 	ChunkDelay time.Duration
 
+	// StallAfter, when > 0, emits that many streamed chunks and then stops
+	// sending — holding the response open without closing it, until the client
+	// goes away.
+	//
+	// This is the slow-loris upstream: not an error, not a disconnect, just
+	// silence on a connection that still looks alive. It is the one failure a
+	// timeout on total duration cannot distinguish from a slow-but-healthy
+	// generation, so it is the shape a consumer's inter-frame deadline has to be
+	// tested against.
+	//
+	// It stalls rather than sleeping a fixed time because a bounded sleep tests a
+	// delay, and the failure being modelled is unbounded.
+	StallAfter int
+
 	// ErrorRate is the fraction of requests [0,1] that fail with ErrorStatus.
 	// 0 disables failures; 1 fails everything.
 	ErrorRate float64
@@ -112,6 +126,7 @@ func FromEnv(base Config) Config {
 	cfg.Latency = envDuration("MOCK_LATENCY", cfg.Latency)
 	cfg.Jitter = envDuration("MOCK_JITTER", cfg.Jitter)
 	cfg.ChunkDelay = envDuration("MOCK_CHUNK_DELAY", cfg.ChunkDelay)
+	cfg.StallAfter = envInt("MOCK_STALL_AFTER", cfg.StallAfter)
 	cfg.ErrorRate = envFloat("MOCK_ERROR_RATE", cfg.ErrorRate)
 	cfg.ErrorStatus = envInt("MOCK_ERROR_STATUS", cfg.ErrorStatus)
 	cfg.RetryAfter = envInt("MOCK_RETRY_AFTER", cfg.RetryAfter)
@@ -141,6 +156,7 @@ func Resolve(base Config, r *http.Request) Config {
 	cfg.Latency = pickDuration(q.Get("latency"), cfg.Latency)
 	cfg.Jitter = pickDuration(q.Get("jitter"), cfg.Jitter)
 	cfg.ChunkDelay = pickDuration(q.Get("chunk_delay"), cfg.ChunkDelay)
+	cfg.StallAfter = pickInt(q.Get("stall_after"), cfg.StallAfter)
 	cfg.ErrorRate = pickFloat(q.Get("error_rate"), cfg.ErrorRate)
 	cfg.ErrorStatus = pickInt(q.Get("error_status"), cfg.ErrorStatus)
 	cfg.RetryAfter = pickInt(q.Get("retry_after"), cfg.RetryAfter)
@@ -155,6 +171,7 @@ func Resolve(base Config, r *http.Request) Config {
 	cfg.Latency = pickDuration(h.Get("X-Mock-Latency"), cfg.Latency)
 	cfg.Jitter = pickDuration(h.Get("X-Mock-Jitter"), cfg.Jitter)
 	cfg.ChunkDelay = pickDuration(h.Get("X-Mock-Chunk-Delay"), cfg.ChunkDelay)
+	cfg.StallAfter = pickInt(h.Get("X-Mock-Stall-After"), cfg.StallAfter)
 	cfg.ErrorRate = pickFloat(h.Get("X-Mock-Error-Rate"), cfg.ErrorRate)
 	cfg.ErrorStatus = pickInt(h.Get("X-Mock-Error-Status"), cfg.ErrorStatus)
 	cfg.RetryAfter = pickInt(h.Get("X-Mock-Retry-After"), cfg.RetryAfter)
@@ -170,13 +187,17 @@ func Resolve(base Config, r *http.Request) Config {
 	if cfg.CompletionTokens < 0 {
 		cfg.CompletionTokens = 0
 	}
+	if cfg.StallAfter < 0 {
+		cfg.StallAfter = 0
+	}
 	return cfg
 }
 
 // fingerprint is the subset of config that can change a response, rendered as a
-// string and folded into the per-request RNG seed. Latency and ChunkDelay are
-// excluded on purpose: they alter timing, never bytes, so including them would
-// make two configs that differ only in speed produce different failure verdicts.
+// string and folded into the per-request RNG seed. Latency, ChunkDelay and
+// StallAfter are excluded on purpose: they alter timing and truncation, never
+// the bytes of any chunk that IS sent, so including them would make two configs
+// that differ only in delivery produce different failure verdicts.
 func (c Config) fingerprint() string {
 	return fmt.Sprintf("%g|%d|%d|%d|%s|%d|%d|%s",
 		c.ErrorRate, c.ErrorStatus, c.RetryAfter, c.Seed,
