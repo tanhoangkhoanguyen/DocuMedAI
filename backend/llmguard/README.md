@@ -101,8 +101,9 @@ spend — LLMGuard is a reliability gateway and does nothing with those numbers.
 | `RETRY_MAX` / `RETRY_BASE_DELAY` / `RETRY_MAX_DELAY` | `4` / `300ms` / `8s` | Backoff |
 | `CIRCUIT_MIN_REQUESTS` / `CIRCUIT_FAIL_RATIO` / `CIRCUIT_OPEN_FOR` | `10` / `0.6` / `20s` | Breaker. `CIRCUIT_OPEN_FOR` is also the TTL of the cross-replica open flag |
 | `MAX_IN_FLIGHT` | `256` | Concurrency ceiling — see below. `0` disables it |
-| `UPSTREAM_TIMEOUT` / `MAX_IDLE_CONNS` | `120s` / `100` | HTTP client |
+| `UPSTREAM_TIMEOUT` / `MAX_IDLE_CONNS` | `120s` / `100` | HTTP client. `UPSTREAM_TIMEOUT` bounds the **buffered** path only — see below |
 | `SERVER_IDLE_TIMEOUT` | `120s` | Idle keep-alive connections. There is deliberately no write timeout — see `main.go` |
+| `STREAM_WRITE_IDLE` / `STREAM_IDLE_TIMEOUT` / `STREAM_ABSOLUTE_MAX` | `30s` / `60s` / `30m` | Streaming deadlines — see below. `0` disables each |
 
 ### Admission control
 
@@ -131,6 +132,35 @@ engages when requests drain slower than they arrive, or when Redis is down and t
 failing open. Watch `llmguard_in_flight` against the ceiling; `llmguard_shed_total` is counted apart
 from `llmguard_rate_limited_total` because a caller over quota and a gateway out of capacity are
 different incidents that happen to share a status code.
+
+### Streaming deadlines
+
+A streaming request holds its admission slot for the whole life of the stream, so whatever bounds
+that lifetime is what bounds the ceiling. A timeout on **total duration** cannot do it: a healthy
+generation and a hung one both run long, and only the gap between events tells them apart. What is
+bounded instead is **inactivity** — time since the last byte moved.
+
+| Knob | Default | Bounds | Closes |
+|---|---|---|---|
+| `STREAM_WRITE_IDLE` | `30s` | Time since the last flush **to the client** | A client that opens a stream and stops reading. The send buffer fills, `Flush()` blocks, and `r.Context()` never fires because the client is silent rather than gone |
+| `STREAM_IDLE_TIMEOUT` | `60s` | Gap between two frames **from upstream** | A provider that goes quiet mid-stream without erroring or closing |
+| `STREAM_ABSOLUTE_MAX` | `30m` | Total stream duration | Backstop only. It should never fire; it exists because the two above can fail together |
+
+Both inactivity bounds are **refreshed on every frame**, so a stream that keeps moving survives
+indefinitely — a deadline of the same size applied absolutely would cut exactly the long generations
+streaming exists for. `UPSTREAM_TIMEOUT` is *not* one of these: it is `http.Client.Timeout`, an
+absolute deadline covering the body read, so the streaming path uses its own client. A single client
+for both truncated every healthy stream past 120s and reported it as an upstream failure.
+
+`STREAM_ABSOLUTE_MAX` is worth its own note. It only fires once the inactivity bounds have failed to,
+which makes it the reading that says *the protection itself is broken* — either `SetWriteDeadline`
+degraded to a no-op behind a `ResponseWriter` wrapper, or an upstream is dribbling frames just fast
+enough to keep resetting the watchdog.
+
+Aborts are counted by `llmguard_stream_aborts_total{reason}` — `upstream_idle`, `write_idle`,
+`absolute_max`. The counter is needed because an aborted stream is otherwise **invisible**: the
+header left with the first frame, so `requests_total` already recorded a 2xx, and the failure reaches
+the client as an in-band SSE frame that no server-side counter sees.
 
 ### Auth
 
@@ -273,6 +303,3 @@ probe decides when it trusts the upstream again.
 
 - Cross-replica **dedup** via Redis marker (extension point in
   `internal/gateway/dedup.go`). Breaker state is already shared; dedup is not.
-- A per-write SSE deadline (`http.ResponseController.SetWriteDeadline`), so a hung
-  stream reader is bounded without truncating healthy long streams. Until then
-  `WriteTimeout` is deliberately unset — see `main.go`.

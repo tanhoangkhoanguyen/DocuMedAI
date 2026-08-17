@@ -69,6 +69,59 @@ type Config struct {
 	UpstreamTimeout time.Duration // per-attempt timeout to upstream
 	MaxIdleConns    int           // connection-pool size for keep-alive reuse
 
+	// --- Streaming deadlines ---
+	//
+	// A streaming request holds its admission slot for the whole life of the
+	// stream, so whatever bounds that lifetime is what bounds the ceiling. The
+	// buffered path's UpstreamTimeout cannot do it: http.Client.Timeout is an
+	// ABSOLUTE deadline covering the body read, so a value low enough to cut off a
+	// stalled stream also truncates a healthy long one. The right quantity for a
+	// stream is INACTIVITY — time since the last byte moved — which is what the
+	// first two knobs below measure.
+	//
+	// Each accepts 0 to disable it, matching MaxInFlight's convention that an
+	// operator can explicitly ask for the older unbounded behavior.
+
+	// StreamWriteIdle bounds how long a write to the CLIENT may stall.
+	//
+	// The failure it closes: a client opens a stream and stops reading. The TCP
+	// send buffer fills, flusher.Flush() blocks, and r.Context() never fires
+	// because the client never closed the socket — it is silent, not gone. The
+	// slot is held until upstream finishes on its own.
+	//
+	// Applied as a per-write deadline REFRESHED after every flushed frame
+	// (http.ResponseController), so a stream that keeps moving never trips it no
+	// matter how long it runs. 30s is far above any real client's scheduling
+	// hiccup and far below the cost of pinning a slot.
+	StreamWriteIdle time.Duration
+
+	// StreamIdleTimeout bounds the gap between two frames FROM UPSTREAM.
+	//
+	// The failure it closes: a slow-loris upstream that emits a byte every few
+	// minutes. Nothing else measures inter-frame time, so the slot is held at the
+	// upstream's pace rather than at any limit of ours.
+	//
+	// 60s, i.e. double StreamWriteIdle: a provider's time-to-first-token under
+	// load is legitimately tens of seconds, and cutting a real generation is worse
+	// than holding a slot a little longer.
+	StreamIdleTimeout time.Duration
+
+	// StreamAbsoluteMax is a backstop on total stream duration, applied as the
+	// streaming client's Timeout.
+	//
+	// The two inactivity bounds above are the real protection and this should
+	// never fire. It exists because both can fail together — SetWriteDeadline
+	// degrades to a no-op behind a ResponseWriter that does not implement it, and
+	// an upstream that dribbles one frame per second is "active" by the
+	// inter-frame measure while still holding a slot indefinitely. Without a
+	// backstop that combination pins a slot for the process's lifetime and only a
+	// restart returns it; with one it self-heals.
+	//
+	// 30m is chosen to be unreachable by real traffic — orders of magnitude above
+	// the longest plausible completion — so it only ever truncates a stream that
+	// was already pathological.
+	StreamAbsoluteMax time.Duration
+
 	// --- HTTP server ---
 	//
 	// IdleTimeout bounds how long an idle keep-alive connection is held. Without
@@ -105,6 +158,10 @@ func loadConfig() Config {
 
 		UpstreamTimeout: getenvDur("UPSTREAM_TIMEOUT", 120*time.Second), // LLM calls can be slow
 		MaxIdleConns:    getenvInt("MAX_IDLE_CONNS", 100),
+
+		StreamWriteIdle:   getenvDur("STREAM_WRITE_IDLE", 30*time.Second),
+		StreamIdleTimeout: getenvDur("STREAM_IDLE_TIMEOUT", 60*time.Second),
+		StreamAbsoluteMax: getenvDur("STREAM_ABSOLUTE_MAX", 30*time.Minute),
 
 		IdleTimeout: getenvDur("SERVER_IDLE_TIMEOUT", 120*time.Second),
 	}

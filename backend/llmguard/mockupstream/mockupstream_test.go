@@ -24,7 +24,9 @@ package mockupstream
 // StartOutage, ServeHTTP) so these tests survive internal refactoring.
 
 import (
+	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -161,9 +163,13 @@ func TestDeterminismContentIndependentOfTimingKnobs(t *testing.T) {
 		"Latency":    {Latency: 5 * time.Millisecond},
 		"Jitter":     {Jitter: 5 * time.Millisecond},
 		"ChunkDelay": {ChunkDelay: 5 * time.Millisecond},
+		// StallAfter truncates delivery but never rewrites a chunk that IS sent,
+		// so like the delay knobs it must not reach the seed.
+		"StallAfter": {StallAfter: 2},
 	} {
 		merged := DefaultConfig()
 		merged.Latency, merged.Jitter, merged.ChunkDelay = cfg.Latency, cfg.Jitter, cfg.ChunkDelay
+		merged.StallAfter = cfg.StallAfter
 		if got := merged.fingerprint(); got != base {
 			t.Errorf("%s leaked into fingerprint():\n base: %s\n got:  %s", name, base, got)
 		}
@@ -422,6 +428,94 @@ func TestSSETerminatesAndReassembles(t *testing.T) {
 	}
 	if got := text.String(); got != cfg.Content {
 		t.Errorf("reassembled stream = %q, want the configured content %q", got, cfg.Content)
+	}
+}
+
+// StallAfter delivers exactly N chunks and then goes silent, holding the
+// response open rather than ending it.
+//
+// This is the slow-loris upstream, and it is the one failure the mock could not
+// previously express: an error is an error, an outage is an error, and latency
+// still terminates. A consumer that bounds a stream by TOTAL duration cannot
+// tell this apart from a slow generation — only an INTER-FRAME deadline can — so
+// the mock has to be able to produce it before that deadline can be tested.
+//
+// Driven over a real socket, unlike its neighbours here: httptest.ResponseRecorder
+// is a buffer, so a handler blocked mid-response would simply hang the test with
+// nothing to observe. The properties asserted are the two a consumer depends on:
+// exactly N chunks arrive, and the stream does NOT terminate.
+func TestStallAfterStopsSendingAndHoldsTheStreamOpen(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.CompletionTokens = 8
+	cfg.StallAfter = 3
+	srv := httptest.NewServer(New(cfg))
+	defer srv.Close()
+
+	// The client's own deadline is the only thing that ends this request — which
+	// is the point of the knob. It doubles as the test's failure bound: if the
+	// mock wrongly finished the stream, the read below returns early instead.
+	ctx, cancel := context.WithTimeout(context.Background(), 750*time.Millisecond)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		srv.URL+"/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse",
+		strings.NewReader(gemBody))
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 — a stall is silence, not an error", resp.StatusCode)
+	}
+
+	// Read until the context kills the connection. A clean EOF here would mean the
+	// mock ended the stream, which is the failure this knob exists to avoid.
+	body, readErr := io.ReadAll(resp.Body)
+	if readErr == nil {
+		t.Fatalf("stream ended cleanly; a stalled upstream must hold the response open\nbody: %q", body)
+	}
+
+	var chunks int
+	for _, line := range strings.Split(string(body), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "data: ") {
+			chunks++
+		}
+	}
+	if chunks != cfg.StallAfter {
+		t.Errorf("delivered %d chunks, want exactly %d — StallAfter must cut at the configured "+
+			"count so a consumer can assert on what it received", chunks, cfg.StallAfter)
+	}
+	if strings.Contains(string(body), "[DONE]") {
+		t.Error("a stalled stream must not emit a terminator")
+	}
+}
+
+// StallAfter is reachable through the same env → query → header precedence as
+// every other knob, so a test that cannot control the URL can still trigger it.
+func TestStallAfterHonorsHeaderAndQuery(t *testing.T) {
+	base := DefaultConfig()
+
+	q := httptest.NewRequest(http.MethodPost, oaPath+"?stall_after=4", nil)
+	if got := Resolve(base, q).StallAfter; got != 4 {
+		t.Errorf("query stall_after = %d, want 4", got)
+	}
+
+	h := httptest.NewRequest(http.MethodPost, oaPath+"?stall_after=4", nil)
+	h.Header.Set("X-Mock-Stall-After", "9")
+	if got := Resolve(base, h).StallAfter; got != 9 {
+		t.Errorf("header stall_after = %d, want 9 — the header must outrank the query", got)
+	}
+
+	neg := httptest.NewRequest(http.MethodPost, oaPath+"?stall_after=-3", nil)
+	if got := Resolve(base, neg).StallAfter; got != 0 {
+		t.Errorf("negative stall_after = %d, want 0", got)
 	}
 }
 

@@ -109,6 +109,7 @@ Every knob is settable three ways, in increasing precedence: **env → query →
 | Fixed latency | `MOCK_LATENCY` | `latency=500ms` | `X-Mock-Latency` |
 | Jitter width | `MOCK_JITTER` | `jitter=800ms` | `X-Mock-Jitter` — also shifts the failure verdict; see [above](#jitter-shifts-the-failure-verdict--hold-it-fixed-across-a-comparison) |
 | Inter-chunk delay | `MOCK_CHUNK_DELAY` | `chunk_delay=20ms` | `X-Mock-Chunk-Delay` |
+| Stall after N chunks | `MOCK_STALL_AFTER` | `stall_after=3` | `X-Mock-Stall-After` — see [below](#stalling-a-stream-slow-loris-upstream) |
 | Error rate `[0,1]` | `MOCK_ERROR_RATE` | `error_rate=1.0` | `X-Mock-Error-Rate` |
 | Error status | `MOCK_ERROR_STATUS` | `error_status=429` | `X-Mock-Error-Status` |
 | `Retry-After` secs | `MOCK_RETRY_AFTER` | `retry_after=3` | `X-Mock-Retry-After` |
@@ -119,6 +120,31 @@ Every knob is settable three ways, in increasing precedence: **env → query →
 
 Unparseable values fall back to the default rather than to zero, so a typo
 degrades to sane behavior instead of silently disabling a knob.
+
+### Stalling a stream (slow-loris upstream)
+
+`stall_after=N` emits exactly N streamed chunks and then **stops sending without
+closing** — the response stays open, indefinitely, until the client goes away.
+
+This is the one failure the other knobs cannot express. An error rate produces an
+error, an outage produces an error, and latency still terminates; a stall
+produces a connection that looks perfectly healthy and never finishes. It is
+therefore the only way to test an **inter-frame deadline**, because a consumer
+that bounds a stream by total duration cannot tell a stall apart from a slow
+generation — both are "still running after T seconds".
+
+```bash
+# Three frames, then silence. Ctrl-C to escape; it will not end on its own.
+curl -N -X POST 'localhost:8090/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse&stall_after=3' \
+  -H 'Content-Type: application/json' \
+  -d '{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}'
+```
+
+Both streaming surfaces honor it, and both count **content** chunks — the OpenAI
+surface's role-announcing opening chunk does not count, so `stall_after=3` means
+the same thing on either. Like the delay knobs it is excluded from
+`fingerprint()`: it truncates delivery but never rewrites a chunk that is sent,
+so it must not shift the failure verdict.
 
 ## Running
 

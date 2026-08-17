@@ -188,8 +188,26 @@ is a working no-op, which is how single-replica runs and the whole test suite av
 The check runs **after** admission and the rate limiter: it costs a Redis `EXISTS`, so it is not paid
 until the request is known to have both capacity and a token.
 
+**A stream is bounded by inactivity, never by total duration.** A healthy generation and a hung one
+both run long; only the gap between events separates them. So `UPSTREAM_TIMEOUT` (an absolute
+`http.Client.Timeout` covering the body read) bounds the **buffered path only** — streaming has its
+own client over the *same transport*, because one client for both truncated every healthy stream past
+120s and reported it as an upstream failure. Two inactivity bounds replace it, each **refreshed per
+frame**: `idlewatchdog.go` cancels the upstream read after `STREAM_IDLE_TIMEOUT` of silence between
+frames, and `writedeadline.go` applies a socket write deadline of `STREAM_WRITE_IDLE` for a client
+that stops reading (`r.Context()` cannot catch that — such a client is silent, not gone).
+`STREAM_ABSOLUTE_MAX` (30m) is a backstop behind both; because it only fires once they have failed
+to, a non-zero reading means the protection itself is broken. `llmguard_stream_aborts_total{reason}`
+names all three, and is needed because an aborted stream is otherwise invisible: the header left with
+the first frame, so `requests_total` already recorded a 2xx. Two subtleties worth keeping: the
+`abortReason` check runs **before** `scanner.Err()`, since a cancelled read can surface as a clean EOF
+and would otherwise emit `[DONE]` on a truncated stream; and only a deadline error counts as
+`write_idle`, since a client closing the connection also fails the write and is ordinary traffic.
+There is deliberately **no clear()** of the write deadline — `net/http` already resets it after every
+handler returns.
+
 The pipeline lives in `internal/gateway/` (config, proxy, admission, retry, breakershare, dedup,
-ratelimit, metrics);
+ratelimit, metrics, idlewatchdog, writedeadline);
 `main.go` at the module root is a thin composition root, and `internal/gateway/gateway.go` is the
 entire exported surface between them. Everything else in the package stays unexported, and tests
 sit beside the code they exercise so nothing is exported merely to be testable.
@@ -198,10 +216,15 @@ The suite is **characterization tests**, each sitting beside the source file it 
 (`retry_test.go`, `dedup_test.go`, `ratelimit_test.go`, `circuitbreaker_test.go`; `proxy.go`'s
 larger surface is split into `proxy_buffered_test.go`, `proxy_streaming_test.go`,
 `proxy_errors_test.go`, plus `usage_test.go`) and sharing a harness in `harness_test.go`.
-`admission_test.go` and `breakershare_test.go` are the **exceptions** to the characterization rule:
-that behavior is new, so there is no prior conduct to preserve and the tests state the intended
-contract (a shed is 429 + `Retry-After`, counted apart from quota 429s, and a slot always comes back;
-only the positive breaker reading is cached, and a Redis error never sheds). `config_test.go` guards
+`admission_test.go`, `breakershare_test.go` and `proxy_streaming_deadline_test.go` are the
+**exceptions** to the characterization rule: that behavior is new, so there is no prior conduct to
+preserve and the tests state the intended contract (a shed is 429 + `Retry-After`, counted apart from
+quota 429s, and a slot always comes back; only the positive breaker reading is cached, and a Redis
+error never sheds; a stream is cut by inactivity but never by total duration, and what must come back
+is the **admission slot** — every test there asserts on `llmguard_in_flight`, because a handler that
+returns while its goroutine still holds a slot passes every status assertion and still ratchets the
+gateway to zero capacity). The stalled-reader test dials a **real socket**: `httptest.ResponseRecorder`
+is an in-memory buffer that never blocks, so that leak is invisible to the rest of the suite. `config_test.go` guards
 the harness/production invariant and **fails when a new `Config` field is added** without a decision
 about whether `realDefaults()` mirrors it — by design, not an obstacle. `mockupstream/` has its own
 tests pinning the determinism the Phase 6 benchmark depends on. Two rules matter when editing them:

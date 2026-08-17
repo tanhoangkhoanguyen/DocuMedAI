@@ -18,8 +18,8 @@ import (
 )
 
 // resilienceFields are the Config fields realDefaults() deliberately mirrors:
-// the retry / breaker / rate-limit / upstream-client knobs the characterization
-// tests assert thresholds against.
+// the retry / breaker / rate-limit / upstream-client / streaming-deadline knobs
+// the characterization tests assert thresholds against.
 //
 // The fields realDefaults() omits are excluded on purpose, because the
 // harness has no server and no Redis to configure:
@@ -46,6 +46,9 @@ var resilienceFields = []string{
 	"CircuitOpenFor",
 	"UpstreamTimeout",
 	"MaxIdleConns",
+	"StreamWriteIdle",
+	"StreamIdleTimeout",
+	"StreamAbsoluteMax",
 }
 
 // TestRealDefaultsMatchLoadConfig fails when a production default changes without
@@ -64,6 +67,7 @@ func TestRealDefaultsMatchLoadConfig(t *testing.T) {
 		"CIRCUIT_MIN_REQUESTS", "CIRCUIT_FAIL_RATIO", "CIRCUIT_OPEN_FOR",
 		"UPSTREAM_TIMEOUT", "MAX_IDLE_CONNS",
 		"MAX_IN_FLIGHT", "SERVER_IDLE_TIMEOUT",
+		"STREAM_WRITE_IDLE", "STREAM_IDLE_TIMEOUT", "STREAM_ABSOLUTE_MAX",
 	} {
 		t.Setenv(key, "")
 	}

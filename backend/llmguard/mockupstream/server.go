@@ -95,6 +95,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		"latency":           cfg.Latency.String(),
 		"jitter":            cfg.Jitter.String(),
 		"chunk_delay":       cfg.ChunkDelay.String(),
+		"stall_after":       cfg.StallAfter,
 		"error_rate":        cfg.ErrorRate,
 		"error_status":      cfg.ErrorStatus,
 		"retry_after":       cfg.RetryAfter,

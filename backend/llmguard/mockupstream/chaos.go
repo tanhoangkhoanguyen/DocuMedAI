@@ -112,6 +112,24 @@ func (c chaos) sleep(r *http.Request) bool {
 	}
 }
 
+// stallNow reports whether a stream that has already emitted sent chunks should
+// stop here, and blocks until the client goes away when it should.
+//
+// Shared by both streaming surfaces so "stalled" means one thing. It BLOCKS
+// rather than returning immediately because the handler must keep the response
+// open: returning would let net/http finish the response, and a cleanly
+// terminated stream is the opposite of the failure being modelled. The client's
+// context is the only exit, which is what makes the stall unbounded from the
+// client's side — exactly the property that a total-duration timeout cannot
+// distinguish from a slow generation.
+func stallNow(cfg Config, r *http.Request, sent int) bool {
+	if cfg.StallAfter <= 0 || sent < cfg.StallAfter {
+		return false
+	}
+	<-r.Context().Done()
+	return true
+}
+
 // outage is a wall-clock window during which every request fails, regardless of
 // path or error rate. It models a total provider outage.
 //
