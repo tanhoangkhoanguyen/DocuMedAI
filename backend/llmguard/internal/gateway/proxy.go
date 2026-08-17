@@ -466,6 +466,26 @@ func (p *Proxy) serveStreaming(
 		})
 		defer idle.stop()
 
+		// --- Stalled-reader deadline ---
+		//
+		// Bounds how long a write to the CLIENT may block, which is the sharpest
+		// form of the same leak. A client that opens a stream and stops reading
+		// fills the kernel send buffer, and Flush() then blocks indefinitely:
+		// r.Context() does not fire, because the client is silent rather than gone,
+		// and the watchdog above does not help, because the upstream is healthy and
+		// still delivering. Nothing measures the write side.
+		//
+		// A DEADLINE rather than a watchdog, unlike the upstream side: a blocked
+		// Write cannot be interrupted from another goroutine, but the socket
+		// enforces its own deadline natively. Refreshed after each flushed frame,
+		// so it measures time since the last successful write and a long healthy
+		// stream never approaches it.
+		//
+		// Not cleared on exit: net/http resets the connection's write deadline
+		// after every handler returns, so a leftover cannot reach the next request
+		// on a keep-alive connection. See writedeadline.go.
+		writeDeadline := newWriteDeadline(w, p.cfg.StreamWriteIdle, p.log, provName)
+
 		// Scan the provider's SSE frames line by line. Vertex sends
 		// `data: {...}` per frame; blank lines separate events.
 		scanner := bufio.NewScanner(resp.Body)
@@ -500,10 +520,27 @@ func (p *Proxy) serveStreaming(
 				if merr != nil {
 					continue
 				}
-				_, _ = w.Write([]byte("data: "))
-				_, _ = w.Write(enc)
-				_, _ = w.Write([]byte("\n\n"))
-				flusher.Flush()
+				// Armed BEFORE the write, since the write is what blocks. Setting it
+				// afterwards would leave each frame's own write unbounded — the
+				// deadline would always be measuring the previous frame.
+				writeDeadline.arm()
+				if werr := writeFrame(w, flusher, enc); werr != nil {
+					// Return either way: continuing would keep writing into a socket
+					// that is not accepting, and returning is what unwinds the handler
+					// and gives the slot back.
+					//
+					// But only a DEADLINE is counted. A client that closes the
+					// connection mid-stream — someone hitting stop, closing a tab —
+					// also fails this write, and that is ordinary traffic rather than a
+					// stalled reader. Counting it would inflate the very metric that is
+					// supposed to say "clients are wedging streams", which is the same
+					// reason absolute_max is only inferred after the header is out.
+					if errors.Is(werr, os.ErrDeadlineExceeded) {
+						reason := abortWriteIdle
+						abortReason.Store(&reason)
+					}
+					return nil, werr
+				}
 			}
 		}
 		// Checked BEFORE scanner.Err(), because a cancelled read does not reliably

@@ -17,7 +17,13 @@ package gateway
 // Harness and thresholds live in harness_test.go.
 
 import (
+	"bufio"
+	"context"
+	"errors"
+	"fmt"
+	"net"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -279,6 +285,157 @@ func TestBufferedStillBoundByUpstreamTimeout(t *testing.T) {
 		t.Fatalf("status = 200 after %s; UPSTREAM_TIMEOUT must still bound the buffered path", elapsed)
 	}
 	requireSlotReleased(t, h, time.Second, "a timed-out buffered request must return its slot")
+}
+
+// A client that opens a stream and never reads must not pin its slot.
+//
+// The sharpest form of the leak, and the reason this test dials a real socket
+// instead of using the recorder harness: Flush() blocks once the kernel send
+// buffer fills, r.Context() does not fire because the client is silent rather
+// than gone, and the inter-frame watchdog does not fire because the upstream is
+// healthy. httptest.ResponseRecorder is an in-memory buffer that never blocks,
+// so this failure is invisible to every other test in the package.
+//
+// What is asserted is the SLOT, not the response. A handler wedged in Write has
+// produced nothing to inspect, and "the request ended" is exactly the weaker
+// claim that would let the leak pass.
+func TestStreamAbortsOnStalledReader(t *testing.T) {
+	mcfg := mockupstream.DefaultConfig()
+	// Enough content to overflow the socket buffers while the client reads nothing.
+	mcfg.CompletionTokens = 50000
+
+	cfg := streamingConfig()
+	cfg.StreamWriteIdle = 200 * time.Millisecond
+	// Both other bounds set far above it, so a pass here can only be the write
+	// deadline. Without this the test would pass for the wrong reason.
+	cfg.StreamIdleTimeout = 30 * time.Second
+	cfg.StreamAbsoluteMax = 30 * time.Second
+	h := newHarness(t, cfg, mcfg, nil)
+
+	// A real server: only a real socket can apply a write deadline or exert
+	// backpressure.
+	srv := httptest.NewServer(h.proxy)
+	defer srv.Close()
+
+	addr := strings.TrimPrefix(srv.URL, "http://")
+	conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	// A hand-rolled request, because every Go HTTP client drains the body for us —
+	// and not draining is precisely the behavior under test.
+	body := chatBody("gemini-2.5-flash", "stream this", true)
+	req := fmt.Sprintf("POST /v1/chat/completions HTTP/1.1\r\nHost: %s\r\n"+
+		"Content-Type: application/json\r\nContent-Length: %d\r\n\r\n%s",
+		addr, len(body), body)
+	if _, err = conn.Write([]byte(req)); err != nil {
+		t.Fatalf("write request: %v", err)
+	}
+
+	// Read only the status line, then stop reading entirely. Reading nothing at all
+	// would risk asserting against a request that never started.
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	status, err := bufio.NewReader(conn).ReadString('\n')
+	if err != nil {
+		t.Fatalf("read status line: %v", err)
+	}
+	if !strings.Contains(status, "200") {
+		t.Fatalf("status line = %q, want 200", strings.TrimSpace(status))
+	}
+
+	testutil.RequireEventually(t, 3*time.Second, 10*time.Millisecond, func() bool {
+		return testutil.CounterValue(t, h.metrics.inFlight) == 1
+	}, "the stream should be holding the only slot")
+
+	// From here the client reads nothing. The write deadline is the only thing that
+	// can end this: the upstream is healthy, the socket is open, the context is not
+	// done, and the other two bounds are 30s away.
+	requireSlotReleased(t, h, 10*time.Second,
+		"a stalled reader must not hold its admission slot — this is the leak the "+
+			"per-write deadline exists to close")
+
+	if got := testutil.LabeledCounterValue(t, h.metrics.streamAborts,
+		modelLabels("gemini-2.5-flash", abortWriteIdle)...); got != 1 {
+		t.Errorf("stream_aborts_total{reason=write_idle} = %v, want 1", got)
+	}
+}
+
+// SetWriteDeadline must actually reach the socket on the real serving path.
+//
+// http.ResponseController walks the ResponseWriter's Unwrap chain to find one
+// that supports deadlines, and returns ErrNotSupported when nothing does. A
+// middleware that wraps the ResponseWriter without implementing Unwrap silently
+// disables the stalled-reader protection: the stream keeps working, no test
+// notices, and the leak returns.
+//
+// Pinned at the level the constraint holds — through http.Server, as main.go's
+// mux serves it.
+func TestWriteDeadlineSupportedOnRealServer(t *testing.T) {
+	var (
+		probeErr error
+		probed   = make(chan struct{})
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		probeErr = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(time.Minute))
+		close(probed)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL, nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	_ = resp.Body.Close()
+	<-probed
+
+	if errors.Is(probeErr, http.ErrNotSupported) {
+		t.Fatal("SetWriteDeadline is unsupported on the plain http.Server path. " +
+			"If a ResponseWriter wrapper was added, give it Unwrap() http.ResponseWriter — " +
+			"without it the streaming path cannot bound a stalled reader.")
+	}
+	if probeErr != nil {
+		t.Fatalf("SetWriteDeadline: %v", probeErr)
+	}
+}
+
+// An unsupported write deadline degrades rather than failing the stream.
+//
+// httptest.ResponseRecorder has no connection, so SetWriteDeadline returns
+// ErrNotSupported — which is exactly the shape a ResponseWriter wrapper would
+// produce in production. Refusing to serve would turn a missing SECONDARY
+// protection into a total outage of streaming, so the stream must still work;
+// only the stalled-reader case is lost.
+//
+// This is also what keeps every other recorder-based streaming test meaningful.
+func TestUnsupportedWriteDeadlineStillStreams(t *testing.T) {
+	mcfg := mockupstream.DefaultConfig()
+	mcfg.CompletionTokens = 4
+
+	cfg := streamingConfig()
+	cfg.StreamWriteIdle = 50 * time.Millisecond
+	h := newHarness(t, cfg, mcfg, nil)
+
+	rec := h.do(t, chatBody("gemini-2.5-flash", "stream this", true), nil)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 — an unsupported deadline must not fail the stream", rec.Code)
+	}
+	if !strings.HasSuffix(strings.TrimSpace(rec.Body.String()), "data: [DONE]") {
+		t.Error("the stream must still complete normally")
+	}
+	if got := testutil.LabeledCounterValue(t, h.metrics.streamAborts,
+		modelLabels("gemini-2.5-flash", abortWriteIdle)...); got != 0 {
+		t.Errorf("stream_aborts_total{reason=write_idle} = %v, want 0 — nothing stalled", got)
+	}
 }
 
 // countDataFrames counts SSE payload frames, excluding the terminator.
