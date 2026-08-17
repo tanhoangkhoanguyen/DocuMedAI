@@ -468,22 +468,16 @@ func (p *Proxy) serveStreaming(
 
 		// --- Stalled-reader deadline ---
 		//
-		// Bounds how long a write to the CLIENT may block, which is the sharpest
-		// form of the same leak. A client that opens a stream and stops reading
-		// fills the kernel send buffer, and Flush() then blocks indefinitely:
-		// r.Context() does not fire, because the client is silent rather than gone,
-		// and the watchdog above does not help, because the upstream is healthy and
-		// still delivering. Nothing measures the write side.
+		// Bounds how long a write to the CLIENT may block. A client that opens a
+		// stream and stops reading fills the kernel send buffer, and Flush() then
+		// blocks: r.Context() does not fire, because the client is silent rather
+		// than gone, and the watchdog above does not help, because the upstream is
+		// healthy and still delivering. Nothing else measures the write side.
 		//
-		// A DEADLINE rather than a watchdog, unlike the upstream side: a blocked
-		// Write cannot be interrupted from another goroutine, but the socket
-		// enforces its own deadline natively. Refreshed after each flushed frame,
-		// so it measures time since the last successful write and a long healthy
-		// stream never approaches it.
-		//
-		// Not cleared on exit: net/http resets the connection's write deadline
-		// after every handler returns, so a leftover cannot reach the next request
-		// on a keep-alive connection. See writedeadline.go.
+		// Refreshed after each flushed frame, so it measures time since the last
+		// successful write and a long healthy stream never approaches it. See
+		// writedeadline.go for why a deadline rather than a watchdog, and why
+		// nothing clears it on exit.
 		writeDeadline := newWriteDeadline(w, p.cfg.StreamWriteIdle, p.log, provName)
 
 		// Scan the provider's SSE frames line by line. Vertex sends

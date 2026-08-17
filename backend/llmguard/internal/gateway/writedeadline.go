@@ -3,17 +3,19 @@ package gateway
 // Bounding a write to a client that has stopped reading.
 //
 // The leak: TCP applies backpressure, so once a client stops consuming, the
-// kernel send buffer fills and the next Write blocks — indefinitely. Nothing
-// already in the gateway catches that. r.Context() fires when a client
-// DISCONNECTS, and this client has not; it is silent while still holding the
-// socket open. The inter-frame watchdog does not fire either, because the
-// upstream is healthy and still delivering. The request goes on holding its
-// admission slot, and 256 such clients close the gateway to everyone.
+// kernel send buffer fills and the next Write blocks. Nothing else in the
+// gateway catches that. r.Context() fires when a client DISCONNECTS, and this
+// client has not; it is silent while still holding the socket open. The
+// inter-frame watchdog does not fire either, because the upstream is healthy and
+// still delivering. The stream is bounded only by StreamAbsoluteMax — 30 minutes
+// of one slot per stalled client, against a ceiling of 256.
 //
-// A deadline rather than a watchdog, unlike the upstream side. There is no way
-// to interrupt a blocked Write from another goroutine — but the socket enforces
-// a deadline natively, and refreshing it per frame measures the right quantity:
-// time since the last SUCCESSFUL write, not total stream duration.
+// A deadline rather than a watchdog, unlike the upstream side. Interrupting a
+// blocked Write from another goroutine IS possible — closing the connection does
+// it — but the socket already enforces deadlines natively, so a deadline gets the
+// same result without a second goroutine racing the writer over connection
+// teardown. Refreshed per frame, it measures the right quantity: time since the
+// last SUCCESSFUL write, not total stream duration.
 
 import (
 	"errors"

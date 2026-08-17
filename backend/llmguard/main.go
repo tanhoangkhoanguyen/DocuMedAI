@@ -102,12 +102,13 @@ func main() {
 		// truncate healthy long streams — turning a rare leak into a routine
 		// failure of the feature.
 		//
-		// The correct fix is a per-write deadline refreshed on each flushed SSE
-		// frame (http.ResponseController.SetWriteDeadline), which measures the
-		// thing that actually matters: time since the last successful write. That
-		// touches the streaming loop in proxy.go and belongs in its own change.
-		// Until then a stalled reader is bounded by UPSTREAM_TIMEOUT, because the
-		// stream ends when the upstream response does.
+		// The streaming path bounds itself instead, by inactivity rather than by
+		// total duration (see internal/gateway/writedeadline.go and
+		// idlewatchdog.go): a per-write deadline refreshed on each flushed frame
+		// for a reader that stops reading, an inter-frame watchdog for an upstream
+		// that goes quiet, and STREAM_ABSOLUTE_MAX as a backstop behind both.
+		// Those measure the thing that actually matters — time since the last byte
+		// moved — which a server-wide WriteTimeout cannot express.
 	}
 
 	// Graceful shutdown on SIGINT/SIGTERM so in-flight calls aren't cut off.
