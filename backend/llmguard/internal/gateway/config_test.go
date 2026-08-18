@@ -68,6 +68,8 @@ func TestRealDefaultsMatchLoadConfig(t *testing.T) {
 		"UPSTREAM_TIMEOUT", "MAX_IDLE_CONNS",
 		"MAX_IN_FLIGHT", "SERVER_IDLE_TIMEOUT",
 		"STREAM_WRITE_IDLE", "STREAM_IDLE_TIMEOUT", "STREAM_ABSOLUTE_MAX",
+		"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_TRACES_SAMPLER_ARG",
+		"OTEL_SERVICE_NAME", "OTEL_SHUTDOWN_GRACE",
 	} {
 		t.Setenv(key, "")
 	}
@@ -104,10 +106,19 @@ func TestResilienceFieldsCoversConfig(t *testing.T) {
 	// coalescing and tripping. A shed request there would look like a retry that
 	// never happened. Leaving it 0 keeps those tests measuring what they were
 	// written to measure; admission_test.go sets the ceiling per test.
+	//
+	// The four Trace* knobs are skipped for a different reason than the rest: they
+	// are not resilience thresholds at all. They change what LLMGuard REPORTS about
+	// a request, never how it retries, sheds or trips, so no characterization test
+	// can be affected by their value. Mirroring them would also configure an
+	// exporter no test reads — the harness drives ServeHTTP under the global no-op
+	// tracer, and tracing_test.go installs its own recorder when it wants spans.
 	skipped := map[string]bool{
 		"VertexProject": true, "VertexLocation": true, "ModelConfigPath": true,
 		"Port": true, "RedisURL": true,
 		"IdleTimeout": true, "MaxInFlight": true,
+		"TraceEndpoint": true, "TraceSampleRatio": true,
+		"TraceServiceName": true, "TraceShutdownGrace": true,
 	}
 
 	covered := make(map[string]bool, len(resilienceFields))

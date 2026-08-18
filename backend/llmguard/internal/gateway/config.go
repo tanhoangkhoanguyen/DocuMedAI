@@ -131,6 +131,43 @@ type Config struct {
 	//
 	// There is deliberately no WriteTimeout: see main.go.
 	IdleTimeout time.Duration
+
+	// --- Tracing (OpenTelemetry) ---
+	//
+	// TraceEndpoint is the OTLP/HTTP collector base URL, e.g. http://la-jaeger:4318.
+	//
+	// EMPTY DISABLES TRACING ENTIRELY, and that is the whole switch: no SDK provider
+	// is installed and the global tracer stays OpenTelemetry's no-op. Read with a
+	// bare os.Getenv rather than getenv(key, def) because "" is the meaningful value
+	// here, not a missing one.
+	//
+	// The SDK reads this same variable itself and appends /v1/traces (the sibling
+	// OTEL_EXPORTER_OTLP_TRACES_ENDPOINT is used verbatim instead), so the exporter
+	// is built with no endpoint option — see tracing.go.
+	TraceEndpoint string
+
+	// TraceSampleRatio is the head-sampling probability in [0,1] for traces this
+	// process STARTS. An inbound sampled decision is inherited, so lowering this
+	// can never truncate a trace that arrived already sampled.
+	//
+	// Defaults to 1.0 (trace everything), which suits a low-QPS internal gateway
+	// where the interesting request is rare and losing it to a coin flip defeats the
+	// purpose. Note 0 is NOT the cheap way to switch tracing off: the SDK still
+	// builds a span before the sampler drops it, measured at ~17x the no-op path.
+	// Leave TraceEndpoint empty instead.
+	TraceSampleRatio float64
+
+	// TraceServiceName is the service.name resource attribute — the name this
+	// process appears under in a trace UI's service list.
+	TraceServiceName string
+
+	// TraceShutdownGrace bounds the final flush of buffered spans at shutdown.
+	//
+	// Spans leave in batches, so without a flush the last few seconds of traces are
+	// lost — exactly the window that matters when a process is going down. Kept well
+	// inside main.go's 15s shutdown budget so a collector that has itself gone away
+	// can never be the reason a drain times out.
+	TraceShutdownGrace time.Duration
 }
 
 // loadConfig reads the environment and applies sensible production defaults.
@@ -164,6 +201,13 @@ func loadConfig() Config {
 		StreamAbsoluteMax: getenvDur("STREAM_ABSOLUTE_MAX", 30*time.Minute),
 
 		IdleTimeout: getenvDur("SERVER_IDLE_TIMEOUT", 120*time.Second),
+
+		// Bare os.Getenv: empty means "tracing off", so there is no default to
+		// fall back to. The other three only matter once this is set.
+		TraceEndpoint:      os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
+		TraceSampleRatio:   getenvFloat("OTEL_TRACES_SAMPLER_ARG", 1.0),
+		TraceServiceName:   getenv("OTEL_SERVICE_NAME", "llmguard"),
+		TraceShutdownGrace: getenvDur("OTEL_SHUTDOWN_GRACE", 5*time.Second),
 	}
 }
 
