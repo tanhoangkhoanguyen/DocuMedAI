@@ -12,6 +12,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"documedai/llmguard/internal/gateway"
 	"documedai/llmguard/provider"
@@ -93,7 +94,23 @@ func main() {
 	mux := http.NewServeMux()
 	// All OpenAI-compatible traffic. Clients point their base_url at
 	// http://la-llmguard:8081/v1, so requests arrive under /v1/*.
-	mux.Handle("/v1/chat/completions", proxy)
+	//
+	// otelhttp wraps ONLY this route. It starts the root span and, more
+	// importantly, extracts an inbound W3C traceparent, so a call arriving from
+	// the Python backend continues that trace instead of starting a disconnected
+	// one. /healthz and /metrics are deliberately left bare: a 10s healthcheck and
+	// a Prometheus scrape would outnumber real requests and bury them.
+	//
+	// Wrapping the ResponseWriter is the risk here, because serveStreaming needs
+	// both http.Flusher and a working http.ResponseController.SetWriteDeadline to
+	// bound a stalled reader. otelhttp passes its wrapper through httpsnoop, whose
+	// wrappers implement Unwrap() http.ResponseWriter, so both survive —
+	// TestWriteDeadlineSurvivesOtelHandler pins that rather than trusting it.
+	//
+	// The operation name is static, not per-request: it is the span name, and
+	// putting anything high-cardinality (a model, a key) there fragments the
+	// grouping that makes latency comparable across requests.
+	mux.Handle("/v1/chat/completions", otelhttp.NewHandler(proxy, "POST /v1/chat/completions"))
 	// Liveness for docker-compose healthcheck.
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)

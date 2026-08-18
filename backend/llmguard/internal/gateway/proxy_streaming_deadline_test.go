@@ -28,6 +28,8 @@ import (
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+
 	"documedai/llmguard/internal/testutil"
 	"documedai/llmguard/mockupstream"
 )
@@ -448,4 +450,74 @@ func countDataFrames(body string) int {
 		}
 	}
 	return n
+}
+
+// The write deadline must survive otelhttp's ResponseWriter wrapper.
+//
+// This is the sibling of TestWriteDeadlineSupportedOnRealServer, and it exists
+// because main.go wraps the completions route in otelhttp.NewHandler while that
+// test covers only a bare http.Server. The two together say: the deadline works
+// on the plain path, AND it works on the path production actually serves.
+//
+// Why it can break. writedeadline.go reaches the connection through
+// http.ResponseController, which walks Unwrap() http.ResponseWriter to find a
+// ResponseWriter that implements SetWriteDeadline. A wrapper without Unwrap ends
+// that walk and SetWriteDeadline returns ErrNotSupported — at which point
+// arm() degrades to a warning and a stalled reader can hold its admission slot
+// until the inter-frame or absolute bound fires. Nothing else in the suite would
+// notice, because every other streaming test uses httptest.ResponseRecorder,
+// which has no connection and returns ErrNotSupported anyway.
+//
+// otelhttp happens to be safe today: it hands the handler a httpsnoop wrapper,
+// and httpsnoop's generated wrappers all implement Unwrap. That is a third-party
+// guarantee, not ours, so it is pinned here rather than trusted — a contrib
+// upgrade that stops delegating through httpsnoop fails this test instead of
+// silently disarming the protection in production.
+//
+// http.Flusher is asserted for the same reason: serveStreaming type-asserts it
+// and 500s without it, so losing it would break streaming outright.
+func TestWriteDeadlineSurvivesOtelHandler(t *testing.T) {
+	var (
+		probeErr   error
+		gotFlusher bool
+		probed     = make(chan struct{})
+	)
+	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		probeErr = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(time.Minute))
+		_, gotFlusher = w.(http.Flusher)
+		close(probed)
+		w.WriteHeader(http.StatusOK)
+	})
+	// The same wrapping main.go applies to /v1/chat/completions.
+	srv := httptest.NewServer(otelhttp.NewHandler(inner, "probe"))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL, nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	_ = resp.Body.Close()
+	<-probed
+
+	if errors.Is(probeErr, http.ErrNotSupported) {
+		t.Fatal("SetWriteDeadline is unsupported behind otelhttp.NewHandler. " +
+			"The wrapper it hands the handler no longer implements " +
+			"Unwrap() http.ResponseWriter, so writedeadline.go cannot reach the " +
+			"connection and a stalled reader holds its admission slot until " +
+			"STREAM_IDLE_TIMEOUT or STREAM_ABSOLUTE_MAX fires. Either pin the " +
+			"previous contrib version or stop wrapping the streaming route.")
+	}
+	if probeErr != nil {
+		t.Fatalf("SetWriteDeadline behind otelhttp: %v", probeErr)
+	}
+	if !gotFlusher {
+		t.Fatal("http.Flusher is gone behind otelhttp.NewHandler; serveStreaming " +
+			"type-asserts it and would 500 on every streaming request")
+	}
 }
