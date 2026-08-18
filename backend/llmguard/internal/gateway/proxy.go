@@ -14,6 +14,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.opentelemetry.io/otel/trace"
+
 	"documedai/llmguard/provider"
 )
 
@@ -60,11 +62,11 @@ type Proxy struct {
 	// ONLY in its Timeout. See newProxy for why the two cannot be one.
 	streamClient *http.Client
 	admitter     *admitter
-	limiter  *RateLimiter
-	deduper  *Deduper
-	breakers *breakerGroup
-	metrics  *Metrics
-	log      *slog.Logger
+	limiter      *RateLimiter
+	deduper      *Deduper
+	breakers     *breakerGroup
+	metrics      *Metrics
+	log          *slog.Logger
 }
 
 // newProxy assembles the handler. The breaker sharer is passed in rather than
@@ -204,6 +206,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	release, admitted := p.admitter.tryAcquire()
 	if !admitted {
 		p.metrics.shed.WithLabelValues(provName, model).Inc()
+		// Distinguishes this 429 from the rate limiter's below, which is otherwise
+		// impossible from the response alone.
+		markRefused(r.Context(), refusedByAdmission, provName, model)
 		// Retry-After turns a refusal into a usable instruction. Without it every
 		// shed client retries on its own schedule and they re-arrive together —
 		// the same thundering herd the buffered path already passes upstream
@@ -227,6 +232,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	rlKey := apiKeyHint(r) + ":" + model
 	if !p.limiter.Acquire(r.Context(), rlKey, p.cfg.RateWaitMax) {
 		p.metrics.rateLimited.WithLabelValues(provName, model).Inc()
+		markRefused(r.Context(), refusedByQuota, provName, model)
 		p.writeError(w, provName, model, start, http.StatusTooManyRequests,
 			"proxy rate limit exceeded", "rate_limit")
 		return
@@ -247,6 +253,10 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// breaker remains the authority on recovery, so this never blocks a half-open
 	// probe from running once the flag lapses.
 	if p.breakers.openElsewhere(r.Context(), provName) {
+		// Separates "another replica found this provider down" from the local
+		// breaker's identical 503 below — the difference between acting on someone
+		// else's evidence and on our own.
+		markRefused(r.Context(), refusedByBreakerRemote, provName, model)
 		p.writeError(w, provName, model, start, http.StatusServiceUnavailable,
 			"upstream unavailable (circuit open)", "upstream_error")
 		return
@@ -293,6 +303,9 @@ func (p *Proxy) serveBuffered(
 		// status; anything else (breaker open, transport failure) is a 503.
 		var ue *provider.UpstreamError
 		if errors.As(err, &ue) {
+			// The vendor refused, and its own status travels downstream — so the
+			// refusal is attributed to the upstream rather than to any guard here.
+			markRefused(r.Context(), refusedByUpstream, provName, model)
 			// Pass the provider's pacing hint through. Without it a client
 			// facing a 429 has to guess when to come back, which is how a
 			// thundering herd re-forms the moment quota frees up.
@@ -303,6 +316,10 @@ func (p *Proxy) serveBuffered(
 				ue.Body.Error.Message, ue.Body.Error.Type)
 			return
 		}
+		// Everything else reaching here is a local breaker refusal or a transport
+		// failure: no vendor status, so it becomes a 503 that looks exactly like the
+		// cross-replica one above. The attribute is what tells them apart.
+		markRefused(r.Context(), refusedByBreakerLocal, provName, model)
 		p.log.Warn("upstream failed", "provider", provName, "model", model, "err", err.Error())
 		p.writeError(w, provName, model, start, http.StatusServiceUnavailable,
 			"upstream unavailable", "upstream_error")
@@ -320,6 +337,12 @@ func (p *Proxy) serveBuffered(
 	// when in fact every caller failed.
 	if shared {
 		p.metrics.dedupHits.Inc()
+	}
+	// Recorded on every request, not only when true: "this flight was solo" is as
+	// useful as the opposite when reading a trace, and an absent attribute reads as
+	// "not instrumented" rather than as false.
+	if span := trace.SpanFromContext(r.Context()); span.IsRecording() {
+		span.SetAttributes(attrCoalesced.Bool(shared))
 	}
 
 	p.recordUsage(provName, model, res.usage)

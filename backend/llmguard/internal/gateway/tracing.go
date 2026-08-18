@@ -26,11 +26,13 @@ import (
 	"fmt"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // setupTracing installs a tracer provider and returns its shutdown function.
@@ -93,4 +95,71 @@ func setupTracing(ctx context.Context, cfg Config) (func(context.Context) error,
 	))
 
 	return tp.Shutdown, nil
+}
+
+// Attribute keys.
+//
+// Named constants for the same reason metrics.go's abort reasons are: an
+// attribute key is an interface. Once a dashboard or a saved query filters on
+// one, renaming it returns no rows rather than failing, so the keys belong in one
+// reviewable list instead of scattered through the pipeline as string literals.
+const (
+	attrProvider = attribute.Key("llmguard.provider")
+	attrModel    = attribute.Key("llmguard.model")
+
+	// attrRefusedBy names WHICH protection refused a request.
+	//
+	// This is the one thing the Prometheus metrics cannot answer. LLMGuard refuses
+	// in five distinct ways and two PAIRS share a status code: admission control
+	// and the rate limiter both return 429, and the local and cross-replica
+	// breakers both return 503. A 429 that means "this caller is over quota" and a
+	// 429 that means "the gateway is out of capacity" call for opposite responses
+	// — one is the client's problem, the other is the operator's — and on the wire
+	// they are indistinguishable.
+	//
+	// llmguard_shed_total vs llmguard_rate_limited_total separate the first pair in
+	// aggregate, but a counter cannot tell you which ONE request in a trace was
+	// refused and why. That is what this attribute is for.
+	attrRefusedBy = attribute.Key("llmguard.refused_by")
+
+	// attrCoalesced records that a request's flight had more than one caller.
+	//
+	// Deliberately NOT named "dedup.hit". singleflight reports shared=true to the
+	// flight LEADER as well as its followers, so "hit" would claim the leader
+	// reused someone else's response when in fact it made the upstream call.
+	// "coalesced" is true of every caller in the flight, which is what the flag
+	// actually means.
+	attrCoalesced = attribute.Key("llmguard.dedup.coalesced")
+)
+
+// Refusal reasons for attrRefusedBy. One per way a request can be turned away.
+const (
+	// The in-flight ceiling was full — an operator capacity problem, 429.
+	refusedByAdmission = "admission"
+	// The caller's token bucket was empty — a client quota problem, also 429.
+	refusedByQuota = "quota"
+	// Another replica published this provider as down — 503, no local evidence.
+	refusedByBreakerRemote = "breaker_remote"
+	// This replica's own breaker is open, or the transport failed outright — 503.
+	refusedByBreakerLocal = "breaker_local"
+	// The vendor itself refused; its status and message are passed through.
+	refusedByUpstream = "upstream"
+)
+
+// markRefused records on the request's span which protection turned it away.
+//
+// The span comes from the request context, so this is a no-op when tracing is off
+// or when the route is unwrapped: SpanFromContext returns a non-recording span
+// rather than nil, and SetAttributes on it does nothing. That is why there is no
+// enabled check here or at any call site.
+func markRefused(ctx context.Context, reason, provName, model string) {
+	span := trace.SpanFromContext(ctx)
+	if !span.IsRecording() {
+		return
+	}
+	span.SetAttributes(
+		attrRefusedBy.String(reason),
+		attrProvider.String(provName),
+		attrModel.String(model),
+	)
 }
