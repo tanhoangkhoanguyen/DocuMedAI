@@ -287,8 +287,14 @@ func (p *Proxy) serveBuffered(
 		v, berr := p.breakers.get(provName).Execute(func() (interface{}, error) {
 			return doWithRetry(r.Context(), p.cfg, key,
 				func() { p.metrics.retries.WithLabelValues(provName, model).Inc() },
-				func(ctx context.Context) (*upstreamResult, error) {
-					return p.forwardBuffered(ctx, prov, req)
+				func(ctx context.Context, attempt int) (*upstreamResult, error) {
+					// One child span per attempt. The retry loop knows the attempt
+					// number; what to do with it is decided here, which keeps
+					// retry.go free of an instrumentation dependency.
+					ctx, span := startAttempt(ctx, provName, model, attempt)
+					res, ferr := p.forwardBuffered(ctx, prov, req)
+					endAttempt(span, res, ferr)
+					return res, ferr
 				},
 			)
 		})

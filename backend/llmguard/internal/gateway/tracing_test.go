@@ -23,6 +23,7 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
@@ -159,6 +160,10 @@ func recordSpans(t *testing.T) *tracetest.SpanRecorder {
 	return sr
 }
 
+// rootSpanName is the operation name main.go gives the completions route. Shared
+// by the handler and the lookup below so the two cannot drift apart.
+const rootSpanName = "POST /v1/chat/completions"
+
 // tracedRequest drives one request through otelhttp + the proxy, the way main.go
 // wires the completions route, and returns the recorded root span.
 //
@@ -171,7 +176,7 @@ func tracedRequest(
 ) (*httptest.ResponseRecorder, sdktrace.ReadOnlySpan) {
 	t.Helper()
 
-	wrapped := otelhttp.NewHandler(h.proxy, "POST /v1/chat/completions")
+	wrapped := otelhttp.NewHandler(h.proxy, rootSpanName)
 	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	for k, v := range headers {
@@ -185,14 +190,21 @@ func tracedRequest(
 		t.Fatal("no spans recorded; otelhttp started none, so nothing the pipeline " +
 			"sets could be observed")
 	}
-	// The root is the span with no local parent. Selecting it this way rather than
-	// taking ended[0] keeps these tests correct once child spans exist.
-	for _, s := range ended {
-		if !s.Parent().IsValid() || s.Parent().IsRemote() {
-			return rec, s
+	// Match on the operation NAME, and search backwards.
+	//
+	// "the span with no parent" looks like the natural rule and is wrong here: a
+	// test may drive warm-up requests through h.do (unwrapped, so no root span
+	// exists) and every child span those produce is parentless too. Picking the
+	// first parentless span then returns a warm-up attempt and the assertions read
+	// an empty span. Backwards because otelhttp's root ends last, after the
+	// children it contains.
+	for i := len(ended) - 1; i >= 0; i-- {
+		if ended[i].Name() == rootSpanName {
+			return rec, ended[i]
 		}
 	}
-	return rec, ended[len(ended)-1]
+	t.Fatalf("no %q span was recorded among %d spans", rootSpanName, len(ended))
+	return rec, nil
 }
 
 // attrString reads a string attribute off a span, reporting whether it was set.
@@ -394,5 +406,154 @@ func TestRefusedByBreakerLocalIsRecorded(t *testing.T) {
 	}
 	if got != refusedByBreakerLocal {
 		t.Errorf("%s = %q, want %q", attrRefusedBy, got, refusedByBreakerLocal)
+	}
+}
+
+// spansNamed returns the recorded spans with the given name, in end order.
+func spansNamed(sr *tracetest.SpanRecorder, name string) []sdktrace.ReadOnlySpan {
+	var out []sdktrace.ReadOnlySpan
+	for _, s := range sr.Ended() {
+		if s.Name() == name {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// attrInt reads an int64 attribute off a span, reporting whether it was set.
+func attrInt(s sdktrace.ReadOnlySpan, key attribute.Key) (int64, bool) {
+	for _, kv := range s.Attributes() {
+		if kv.Key == key {
+			return kv.Value.AsInt64(), true
+		}
+	}
+	return 0, false
+}
+
+// A retrying request produces one child span per attempt, numbered from zero.
+//
+// This is the payoff of the whole commit and ROADMAP 3.2's second acceptance
+// criterion. Without it a request that spent 8s retrying three times is
+// indistinguishable from one slow upstream call — the single most common question
+// asked of a gateway, and one no counter answers.
+func TestRetryProducesOneSpanPerAttempt(t *testing.T) {
+	sr := recordSpans(t)
+
+	cfg := realDefaults()
+	// Only the delay knobs are shortened; RetryMax stays at the production 4, so
+	// the count asserted below is the real one.
+	cfg.RetryBaseDly = 0
+	cfg.RetryMaxDly = 0
+
+	mcfg := mockupstream.DefaultConfig()
+	mcfg.ErrorRate = 1.0
+	// Retryable, so the loop runs to exhaustion instead of bailing on the first
+	// non-retryable status.
+	mcfg.ErrorStatus = http.StatusServiceUnavailable
+	h := newHarness(t, cfg, mcfg, nil)
+
+	rec, _ := tracedRequest(t, h, sr, chatBody("gemini-2.5-flash", "retry me", false), nil)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 after exhausting retries\nbody: %s",
+			rec.Code, rec.Body.String())
+	}
+
+	attempts := spansNamed(sr, spanAttempt)
+	if len(attempts) != cfg.RetryMax {
+		t.Fatalf("%q spans = %d, want %d (RetryMax); one span per attempt is what "+
+			"makes a retry storm visible", spanAttempt, len(attempts), cfg.RetryMax)
+	}
+	if n := h.up.Hits(); int(n) != cfg.RetryMax {
+		t.Errorf("upstream calls = %d, want %d — the span count must track real "+
+			"attempts, not be generated independently of them", n, cfg.RetryMax)
+	}
+
+	// Numbered 0..RetryMax-1, in order. A test that only counted spans would pass
+	// with every attempt labelled 0.
+	for i, s := range attempts {
+		got, ok := attrInt(s, attrAttempt)
+		if !ok {
+			t.Errorf("attempt span %d has no %s", i, attrAttempt)
+			continue
+		}
+		if got != int64(i) {
+			t.Errorf("attempt span %d: %s = %d, want %d", i, attrAttempt, got, i)
+		}
+		if status, ok := attrInt(s, attrStatus); !ok {
+			t.Errorf("attempt span %d has no %s; an attempt in the tree must say "+
+				"what happened to it", i, attrStatus)
+		} else if status != int64(http.StatusServiceUnavailable) {
+			t.Errorf("attempt span %d: %s = %d, want 503", i, attrStatus, status)
+		}
+		if s.Status().Code != codes.Error {
+			t.Errorf("attempt span %d: status code = %v, want Error — a failed "+
+				"attempt that renders green hides the retry", i, s.Status().Code)
+		}
+	}
+}
+
+// The attempt spans hang off the request's root span.
+//
+// Parentage is asserted rather than just membership: spans that record but do not
+// nest render as a flat list, which loses the "these four attempts belong to that
+// one request" relationship that makes the tree readable.
+func TestAttemptSpansAreChildrenOfTheRequest(t *testing.T) {
+	sr := recordSpans(t)
+
+	h := newHarness(t, realDefaults(), mockupstream.Config{}, nil)
+	rec, root := tracedRequest(t, h, sr, chatBody("gemini-2.5-flash", "hello", false), nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200\nbody: %s", rec.Code, rec.Body.String())
+	}
+
+	attempts := spansNamed(sr, spanAttempt)
+	if len(attempts) != 1 {
+		t.Fatalf("%q spans = %d, want 1 for a request that succeeded first try",
+			spanAttempt, len(attempts))
+	}
+	attempt := attempts[0]
+
+	if got, want := attempt.Parent().SpanID(), root.SpanContext().SpanID(); got != want {
+		t.Errorf("attempt parent = %s, want the root span %s", got, want)
+	}
+	if got, want := attempt.SpanContext().TraceID(), root.SpanContext().TraceID(); got != want {
+		t.Errorf("attempt trace = %s, want %s — a child in a different trace is "+
+			"invisible from the request", got, want)
+	}
+	// A first-try success must still be numbered 0 and marked OK, or "attempt 0"
+	// would only ever appear on failures.
+	if got, ok := attrInt(attempt, attrAttempt); !ok || got != 0 {
+		t.Errorf("%s = %d (set=%v), want 0", attrAttempt, got, ok)
+	}
+	if attempt.Status().Code == codes.Error {
+		t.Error("a successful attempt is marked as an error")
+	}
+	if status, ok := attrInt(attempt, attrStatus); !ok || status != http.StatusOK {
+		t.Errorf("%s = %d (set=%v), want 200", attrStatus, status, ok)
+	}
+}
+
+// A non-retryable vendor status produces exactly ONE attempt span.
+//
+// The counterpart to the retry test: it pins that the spans track what the loop
+// actually did. retry.go returns early on a 400 because every further attempt
+// would fail identically, and four spans here would misreport burned quota that
+// was never spent.
+func TestNonRetryableStatusProducesOneAttemptSpan(t *testing.T) {
+	sr := recordSpans(t)
+
+	mcfg := mockupstream.DefaultConfig()
+	mcfg.ErrorRate = 1.0
+	mcfg.ErrorStatus = http.StatusBadRequest
+	h := newHarness(t, realDefaults(), mcfg, nil)
+
+	rec, _ := tracedRequest(t, h, sr, chatBody("gemini-2.5-flash", "bad", false), nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400\nbody: %s", rec.Code, rec.Body.String())
+	}
+
+	if attempts := spansNamed(sr, spanAttempt); len(attempts) != 1 {
+		t.Errorf("%q spans = %d, want 1 — a non-retryable status must not appear "+
+			"as a retry storm", spanAttempt, len(attempts))
 	}
 }

@@ -23,16 +23,20 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 	"go.opentelemetry.io/otel/trace"
+
+	"documedai/llmguard/provider"
 )
 
 // setupTracing installs a tracer provider and returns its shutdown function.
@@ -162,4 +166,80 @@ func markRefused(ctx context.Context, reason, provName, model string) {
 		attrProvider.String(provName),
 		attrModel.String(model),
 	)
+}
+
+// tracerName labels the spans this package emits with their origin, which is how
+// a backend groups spans by instrumentation rather than only by service.
+const tracerName = "documedai/llmguard/internal/gateway"
+
+// tracer resolves the GLOBAL provider on every call rather than caching one.
+//
+// Caching would capture whichever provider was installed when this package was
+// first touched — the no-op, since setupTracing runs later in main — and then
+// ignore setupTracing entirely. It would also defeat the tests, which swap the
+// global per test to record spans.
+func tracer() trace.Tracer { return otel.Tracer(tracerName) }
+
+// spanAttempt names the per-attempt child span.
+//
+// One span per attempt rather than one for the whole retry loop, because the loop
+// total answers "was it slow" while the attempts answer "why": four siblings, three
+// of them failing, is a different picture from one slow call, and the two are
+// indistinguishable in a single span.
+const spanAttempt = "upstream.attempt"
+
+// Attempt-span attributes.
+const (
+	// attrAttempt is the 0-based attempt number: 0 is the first try, not a retry.
+	// It matches doWithRetry's own loop counter, and deliberately not
+	// llmguard_retries_total, which counts only attempts after the first.
+	attrAttempt = attribute.Key("llmguard.retry.attempt")
+
+	// attrStatus is the upstream's HTTP status for this attempt.
+	//
+	// Per-attempt rather than per-request, which is the point: a request that ends
+	// 200 can still have burned a 503 and a 429 on the way, and only the final
+	// status reaches llmguard_requests_total.
+	attrStatus = attribute.Key("llmguard.upstream.status")
+)
+
+// startAttempt opens the per-attempt child span.
+//
+// Returns the derived context so anything below inherits the attempt as its
+// parent rather than the root — that is what makes the tree show retries as
+// siblings instead of a flat list.
+func startAttempt(
+	ctx context.Context, provName, model string, attempt int,
+) (context.Context, trace.Span) {
+	return tracer().Start(ctx, spanAttempt, trace.WithAttributes(
+		attrProvider.String(provName),
+		attrModel.String(model),
+		attrAttempt.Int(attempt),
+	))
+}
+
+// endAttempt closes an attempt span, recording its outcome.
+//
+// An upstream error carries the vendor's status and is recorded as an error; a
+// result without one is the success path. Both set attrStatus, so an attempt is
+// never in the tree without saying what happened to it.
+func endAttempt(span trace.Span, res *upstreamResult, err error) {
+	defer span.End()
+	if !span.IsRecording() {
+		return
+	}
+	switch {
+	case err != nil:
+		var ue *provider.UpstreamError
+		if errors.As(err, &ue) {
+			span.SetAttributes(attrStatus.Int(ue.Status))
+		}
+		// RecordError keeps the message as a span event; SetStatus is what makes
+		// the span render as failed. Both, because a trace UI reads them
+		// differently — one is detail, the other is the red marker.
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	case res != nil:
+		span.SetAttributes(attrStatus.Int(res.status))
+	}
 }

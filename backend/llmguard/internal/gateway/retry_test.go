@@ -351,7 +351,7 @@ func TestDeadlineKeepsUpstreamError(t *testing.T) {
 	defer cancel()
 
 	attempts := 0
-	_, err := doWithRetry(ctx, cfg, "seed", func() {}, func(context.Context) (*upstreamResult, error) {
+	_, err := doWithRetry(ctx, cfg, "seed", func() {}, func(context.Context, int) (*upstreamResult, error) {
 		attempts++
 		ue := &provider.UpstreamError{
 			Status: http.StatusTooManyRequests,
@@ -382,7 +382,7 @@ func TestClientCancelReportsCancellation(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	_, err := doWithRetry(ctx, cfg, "seed", func() {}, func(context.Context) (*upstreamResult, error) {
+	_, err := doWithRetry(ctx, cfg, "seed", func() {}, func(context.Context, int) (*upstreamResult, error) {
 		cancel() // the client disconnects during the first attempt
 		ue := &provider.UpstreamError{
 			Status: http.StatusTooManyRequests,
