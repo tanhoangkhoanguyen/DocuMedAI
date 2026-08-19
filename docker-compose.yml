@@ -76,6 +76,13 @@ services:
       # GOOGLE_APPLICATION_CREDENTIALS: /secrets/gcp-sa.json            # Vertex AI ADC. Comment out in deployment
       PROXY_PORT: "8081"
       REDIS_URL: redis://la-redis:6379/1 # DB 1 — separate from the app cache on DB 0
+      # Tracing is OFF unless this is set, so the default stack runs untraced and
+      # the gateway does not depend on la-jaeger being up. Enable it with the
+      # observability profile, or export OTEL_EXPORTER_OTLP_ENDPOINT yourself:
+      #   OTEL_EXPORTER_OTLP_ENDPOINT=http://la-jaeger:4318       #     docker compose --profile observability up -d la-jaeger la-llmguard
+      # The SDK appends /v1/traces to it. Traces appear at http://localhost:16686.
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-llmguard}
     depends_on:
       la-redis:
         condition: service_healthy
@@ -271,6 +278,24 @@ services:
       - ./backend/mcp_server/prometheus.yml:/etc/prometheus/prometheus.yml:ro
     ports:
       - "9090:9090"
+    networks:
+      - documedai-net
+
+  la-jaeger:
+    profiles: ["observability"]
+    # all-in-one: collector + storage + UI in one container, in-memory. Traces are
+    # lost on restart, which is right for a local viewer — persisting them would
+    # mean a storage backend nobody here is asking for.
+    image: jaegertracing/all-in-one:1.62.0
+    restart: unless-stopped
+    container_name: la-jaeger-service
+    environment:
+      # OTLP is off by default on this image line and is the only protocol
+      # LLMGuard speaks, so without this the collector ignores everything sent.
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686" # web UI
+      - "4318:4318" # OTLP/HTTP — what OTEL_EXPORTER_OTLP_ENDPOINT points at
     networks:
       - documedai-net
 

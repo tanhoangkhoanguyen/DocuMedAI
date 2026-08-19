@@ -190,7 +190,12 @@ func doWithRetry(
 	cfg Config,
 	seed string, // used to derive deterministic-but-spread jitter (no global rand)
 	onRetry func(),
-	call func(ctx context.Context) (*upstreamResult, error),
+	// call receives the 0-based attempt number so the caller can attribute one
+	// observation per attempt. The counter lives in this loop, and passing it out
+	// keeps the decision about WHAT to observe with the caller — the same division
+	// onRetry already draws for the retry metric — rather than importing an
+	// instrumentation dependency into what is otherwise pure control flow.
+	call func(ctx context.Context, attempt int) (*upstreamResult, error),
 ) (*upstreamResult, error) {
 	var last *upstreamResult
 	var lastErr error
@@ -200,7 +205,7 @@ func doWithRetry(
 			onRetry()
 		}
 
-		res, err := call(ctx)
+		res, err := call(ctx, attempt)
 		if err == nil {
 			return res, nil // success
 		}

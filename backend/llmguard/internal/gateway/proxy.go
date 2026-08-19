@@ -14,6 +14,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.opentelemetry.io/otel/trace"
+
 	"documedai/llmguard/provider"
 )
 
@@ -60,11 +62,11 @@ type Proxy struct {
 	// ONLY in its Timeout. See newProxy for why the two cannot be one.
 	streamClient *http.Client
 	admitter     *admitter
-	limiter  *RateLimiter
-	deduper  *Deduper
-	breakers *breakerGroup
-	metrics  *Metrics
-	log      *slog.Logger
+	limiter      *RateLimiter
+	deduper      *Deduper
+	breakers     *breakerGroup
+	metrics      *Metrics
+	log          *slog.Logger
 }
 
 // newProxy assembles the handler. The breaker sharer is passed in rather than
@@ -204,6 +206,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	release, admitted := p.admitter.tryAcquire()
 	if !admitted {
 		p.metrics.shed.WithLabelValues(provName, model).Inc()
+		// Distinguishes this 429 from the rate limiter's below, which is otherwise
+		// impossible from the response alone.
+		markRefused(r.Context(), refusedByAdmission, provName, model)
 		// Retry-After turns a refusal into a usable instruction. Without it every
 		// shed client retries on its own schedule and they re-arrive together —
 		// the same thundering herd the buffered path already passes upstream
@@ -227,6 +232,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	rlKey := apiKeyHint(r) + ":" + model
 	if !p.limiter.Acquire(r.Context(), rlKey, p.cfg.RateWaitMax) {
 		p.metrics.rateLimited.WithLabelValues(provName, model).Inc()
+		markRefused(r.Context(), refusedByQuota, provName, model)
 		p.writeError(w, provName, model, start, http.StatusTooManyRequests,
 			"proxy rate limit exceeded", "rate_limit")
 		return
@@ -247,6 +253,10 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// breaker remains the authority on recovery, so this never blocks a half-open
 	// probe from running once the flag lapses.
 	if p.breakers.openElsewhere(r.Context(), provName) {
+		// Separates "another replica found this provider down" from the local
+		// breaker's identical 503 below — the difference between acting on someone
+		// else's evidence and on our own.
+		markRefused(r.Context(), refusedByBreakerRemote, provName, model)
 		p.writeError(w, provName, model, start, http.StatusServiceUnavailable,
 			"upstream unavailable (circuit open)", "upstream_error")
 		return
@@ -277,8 +287,14 @@ func (p *Proxy) serveBuffered(
 		v, berr := p.breakers.get(provName).Execute(func() (interface{}, error) {
 			return doWithRetry(r.Context(), p.cfg, key,
 				func() { p.metrics.retries.WithLabelValues(provName, model).Inc() },
-				func(ctx context.Context) (*upstreamResult, error) {
-					return p.forwardBuffered(ctx, prov, req)
+				func(ctx context.Context, attempt int) (*upstreamResult, error) {
+					// One child span per attempt. The retry loop knows the attempt
+					// number; what to do with it is decided here, which keeps
+					// retry.go free of an instrumentation dependency.
+					ctx, span := startAttempt(ctx, provName, model, attempt)
+					res, ferr := p.forwardBuffered(ctx, prov, req)
+					endAttempt(span, res, ferr)
+					return res, ferr
 				},
 			)
 		})
@@ -293,6 +309,9 @@ func (p *Proxy) serveBuffered(
 		// status; anything else (breaker open, transport failure) is a 503.
 		var ue *provider.UpstreamError
 		if errors.As(err, &ue) {
+			// The vendor refused, and its own status travels downstream — so the
+			// refusal is attributed to the upstream rather than to any guard here.
+			markRefused(r.Context(), refusedByUpstream, provName, model)
 			// Pass the provider's pacing hint through. Without it a client
 			// facing a 429 has to guess when to come back, which is how a
 			// thundering herd re-forms the moment quota frees up.
@@ -303,6 +322,10 @@ func (p *Proxy) serveBuffered(
 				ue.Body.Error.Message, ue.Body.Error.Type)
 			return
 		}
+		// Everything else reaching here is a local breaker refusal or a transport
+		// failure: no vendor status, so it becomes a 503 that looks exactly like the
+		// cross-replica one above. The attribute is what tells them apart.
+		markRefused(r.Context(), refusedByBreakerLocal, provName, model)
 		p.log.Warn("upstream failed", "provider", provName, "model", model, "err", err.Error())
 		p.writeError(w, provName, model, start, http.StatusServiceUnavailable,
 			"upstream unavailable", "upstream_error")
@@ -320,6 +343,12 @@ func (p *Proxy) serveBuffered(
 	// when in fact every caller failed.
 	if shared {
 		p.metrics.dedupHits.Inc()
+	}
+	// Recorded on every request, not only when true: "this flight was solo" is as
+	// useful as the opposite when reading a trace, and an absent attribute reads as
+	// "not instrumented" rather than as false.
+	if span := trace.SpanFromContext(r.Context()); span.IsRecording() {
+		span.SetAttributes(attrCoalesced.Bool(shared))
 	}
 
 	p.recordUsage(provName, model, res.usage)
@@ -395,7 +424,24 @@ func (p *Proxy) serveStreaming(
 	// The cancel is deferred rather than called at each exit: the loop below
 	// returns from several places, and a context left uncancelled leaks its
 	// goroutine and timer for the life of the process.
-	streamCtx, cancelStream := context.WithCancel(r.Context())
+	// The stream span covers everything below, including the post-loop error
+	// handling that classifies an abort.
+	//
+	// Ended by DEFER reading state filled in as the stream progresses, rather than
+	// by a call at the tail. The pre-header error branch returns early — twice —
+	// to avoid double-recording latency, and a tail call would be skipped on
+	// exactly those paths, leaking a span that is never exported. The deferred
+	// closure reads the variables rather than capturing values, so it observes
+	// whatever the stream ended up doing.
+	spanCtx, streamSpan := startStream(r.Context(), provName, model)
+	var (
+		frames          int
+		spanAbortReason string
+		streamErr       error
+	)
+	defer func() { endStream(streamSpan, frames, spanAbortReason, streamErr) }()
+
+	streamCtx, cancelStream := context.WithCancel(spanCtx)
 	defer cancelStream()
 
 	// abortReason records WHY the stream was cut, written by the idle watchdog and
@@ -406,6 +452,10 @@ func (p *Proxy) serveStreaming(
 	var abortReason atomic.Pointer[string]
 
 	var usage provider.Usage
+	// sawFirstFrame keeps the first_frame event to exactly one — a stream emits
+	// thousands of writes and an event per frame is the per-frame span problem in
+	// another shape.
+	var sawFirstFrame bool
 	// Whether WriteHeader has gone out. Past that point the status is locked in
 	// and everything already flushed belongs to the client, so a failure can only
 	// be APPENDED to the stream — never rewritten as an error envelope.
@@ -442,6 +492,10 @@ func (p *Proxy) serveStreaming(
 		w.WriteHeader(http.StatusOK)
 		wroteHeader = true
 		p.metrics.requests.WithLabelValues(provName, model, statusLabel(http.StatusOK)).Inc()
+		// The boundary between connecting to the provider and the provider
+		// generating: everything before this point is ours, everything between here
+		// and first_frame is the model thinking.
+		streamSpan.AddEvent(eventUpstreamHeaders)
 
 		// --- Inter-frame watchdog ---
 		//
@@ -518,7 +572,16 @@ func (p *Proxy) serveStreaming(
 				// afterwards would leave each frame's own write unbounded — the
 				// deadline would always be measuring the previous frame.
 				writeDeadline.arm()
-				if werr := writeFrame(w, flusher, enc); werr != nil {
+				if werr := writeFrame(w, flusher, enc); werr == nil {
+					frames++
+					if !sawFirstFrame {
+						sawFirstFrame = true
+						// Time to first token. Recorded on the first SUCCESSFUL write,
+						// not on the first chunk received, because what matters is when
+						// the client could actually see something.
+						streamSpan.AddEvent(eventFirstFrame)
+					}
+				} else {
 					// Return either way: continuing would keep writing into a socket
 					// that is not accepting, and returning is what unwinds the handler
 					// and gives the slot back.
@@ -553,6 +616,7 @@ func (p *Proxy) serveStreaming(
 		flusher.Flush()
 		return nil, nil
 	})
+	streamErr = err
 	if err != nil {
 		// Counted before the branch below, because a deadline abort is a distinct
 		// fault from an upstream error and the branch only distinguishes "did
@@ -560,6 +624,7 @@ func (p *Proxy) serveStreaming(
 		// it fires exactly once per aborted stream, on the path that ends it.
 		if reason := streamAbortReason(abortReason.Load(), err, wroteHeader); reason != "" {
 			p.metrics.streamAborts.WithLabelValues(provName, model, reason).Inc()
+			spanAbortReason = reason
 		}
 		p.log.Warn("streaming upstream failed",
 			"provider", provName, "model", model, "err", err.Error())

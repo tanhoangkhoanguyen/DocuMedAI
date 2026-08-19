@@ -104,6 +104,8 @@ spend — LLMGuard is a reliability gateway and does nothing with those numbers.
 | `UPSTREAM_TIMEOUT` / `MAX_IDLE_CONNS` | `120s` / `100` | HTTP client. `UPSTREAM_TIMEOUT` bounds the **buffered** path only — see below |
 | `SERVER_IDLE_TIMEOUT` | `120s` | Idle keep-alive connections. There is deliberately no write timeout — see `main.go` |
 | `STREAM_WRITE_IDLE` / `STREAM_IDLE_TIMEOUT` / `STREAM_ABSOLUTE_MAX` | `30s` / `60s` / `30m` | Streaming deadlines — see below. `0` disables each |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | — | **Empty disables tracing entirely.** OTLP/HTTP collector base URL, e.g. `http://la-jaeger:4318` — see below |
+| `OTEL_SERVICE_NAME` / `OTEL_TRACES_SAMPLER_ARG` / `OTEL_SHUTDOWN_GRACE` | `llmguard` / `1.0` / `5s` | Service name, head-sampling ratio, span-flush budget at shutdown |
 
 ### Admission control
 
@@ -161,6 +163,59 @@ Aborts are counted by `llmguard_stream_aborts_total{reason}` — `upstream_idle`
 `absolute_max`. The counter is needed because an aborted stream is otherwise **invisible**: the
 header left with the first frame, so `requests_total` already recorded a 2xx, and the failure reaches
 the client as an in-band SSE frame that no server-side counter sees.
+
+### Tracing
+
+Prometheus counts what happened; it cannot say why **one** request took 8s. A gateway is asked that
+constantly, and the answer is a per-request timing tree:
+
+```
+POST /v1/chat/completions          8.2s  503
+├── upstream.attempt  #0           3.0s  ✗ 503
+├── upstream.attempt  #1           0.1s  ✗ 429
+└── upstream.attempt  #2           4.7s  ✗ 503
+```
+
+That request was slow because it retried three times — not because the provider is slow. No counter
+distinguishes those two.
+
+**Off unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set**, and off means nothing is installed: the global
+tracer stays OpenTelemetry's no-op. Two measured notes behind that shape. A no-op span costs ~34ns
+and one allocation against a request that spends *seconds* in an LLM call, so there is no
+`if enabled` guard anywhere. And installing the SDK with a sample ratio of `0` is **not** the cheap
+way to switch tracing off — the SDK builds a span before the sampler drops it, ~17× the no-op cost.
+Leave the endpoint empty.
+
+The endpoint is read by the SDK itself, which appends `/v1/traces`; the sibling
+`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` is used verbatim. Inbound W3C `traceparent` headers are
+adopted, so a call from the Python backend and the upstream call it triggers appear in **one** trace.
+
+| Span / attribute | Says |
+|---|---|
+| `POST /v1/chat/completions` | Root span, created by `otelhttp`. Carries the refusal attributes below |
+| `upstream.attempt` | One child **per attempt**, with `llmguard.retry.attempt` (0-based) and the upstream status. Four siblings is a retry storm; one slow span is a slow provider |
+| `stream` | One child per SSE stream, with `llmguard.stream.frames`. Events `upstream_headers` then `first_frame` — the gap between them is the provider thinking, and `first_frame` is **time to first token** |
+| `llmguard.refused_by` | Which protection refused: `admission`, `quota`, `breaker_remote`, `breaker_local`, `upstream` |
+| `llmguard.stream.abort_reason` | Which deadline cut a stream, same vocabulary as `llmguard_stream_aborts_total` |
+
+`refused_by` exists because **two pairs of refusals share a status code**: admission control and the
+rate limiter both return 429, the local and cross-replica breakers both return 503. A 429 meaning
+"the gateway is out of capacity" and one meaning "this caller is over quota" call for opposite
+responses, and on the wire they are identical. `shed_total` vs `rate_limited_total` separate them in
+aggregate, but a counter cannot say which *one* request was refused, or why.
+
+There is deliberately **no span per SSE frame** and none for provider translation. A frame span would
+mirror `upstream.attempt`, and streams reach tens of thousands of frames at ~780 bytes of span data
+each — the same exhaustion vector `maxUpstreamBody` exists to prevent. Translation is an in-memory
+unmarshal of a few µs, which a ~1.7µs span would cost as much to observe as to perform.
+
+Local viewing:
+
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=http://la-jaeger:4318 \
+  docker compose --profile observability up -d la-jaeger la-llmguard
+# traces at http://localhost:16686
+```
 
 ### Auth
 
@@ -220,6 +275,7 @@ compose is the only supported build path.
 | `internal/gateway/proxy.go` | Admit → rate limit → dedup → breaker → retry; SSE translation loop |
 | `internal/gateway/admission.go` | In-flight ceiling (counting semaphore) + shedding |
 | `internal/gateway/ratelimit.go` | Redis token bucket (atomic Lua) |
+| `internal/gateway/tracing.go` | Tracer provider setup + span/attribute vocabulary |
 | `internal/gateway/retry.go` | Backoff + jitter + Retry-After + per-provider circuit breakers |
 | `internal/gateway/breakershare.go` | Propagates a breaker trip to other replicas via Redis |
 | `internal/gateway/dedup.go` | In-flight de-duplication (singleflight) |

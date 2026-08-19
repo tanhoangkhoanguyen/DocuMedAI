@@ -45,6 +45,16 @@ func SetupProviders(ctx context.Context, cfg Config, mc *ModelConfig) error {
 // registry.
 func NewMetrics() *Metrics { return newMetrics() }
 
+// SetupTracing installs an OpenTelemetry tracer provider and returns its shutdown
+// function, which flushes spans that are still batched.
+//
+// Tracing is OFF unless cfg.TraceEndpoint is set, and off means nothing is
+// installed. The returned shutdown is a working no-op in that case, so main calls
+// it unconditionally rather than tracking whether tracing came up.
+func SetupTracing(ctx context.Context, cfg Config) (func(context.Context) error, error) {
+	return setupTracing(ctx, cfg)
+}
+
 // NewRateLimiter builds the Redis-backed token bucket shared across replicas.
 func NewRateLimiter(rdb *redis.Client, rpm, burst int) *RateLimiter {
 	return newRateLimiter(rdb, rpm, burst)
