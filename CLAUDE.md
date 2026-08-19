@@ -206,8 +206,34 @@ and would otherwise emit `[DONE]` on a truncated stream; and only a deadline err
 There is deliberately **no clear()** of the write deadline — `net/http` already resets it after every
 handler returns.
 
+**Tracing answers “why was THIS request slow”, which no counter can.** Off unless
+`OTEL_EXPORTER_OTLP_ENDPOINT` is set, and off means **nothing is installed** — the global tracer
+stays OpenTelemetry's no-op. That is the whole switch, and two measurements decided its shape: a
+no-op span is ~34ns against a request that spends *seconds* in an LLM call, so there is no
+`if enabled` guard at any of the ~10 call sites; and installing the SDK with sample ratio `0` costs
+**~17×** the no-op path, because the SDK builds a recording span before the sampler drops it — so
+“ratio 0” is the wrong way to disable. `otelhttp` wraps **only** `/v1/chat/completions` (a 10s
+healthcheck and a Prometheus scrape would bury real traffic) and is what adopts an inbound
+`traceparent`, putting the Python backend's call and the upstream call in **one** trace. Wrapping was
+the real risk, not the spans: `serveStreaming` needs `http.Flusher` and a working
+`SetWriteDeadline`, and a `ResponseWriter` wrapper without `Unwrap()` silently disarms the
+stalled-reader bound — invisible to every other streaming test, since they use a recorder with no
+connection. `TestWriteDeadlineSurvivesOtelHandler` pins it. The span tree is deliberately shallow:
+one `upstream.attempt` **per retry attempt** (four red siblings is a retry storm; one slow span is a
+slow provider) and one `stream` per SSE stream carrying `frames` plus a `first_frame` event —
+**time to first token**, which exists nowhere else here because `request_duration_seconds` is
+dominated by how *long* the answer is. There is **no span per frame** (streams reach tens of
+thousands of frames at ~780 bytes each — the exhaustion vector `maxUpstreamBody` exists to prevent)
+and none for provider translation (a few-µs unmarshal observed by a ~1.7µs span). Two attributes
+carry what status codes cannot: `llmguard.refused_by`, because admission-vs-quota both return **429**
+and local-vs-remote breaker both return **503**, and `llmguard.stream.abort_reason`, reusing the value
+`streamAbortReason` already computed for the counter so span and metric cannot disagree. One
+subtlety worth keeping: `endStream` runs from a **defer**, because the pre-header error branch returns
+early twice to avoid double-recording latency — a tail call is skipped on exactly those paths and
+leaks a span that is never exported.
+
 The pipeline lives in `internal/gateway/` (config, proxy, admission, retry, breakershare, dedup,
-ratelimit, metrics, idlewatchdog, writedeadline);
+ratelimit, metrics, idlewatchdog, writedeadline, tracing);
 `main.go` at the module root is a thin composition root, and `internal/gateway/gateway.go` is the
 entire exported surface between them. Everything else in the package stays unexported, and tests
 sit beside the code they exercise so nothing is exported merely to be testable.
@@ -216,7 +242,8 @@ The suite is **characterization tests**, each sitting beside the source file it 
 (`retry_test.go`, `dedup_test.go`, `ratelimit_test.go`, `circuitbreaker_test.go`; `proxy.go`'s
 larger surface is split into `proxy_buffered_test.go`, `proxy_streaming_test.go`,
 `proxy_errors_test.go`, plus `usage_test.go`) and sharing a harness in `harness_test.go`.
-`admission_test.go`, `breakershare_test.go` and `proxy_streaming_deadline_test.go` are the
+`admission_test.go`, `breakershare_test.go`, `proxy_streaming_deadline_test.go` and
+`tracing_test.go` are the
 **exceptions** to the characterization rule: that behavior is new, so there is no prior conduct to
 preserve and the tests state the intended contract (a shed is 429 + `Retry-After`, counted apart from
 quota 429s, and a slot always comes back; only the positive breaker reading is cached, and a Redis
@@ -224,7 +251,7 @@ error never sheds; a stream is cut by inactivity but never by total duration, an
 is the **admission slot** — every test there asserts on `llmguard_in_flight`, because a handler that
 returns while its goroutine still holds a slot passes every status assertion and still ratchets the
 gateway to zero capacity). The stalled-reader test dials a **real socket**: `httptest.ResponseRecorder`
-is an in-memory buffer that never blocks, so that leak is invisible to the rest of the suite. `config_test.go` guards
+is an in-memory buffer that never blocks, so that leak is invisible to the rest of the suite. `tracing_test.go` swaps the **process-wide** tracer provider and propagator per test, so nothing there may call `t.Parallel()`; it drives requests through `otelhttp` rather than `h.do`, because a span the handler never created cannot be asserted on, and it finds the root span by NAME rather than by "has no parent" — warm-up requests through `h.do` are unwrapped, so the children they leave behind are parentless too. `config_test.go` guards
 the harness/production invariant and **fails when a new `Config` field is added** without a decision
 about whether `realDefaults()` mirrors it — by design, not an obstacle. `mockupstream/` has its own
 tests pinning the determinism the Phase 6 benchmark depends on. Two rules matter when editing them:
@@ -271,9 +298,12 @@ Redis-backed tests (the rate limiter's Lua token bucket) use **DB 15** via
 | MCP server | 8090 (`observability` scrape target; always available) |
 | Prometheus | 9090 (`observability` profile) |
 | Grafana | 3000 (`observability` profile) |
+| Jaeger UI | 16686 (`observability` profile) · OTLP/HTTP on 4318 |
 
 Swagger UI: `http://localhost:2010/docs`
 LLMGuard metrics: `http://localhost:8081/metrics`
+Jaeger UI: `http://localhost:16686` (`observability` profile; tracing is off unless
+`OTEL_EXPORTER_OTLP_ENDPOINT` is set)
 MCP endpoint: `http://localhost:8090/mcp/` · metrics: `http://localhost:8090/metrics/`
 (both are `Mount`s — the **trailing slash matters**, the slashless form 307-redirects)
 
