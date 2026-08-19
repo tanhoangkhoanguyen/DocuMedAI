@@ -243,3 +243,82 @@ func endAttempt(span trace.Span, res *upstreamResult, err error) {
 		span.SetAttributes(attrStatus.Int(res.status))
 	}
 }
+
+// spanStream names the child span covering one SSE stream.
+//
+// ONE span for the whole stream, deliberately — not one per frame. A frame span
+// would be the natural symmetry with upstream.attempt, and it is a non-starter:
+// streams here reach tens of thousands of frames (the stalled-reader test drives
+// 50k tokens), and at ~780 bytes per sampled span that is tens of megabytes of
+// span data for a single request. That is the same exhaustion vector
+// maxUpstreamBody exists to prevent, and it would overrun the batch queue and be
+// unreadable in a trace UI besides. What the frames are actually asked is "when
+// did the first one arrive" and "why did they stop", and both are answerable
+// without a span each.
+const spanStream = "stream"
+
+// Stream-span attributes and events.
+const (
+	// attrStreamFrames is how many chunks were written to the client.
+	//
+	// Together with the span's own duration it separates "a long answer" from "a
+	// stream that hung": the same 90 seconds means something different at 2000
+	// frames than at 3.
+	attrStreamFrames = attribute.Key("llmguard.stream.frames")
+
+	// attrAbortReason names which deadline cut the stream, reusing the vocabulary
+	// of llmguard_stream_aborts_total (upstream_idle | write_idle | absolute_max).
+	//
+	// Needed on the span for the reason the metric is needed at all: the header
+	// left with the first frame, so an aborted stream already recorded a 2xx and is
+	// otherwise invisible. The attribute is what makes ONE such request findable
+	// rather than only countable.
+	attrAbortReason = attribute.Key("llmguard.stream.abort_reason")
+
+	// eventFirstFrame marks the first chunk reaching the client — time to first
+	// token.
+	//
+	// This is the number an LLM gateway is judged on and it exists nowhere else
+	// here: request_duration_seconds measures the whole stream, which is dominated
+	// by how LONG the answer is rather than by how fast the gateway and provider
+	// started producing it. A span event is the cheapest possible way to record it
+	// (no new span, no new metric) and it lands on the timeline exactly where a
+	// reader looks for it.
+	eventFirstFrame = "first_frame"
+
+	// eventUpstreamHeaders marks the upstream's 2xx arriving, i.e. the boundary
+	// between connect/negotiate and generation. The gap from here to
+	// eventFirstFrame is the provider thinking; before it is ours.
+	eventUpstreamHeaders = "upstream_headers"
+)
+
+// startStream opens the stream span as a child of the request.
+func startStream(
+	ctx context.Context, provName, model string,
+) (context.Context, trace.Span) {
+	return tracer().Start(ctx, spanStream, trace.WithAttributes(
+		attrProvider.String(provName),
+		attrModel.String(model),
+	))
+}
+
+// endStream closes a stream span with its outcome.
+//
+// abortReason is the value streamAbortReason already computed for the metric —
+// passed in rather than recomputed, so the span and the counter can never
+// disagree about why a stream ended. An empty reason with a non-nil error is an
+// ordinary upstream failure rather than a deadline.
+func endStream(span trace.Span, frames int, abortReason string, err error) {
+	defer span.End()
+	if !span.IsRecording() {
+		return
+	}
+	span.SetAttributes(attrStreamFrames.Int(frames))
+	if abortReason != "" {
+		span.SetAttributes(attrAbortReason.String(abortReason))
+	}
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+}

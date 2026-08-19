@@ -557,3 +557,191 @@ func TestNonRetryableStatusProducesOneAttemptSpan(t *testing.T) {
 			"as a retry storm", spanAttempt, len(attempts))
 	}
 }
+
+// hasEvent reports whether a span recorded an event with the given name, and how
+// many times.
+func countEvent(s sdktrace.ReadOnlySpan, name string) int {
+	n := 0
+	for _, e := range s.Events() {
+		if e.Name == name {
+			n++
+		}
+	}
+	return n
+}
+
+// A healthy stream produces ONE stream span carrying the frame count, a
+// time-to-first-token event, and no abort reason.
+//
+// first_frame is the point of the commit: request_duration_seconds measures the
+// whole stream, which is dominated by how long the answer is rather than by how
+// quickly anything started arriving. Nothing else in the gateway records TTFT.
+func TestStreamSpanRecordsFramesAndFirstToken(t *testing.T) {
+	sr := recordSpans(t)
+
+	mcfg := mockupstream.DefaultConfig()
+	mcfg.CompletionTokens = 5
+	h := newHarness(t, realDefaults(), mcfg, nil)
+
+	rec, root := tracedRequest(t, h, sr, chatBody("gemini-2.5-flash", "stream", true), nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200\nbody: %s", rec.Code, rec.Body.String())
+	}
+
+	streams := spansNamed(sr, spanStream)
+	if len(streams) != 1 {
+		t.Fatalf("%q spans = %d, want exactly 1 — one span per stream, never one "+
+			"per frame", spanStream, len(streams))
+	}
+	stream := streams[0]
+
+	if got, want := stream.Parent().SpanID(), root.SpanContext().SpanID(); got != want {
+		t.Errorf("stream parent = %s, want the root span %s", got, want)
+	}
+
+	frames, ok := attrInt(stream, attrStreamFrames)
+	if !ok {
+		t.Fatalf("%s is not set; without it the span's duration cannot distinguish "+
+			"a long answer from a hung stream", attrStreamFrames)
+	}
+	if frames <= 0 {
+		t.Errorf("%s = %d, want > 0 for a stream that delivered chunks",
+			attrStreamFrames, frames)
+	}
+
+	// Exactly once. A stream emits thousands of writes, and an event per frame is
+	// the per-frame span problem in another shape.
+	if n := countEvent(stream, eventFirstFrame); n != 1 {
+		t.Errorf("%q events = %d, want exactly 1 (time to first token)",
+			eventFirstFrame, n)
+	}
+	if n := countEvent(stream, eventUpstreamHeaders); n != 1 {
+		t.Errorf("%q events = %d, want exactly 1", eventUpstreamHeaders, n)
+	}
+	// Ordering is what makes the pair useful: headers marks the end of connecting,
+	// first_frame the start of output, and the gap between them is the provider
+	// thinking rather than anything the gateway did.
+	var headersAt, firstAt time.Time
+	for _, e := range stream.Events() {
+		switch e.Name {
+		case eventUpstreamHeaders:
+			headersAt = e.Time
+		case eventFirstFrame:
+			firstAt = e.Time
+		}
+	}
+	if !headersAt.IsZero() && !firstAt.IsZero() && firstAt.Before(headersAt) {
+		t.Errorf("%q (%v) precedes %q (%v); a frame cannot arrive before the headers",
+			eventFirstFrame, firstAt, eventUpstreamHeaders, headersAt)
+	}
+
+	if reason, ok := attrString(stream, attrAbortReason); ok {
+		t.Errorf("%s = %q on a healthy stream; it must appear only when a deadline "+
+			"cut the stream", attrAbortReason, reason)
+	}
+	if stream.Status().Code == codes.Error {
+		t.Error("a completed stream is marked as an error")
+	}
+}
+
+// An aborted stream records WHY on its span, matching the counter's vocabulary.
+//
+// This is the case the span is most needed for: the header left with the first
+// frame, so requests_total already recorded a 2xx and the request looks
+// successful. Without the attribute an aborted stream is countable in aggregate
+// but not findable as one request.
+//
+// Driven through mockupstream's StallAfter, which sends N frames and then goes
+// silent without closing — the slow-loris shape the inter-frame watchdog exists
+// for.
+func TestAbortedStreamRecordsReasonOnSpan(t *testing.T) {
+	sr := recordSpans(t)
+
+	cfg := realDefaults()
+	// Short enough to keep the test quick; the watchdog resets per frame, so this
+	// only fires once upstream actually goes quiet.
+	cfg.StreamIdleTimeout = 200 * time.Millisecond
+
+	mcfg := mockupstream.DefaultConfig()
+	mcfg.CompletionTokens = 50
+	mcfg.StallAfter = 2 // two frames, then silence
+	h := newHarness(t, cfg, mcfg, nil)
+
+	rec, _ := tracedRequest(t, h, sr, chatBody("gemini-2.5-flash", "stall", true), nil)
+	// The header went out with the first frame, so the status is already 200 —
+	// which is exactly why the counter and this attribute exist.
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (header left with the first frame)", rec.Code)
+	}
+
+	streams := spansNamed(sr, spanStream)
+	if len(streams) != 1 {
+		t.Fatalf("%q spans = %d, want 1", spanStream, len(streams))
+	}
+	stream := streams[0]
+
+	got, ok := attrString(stream, attrAbortReason)
+	if !ok {
+		t.Fatalf("%s is not set on an aborted stream; the request already reported "+
+			"HTTP 200, so nothing else marks it as cut", attrAbortReason)
+	}
+	if got != abortUpstreamIdle {
+		t.Errorf("%s = %q, want %q", attrAbortReason, got, abortUpstreamIdle)
+	}
+	// Same vocabulary as llmguard_stream_aborts_total, and the same value: the span
+	// and the counter are fed from one classification so they cannot disagree.
+	if n := testutil.LabeledCounterValue(t, h.metrics.streamAborts,
+		modelLabels("gemini-2.5-flash", abortUpstreamIdle)...); n != 1 {
+		t.Errorf("stream_aborts_total{reason=%q} = %v, want 1", abortUpstreamIdle, n)
+	}
+	if stream.Status().Code != codes.Error {
+		t.Errorf("status code = %v, want Error for an aborted stream", stream.Status().Code)
+	}
+	// The frames delivered before the stall are still reported: "cut after 2 frames"
+	// is a different diagnosis from "cut before producing anything".
+	if frames, ok := attrInt(stream, attrStreamFrames); !ok || frames == 0 {
+		t.Errorf("%s = %d (set=%v), want the frames delivered before the stall",
+			attrStreamFrames, frames, ok)
+	}
+}
+
+// A stream that fails BEFORE the header produces a span with no first_frame.
+//
+// The negative case for TTFT: an event that is only ever present cannot
+// distinguish "nothing was delivered" from "not instrumented", and this is the
+// path where the client can still be sent a real error envelope.
+func TestStreamFailingBeforeHeaderHasNoFirstFrame(t *testing.T) {
+	sr := recordSpans(t)
+
+	mcfg := mockupstream.DefaultConfig()
+	mcfg.ErrorRate = 1.0
+	mcfg.ErrorStatus = http.StatusBadRequest
+	h := newHarness(t, realDefaults(), mcfg, nil)
+
+	rec, _ := tracedRequest(t, h, sr, chatBody("gemini-2.5-flash", "fail early", true), nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (failed before any frame)\nbody: %s",
+			rec.Code, rec.Body.String())
+	}
+
+	streams := spansNamed(sr, spanStream)
+	if len(streams) != 1 {
+		t.Fatalf("%q spans = %d, want 1 even when the stream never started",
+			spanStream, len(streams))
+	}
+	stream := streams[0]
+
+	if n := countEvent(stream, eventFirstFrame); n != 0 {
+		t.Errorf("%q events = %d, want 0 — nothing reached the client", eventFirstFrame, n)
+	}
+	if frames, _ := attrInt(stream, attrStreamFrames); frames != 0 {
+		t.Errorf("%s = %d, want 0", attrStreamFrames, frames)
+	}
+	// Not a deadline abort: the upstream refused outright, and labelling that as a
+	// stream abort would inflate the metric that is supposed to mean "deadlines are
+	// cutting streams".
+	if reason, ok := attrString(stream, attrAbortReason); ok {
+		t.Errorf("%s = %q for a pre-header upstream refusal; that is not a deadline "+
+			"abort", attrAbortReason, reason)
+	}
+}
