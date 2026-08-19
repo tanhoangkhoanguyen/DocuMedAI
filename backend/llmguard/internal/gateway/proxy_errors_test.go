@@ -174,7 +174,7 @@ func TestUpstreamErrorPassthrough(t *testing.T) {
 // The cap must produce an ERROR, not a truncated body: a silently cut-off
 // response would reach TranslateResponse and surface as a confusing JSON syntax
 // error rather than the real problem. As an error it also stays a failed
-// attempt, so nothing nonsensical is cached or handed to dedup waiters.
+// attempt, so nothing nonsensical is cached or returned to the caller.
 func TestOversizedUpstreamResponseIsRejected(t *testing.T) {
 	cases := []struct {
 		name     string

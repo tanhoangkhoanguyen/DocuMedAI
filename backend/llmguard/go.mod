@@ -1,7 +1,7 @@
 // LLMGuard — an OpenAI-compatible LLM gateway. Clients speak the OpenAI wire
 // format; internally a provider adapter translates to the vendor's native API
 // (Vertex AI Gemini today). It adds rate limiting, retry/backoff, circuit
-// breaking, in-flight de-duplication and Prometheus metrics so a burst of
+// breaking, admission control and Prometheus metrics so a burst of
 // chat-completion calls never overwhelms the upstream (429/5xx).
 //
 // Clients only change `base_url` to point here; credentials stay in LLMGuard.
@@ -12,10 +12,9 @@ go 1.23.0
 require (
 	github.com/prometheus/client_golang v1.20.5 // Prometheus /metrics
 	github.com/prometheus/client_model v0.6.1 // reading histograms back in tests
-	github.com/redis/go-redis/v9 v9.7.0 // Redis-backed rate limit + dedup state
+	github.com/redis/go-redis/v9 v9.7.0 // Redis-backed rate limit + breaker signal
 	github.com/sony/gobreaker v1.0.0 // circuit breaker around upstream
 	golang.org/x/oauth2 v0.30.0 // ADC / OAuth2 tokens for Vertex AI
-	golang.org/x/sync v0.16.0 // singleflight for same-process dedup
 )
 
 require (

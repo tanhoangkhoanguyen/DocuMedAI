@@ -217,16 +217,6 @@ func attrString(s sdktrace.ReadOnlySpan, key attribute.Key) (string, bool) {
 	return "", false
 }
 
-// attrBool reads a bool attribute off a span, reporting whether it was set.
-func attrBool(s sdktrace.ReadOnlySpan, key attribute.Key) (bool, bool) {
-	for _, kv := range s.Attributes() {
-		if kv.Key == key {
-			return kv.Value.AsBool(), true
-		}
-	}
-	return false, false
-}
-
 // A shed request is attributed to admission control, not to the rate limiter.
 //
 // This is the pair the wire cannot separate: both return 429. One request holds
@@ -335,12 +325,11 @@ func TestRefusedByUpstreamIsRecorded(t *testing.T) {
 	}
 }
 
-// A successful request records dedup.coalesced=false and NO refusal.
+// A successful request records NO refusal.
 //
-// The negative case is what makes the refusal attribute meaningful when present.
-// And a coalesced flag written only when true cannot be told apart from "not
-// instrumented", which is why it is asserted present-and-false here.
-func TestSuccessRecordsNoRefusalAndSoloFlight(t *testing.T) {
+// The negative case is what makes the refusal attribute meaningful when present:
+// an attribute that appeared on every span would say nothing.
+func TestSuccessRecordsNoRefusal(t *testing.T) {
 	sr := recordSpans(t)
 
 	h := newHarness(t, realDefaults(), mockupstream.Config{}, nil)
@@ -352,14 +341,6 @@ func TestSuccessRecordsNoRefusalAndSoloFlight(t *testing.T) {
 	if got, ok := attrString(span, attrRefusedBy); ok {
 		t.Errorf("%s = %q on a successful request; it must appear only on a refusal",
 			attrRefusedBy, got)
-	}
-	coalesced, ok := attrBool(span, attrCoalesced)
-	if !ok {
-		t.Fatalf("%s is not set; it is recorded on every request so that absent means "+
-			"'not instrumented' rather than 'false'", attrCoalesced)
-	}
-	if coalesced {
-		t.Errorf("%s = true for a single request with no concurrent twin", attrCoalesced)
 	}
 }
 

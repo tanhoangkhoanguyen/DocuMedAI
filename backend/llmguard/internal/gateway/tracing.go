@@ -125,15 +125,6 @@ const (
 	// aggregate, but a counter cannot tell you which ONE request in a trace was
 	// refused and why. That is what this attribute is for.
 	attrRefusedBy = attribute.Key("llmguard.refused_by")
-
-	// attrCoalesced records that a request's flight had more than one caller.
-	//
-	// Deliberately NOT named "dedup.hit". singleflight reports shared=true to the
-	// flight LEADER as well as its followers, so "hit" would claim the leader
-	// reused someone else's response when in fact it made the upstream call.
-	// "coalesced" is true of every caller in the flight, which is what the flag
-	// actually means.
-	attrCoalesced = attribute.Key("llmguard.dedup.coalesced")
 )
 
 // Refusal reasons for attrRefusedBy. One per way a request can be turned away.

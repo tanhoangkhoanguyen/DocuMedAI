@@ -74,7 +74,7 @@ func TestRetryThenSucceed(t *testing.T) {
 	//                test goes red for a scheduling reason unrelated to retry.
 	//
 	// backoffDelay is deterministic (FNV of seed+attempt, no global rand), but
-	// the seed is the dedup key — the sha256 of the request body — so a test
+	// the seed is requestSeed — the sha256 of the request body — so a test
 	// that changes its prompt draws different jitter. Measured across 200 seeds:
 	//
 	//   attempt 2 lands in [621ms, 727ms]
@@ -210,7 +210,7 @@ func TestRetryAfterIsHonored(t *testing.T) {
 }
 
 // Retry-After is capped at RetryMaxDly. An upstream asking for a day must not
-// be able to park the request for one, holding a connection and a singleflight
+// be able to park the request for one, holding a connection and an admission
 // slot the whole time.
 func TestRetryAfterIsCapped(t *testing.T) {
 	cfg := realDefaults()
@@ -286,9 +286,9 @@ func TestParseRetryAfterForms(t *testing.T) {
 //
 // Without it a caller facing a 429 has to guess when to come back, which is how
 // a thundering herd re-forms the moment quota frees up. The header rides on
-// *UpstreamError because that is the only thing surviving the breaker and
-// deduper on the failure path — the upstreamResult holding the response headers
-// is discarded there.
+// *UpstreamError because that is the only thing surviving the breaker on the
+// failure path — the upstreamResult holding the response headers is discarded
+// there.
 func TestRetryAfterIsForwardedToClient(t *testing.T) {
 	cfg := realDefaults()
 	cfg.RetryBaseDly = time.Millisecond

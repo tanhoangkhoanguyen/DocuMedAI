@@ -3,6 +3,8 @@ package gateway
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,10 +16,21 @@ import (
 	"sync/atomic"
 	"time"
 
-	"go.opentelemetry.io/otel/trace"
 
 	"documedai/llmguard/provider"
 )
+
+// requestSeed hashes the request body into the retry loop's jitter seed.
+//
+// The seed only has to be stable per request and different between requests:
+// backoffDelay derives its jitter from it, so two callers retrying at the same
+// moment spread out instead of re-colliding. Hashing the body rather than
+// counting requests keeps the delay reproducible for a given request, which is
+// what makes the retry tests assert on a corridor instead of a range.
+func requestSeed(body []byte) string {
+	sum := sha256.Sum256(body)
+	return hex.EncodeToString(sum[:])
+}
 
 // maxUpstreamBody caps how much of a provider's response we will buffer.
 //
@@ -52,8 +65,8 @@ func readUpstreamBody(r io.Reader) ([]byte, error) {
 }
 
 // Proxy is the HTTP handler for /v1/chat/completions. It owns the
-// provider-agnostic concerns — rate limit → dedup → circuit breaker → retry —
-// and delegates every vendor-specific detail (URL, auth, wire format) to a
+// provider-agnostic concerns — rate limit → circuit breaker → retry — and
+// delegates every vendor-specific detail (URL, auth, wire format) to a
 // provider.Provider.
 type Proxy struct {
 	cfg    Config
@@ -63,7 +76,6 @@ type Proxy struct {
 	streamClient *http.Client
 	admitter     *admitter
 	limiter      *RateLimiter
-	deduper      *Deduper
 	breakers     *breakerGroup
 	metrics      *Metrics
 	log          *slog.Logger
@@ -73,7 +85,7 @@ type Proxy struct {
 // built here, and may be nil: a single-replica deployment and the whole test
 // suite run without one, and a nil sharer is a no-op rather than a special case.
 func newProxy(
-	cfg Config, limiter *RateLimiter, deduper *Deduper,
+	cfg Config, limiter *RateLimiter,
 	sharer *BreakerSharer, m *Metrics, log *slog.Logger,
 ) *Proxy {
 	// One shared transport so TCP/TLS connections upstream are reused across
@@ -108,7 +120,6 @@ func newProxy(
 
 		admitter: newAdmitter(cfg.MaxInFlight, m),
 		limiter:  limiter,
-		deduper:  deduper,
 		breakers: newBreakerGroup(cfg, m, sharer),
 		metrics:  m,
 		log:      log,
@@ -262,8 +273,8 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Streaming requests cannot be buffered/deduped/replayed as a unit — they
-	// get breaker protection but no retry/dedup.
+	// Streaming requests cannot be buffered and replayed as a unit — they get
+	// breaker protection but no retry.
 	if req.Stream {
 		p.serveStreaming(w, r, prov, &req, start)
 		return
@@ -271,37 +282,31 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p.serveBuffered(w, r, prov, &req, body, start)
 }
 
-// serveBuffered handles the normal (non-streaming) path: dedup → breaker → retry.
+// serveBuffered handles the normal (non-streaming) path: breaker → retry.
 func (p *Proxy) serveBuffered(
 	w http.ResponseWriter, r *http.Request,
 	prov provider.Provider, req *provider.ChatRequest, rawBody []byte, start time.Time,
 ) {
 	model := req.Model
 	provName := prov.Name()
-	key := dedupKey(rawBody)
+	seed := requestSeed(rawBody)
 
-	res, shared, err := p.deduper.Do(key, func() (*upstreamResult, error) {
-		// The breaker wraps the WHOLE retry loop: a tripped breaker should stop
-		// us before we even start retrying. It is this provider's breaker, so a
-		// failing upstream does not shed traffic bound for a healthy one.
-		v, berr := p.breakers.get(provName).Execute(func() (interface{}, error) {
-			return doWithRetry(r.Context(), p.cfg, key,
-				func() { p.metrics.retries.WithLabelValues(provName, model).Inc() },
-				func(ctx context.Context, attempt int) (*upstreamResult, error) {
-					// One child span per attempt. The retry loop knows the attempt
-					// number; what to do with it is decided here, which keeps
-					// retry.go free of an instrumentation dependency.
-					ctx, span := startAttempt(ctx, provName, model, attempt)
-					res, ferr := p.forwardBuffered(ctx, prov, req)
-					endAttempt(span, res, ferr)
-					return res, ferr
-				},
-			)
-		})
-		if berr != nil {
-			return nil, berr
-		}
-		return v.(*upstreamResult), nil
+	// The breaker wraps the WHOLE retry loop: a tripped breaker should stop us
+	// before we even start retrying. It is this provider's breaker, so a failing
+	// upstream does not shed traffic bound for a healthy one.
+	v, err := p.breakers.get(provName).Execute(func() (interface{}, error) {
+		return doWithRetry(r.Context(), p.cfg, seed,
+			func() { p.metrics.retries.WithLabelValues(provName, model).Inc() },
+			func(ctx context.Context, attempt int) (*upstreamResult, error) {
+				// One child span per attempt. The retry loop knows the attempt
+				// number; what to do with it is decided here, which keeps
+				// retry.go free of an instrumentation dependency.
+				ctx, span := startAttempt(ctx, provName, model, attempt)
+				res, ferr := p.forwardBuffered(ctx, prov, req)
+				endAttempt(span, res, ferr)
+				return res, ferr
+			},
+		)
 	})
 
 	if err != nil {
@@ -332,31 +337,17 @@ func (p *Proxy) serveBuffered(
 		return
 	}
 
-	// Counted only once the flight has produced a real response. Every error
-	// branch above returns, so reaching here means the shared result was
-	// actually usable.
-	//
-	// A coalesced FAILURE is not a dedup hit. The counter answers "did a
-	// thundering herd collapse into one upstream call" — a reliability signal —
-	// and a flight that ended in a breaker-open 503 or a transport error
-	// delivered nothing to share. Counting it would report the herd as absorbed
-	// when in fact every caller failed.
-	if shared {
-		p.metrics.dedupHits.Inc()
-	}
-	// Recorded on every request, not only when true: "this flight was solo" is as
-	// useful as the opposite when reading a trace, and an absent attribute reads as
-	// "not instrumented" rather than as false.
-	if span := trace.SpanFromContext(r.Context()); span.IsRecording() {
-		span.SetAttributes(attrCoalesced.Bool(shared))
-	}
+	// Safe unchecked: the only producer of this value is the callback above, and
+	// the breaker-open path returns a nil interface caught by the err guard.
+	res := v.(*upstreamResult)
 
 	p.recordUsage(provName, model, res.usage)
 	p.writeJSON(w, provName, model, start, res.status, res.body, "buffered")
 }
 
 // forwardBuffered performs ONE upstream attempt: build → send → translate. The
-// translated response is buffered so it can be retried and deduped.
+// translated response is buffered so a failed attempt can be discarded and
+// replayed by the retry loop.
 func (p *Proxy) forwardBuffered(
 	ctx context.Context, prov provider.Provider, req *provider.ChatRequest,
 ) (*upstreamResult, error) {
@@ -381,8 +372,8 @@ func (p *Proxy) forwardBuffered(
 		var ue *provider.UpstreamError
 		if errors.As(err, &ue) {
 			// TranslateResponse only sees (status, body), so the header has to
-			// be attached here. The error is what survives the breaker and
-			// deduper on the failure path; the result below is not.
+			// be attached here. The error is what survives the breaker on the
+			// failure path; the result below is not.
 			ue.RetryAfter = resp.Header.Get("Retry-After")
 			return &upstreamResult{status: ue.Status, header: resp.Header.Clone()}, err
 		}

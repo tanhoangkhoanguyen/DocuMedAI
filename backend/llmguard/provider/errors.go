@@ -13,8 +13,8 @@ type UpstreamError struct {
 
 	// RetryAfter is the vendor's Retry-After header, verbatim, when it sent
 	// one. It rides on the error because that is the only thing that survives
-	// the breaker and deduper on the failure path — the *upstreamResult holding
-	// the response headers is discarded there. Core forwards it to the client
+	// the breaker on the failure path — the *upstreamResult holding the
+	// response headers is discarded there. Core forwards it to the client
 	// so a caller can honor the provider's pacing instead of guessing.
 	//
 	// Empty when absent. Not parsed here: core needs the raw value to pass on,

@@ -29,8 +29,8 @@ type Config struct {
 	// Port the proxy listens on (matches docker-compose + the client base_url).
 	Port string
 
-	// RedisURL backs the distributed token bucket and the cross-process dedup
-	// marker. We use DB 1 so we never collide with the app's chat cache on DB 0.
+	// RedisURL backs the distributed token bucket and the cross-replica breaker
+	// signal. We use DB 1 so we never collide with the app's chat cache on DB 0.
 	RedisURL string
 
 	// --- Rate limiting (token bucket, per API key + model) ---

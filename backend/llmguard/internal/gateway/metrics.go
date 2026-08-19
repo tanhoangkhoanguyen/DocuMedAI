@@ -40,8 +40,6 @@ type Metrics struct {
 	// provider + model. Shedding happens AFTER the provider is resolved, so this
 	// one always carries a real provider name.
 	rateLimited *prometheus.CounterVec
-	// dedupHits counts requests that piggy-backed on an in-flight identical call.
-	dedupHits prometheus.Counter
 	// circuitState reflects each provider's breaker: 0=closed, 1=half-open,
 	// 2=open. Labelled because the breakers are per provider — a single series
 	// would let one upstream's outage overwrite every other upstream's reading.
@@ -113,10 +111,6 @@ func newMetricsWith(reg prometheus.Registerer) *Metrics {
 			Name: "llmguard_rate_limited_total",
 			Help: "Requests rejected by the token bucket by provider and model.",
 		}, []string{"provider", "model"}),
-		dedupHits: auto.NewCounter(prometheus.CounterOpts{
-			Name: "llmguard_dedup_hits_total",
-			Help: "Requests served by sharing an in-flight identical call.",
-		}),
 		circuitState: auto.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "llmguard_circuit_state",
 			Help: "Circuit breaker state by provider: 0=closed, 1=half-open, 2=open.",

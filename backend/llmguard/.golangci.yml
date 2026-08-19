@@ -13,18 +13,17 @@
 # Line numbers were refreshed after the Vertex migration; if they drift again,
 # `grep` for the construct rather than trusting the number:
 #
-#   errcheck         internal/gateway/proxy.go:213, :270 — `defer resp.Body.Close()`.
+#   errcheck         internal/gateway/proxy.go:340, :420 — `defer resp.Body.Close()`.
 #                    Also the discarded `w.Write` returns in serveStreaming: a
 #                    write failure there means the client hung up, which the
 #                    scanner loop discovers on its own.
-#   forcetypeassert  internal/gateway/dedup.go:35 — singleflight `v.(*upstreamResult)`
-#                    internal/gateway/proxy.go:169 — gobreaker `v.(*upstreamResult)`
-#                    Both are unchecked-by-design: the only producer of these
-#                    values is the callback immediately above them. NOTE the
-#                    gobreaker one is safe ONLY because of the `if berr != nil`
-#                    guard on the line before — on the breaker-open path `v` is
-#                    nil and the assertion would panic. Do not remove that guard.
-#   nilnil           internal/gateway/proxy.go:332 — the streaming breaker
+#   forcetypeassert  internal/gateway/proxy.go:320 — gobreaker `v.(*upstreamResult)`.
+#                    Unchecked by design: the only producer of that value is the
+#                    callback immediately above it. It is safe ONLY because of the
+#                    `if err != nil` guard between the two — on the breaker-open
+#                    path `v` is nil and the assertion would panic. Do not remove
+#                    that guard.
+#   nilnil           internal/gateway/proxy.go:552 — the streaming breaker
 #                    callback returns (nil, nil) because it has already written
 #                    the response.
 #

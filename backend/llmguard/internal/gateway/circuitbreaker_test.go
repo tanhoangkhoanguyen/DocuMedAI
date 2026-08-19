@@ -32,8 +32,8 @@ func TestCircuitBreakerTrips(t *testing.T) {
 
 	body := chatBody("gemini-2.5-flash", "sustained failure", false)
 
-	// Sequential, so each request is its own singleflight flight and its own
-	// breaker observation. Concurrent identical requests would coalesce.
+	// Sequential, so each request is its own breaker observation rather than
+	// several overlapping in one window.
 	for i := 1; i <= 10; i++ {
 		rec := h.do(t, body, nil)
 		if rec.Code != http.StatusInternalServerError {
@@ -193,7 +193,7 @@ func TestCircuitBreakerIgnoresClientErrors(t *testing.T) {
 	mcfg.ErrorStatus = http.StatusBadRequest
 	h := newHarness(t, cfg, mcfg, nil)
 
-	// Distinct bodies so each request is its own singleflight flight, and so
+	// Distinct bodies so each request is its own upstream call, and so
 	// every one is a separate breaker observation.
 	for i := 1; i <= requests; i++ {
 		rec := h.do(t, chatBody("gemini-2.5-flash", fmt.Sprintf("bad request %d", i), false), nil)

@@ -3,7 +3,7 @@
 // format.
 //
 // The external contract is OpenAI-shaped, so these structs double as the DTOs we
-// decode from the client and encode back to it. Core (rate limit, dedup, breaker,
+// decode from the client and encode back to it. Core (rate limit, breaker,
 // retry, metrics) only ever sees these types — a vendor's JSON, URL layout and
 // auth scheme must not leak past an adapter.
 package provider
