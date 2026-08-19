@@ -52,6 +52,31 @@ func TestRequestValidation(t *testing.T) {
 			wantCode: http.StatusBadRequest,
 			wantMsg:  "field 'messages' must not be empty",
 		},
+		// Tool calling is refused, not ignored. This gateway proxies user→model
+		// completions only; ChatRequest does not model these fields, so without
+		// an explicit guard encoding/json would drop them and the caller would
+		// get a prose answer with no hint its tools were discarded.
+		{
+			name:   "tools is rejected",
+			method: http.MethodPost,
+			body: `{"provider":"mock","model":"gemini-2.5-flash",` +
+				`"messages":[{"role":"user","content":"hi"}],` +
+				`"tools":[{"type":"function","function":{"name":"f"}}]}`,
+			wantCode: http.StatusBadRequest,
+			wantMsg:  "tool calling is not supported by this gateway; remove 'tools' and 'tool_choice'",
+		},
+		{
+			// Caught separately from the raw-body probe: role:"tool" survives
+			// decoding, and the Vertex adapter's default branch would otherwise
+			// reinterpret a tool result as an ordinary user turn.
+			name:   "role tool is rejected",
+			method: http.MethodPost,
+			body: `{"provider":"mock","model":"gemini-2.5-flash","messages":[` +
+				`{"role":"user","content":"hi"},` +
+				`{"role":"tool","tool_call_id":"call_1","content":"42"}]}`,
+			wantCode: http.StatusBadRequest,
+			wantMsg:  "messages with role 'tool' are not supported by this gateway",
+		},
 	}
 
 	for _, tc := range cases {
@@ -77,6 +102,29 @@ func TestRequestValidation(t *testing.T) {
 				t.Errorf("upstream hits = %d, want 0 — validation runs before dispatch", h.up.Hits())
 			}
 		})
+	}
+}
+
+// The tool guard must not become a general unknown-field rejecter.
+//
+// It is a targeted probe rather than DisallowUnknownFields precisely so the
+// OpenAI fields the schema deliberately does not model keep passing through. If
+// someone ever "tightens" it, this is what goes red — and the failure mode it
+// prevents is a contract break far wider than the tools rejection itself.
+func TestUnmodelledOpenAIFieldsStillPass(t *testing.T) {
+	h := newHarness(t, realDefaults(), mockupstream.DefaultConfig(), nil)
+
+	body := `{"provider":"mock","model":"gemini-2.5-flash",` +
+		`"messages":[{"role":"user","content":"hi"}],` +
+		`"n":1,"seed":7,"presence_penalty":0.5,"response_format":{"type":"text"},"user":"u-1"}`
+
+	rec := h.do(t, body, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 — unmodelled OpenAI fields must be dropped, not rejected\nbody: %s",
+			rec.Code, rec.Body.String())
+	}
+	if h.up.Hits() != 1 {
+		t.Errorf("upstream hits = %d, want 1", h.up.Hits())
 	}
 }
 

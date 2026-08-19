@@ -32,6 +32,38 @@ func requestSeed(body []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// unsupportedToolField reports the client-facing message for a request that asks
+// for tool calling, or "" when the request is servable.
+//
+// The raw body is inspected because ChatRequest does not model these fields; the
+// decoded messages are inspected for role:"tool", which would otherwise reach the
+// Vertex adapter's default branch and be reinterpreted as an ordinary user turn —
+// the same silent misreading, one layer down.
+//
+// json.RawMessage treats an explicit `"tools": null` as present, and that is
+// deliberate: a caller who sends the key at all is asking for tool calling and is
+// better told no than quietly served prose.
+func unsupportedToolField(body []byte, messages []provider.Message) string {
+	var probe struct {
+		Tools      json.RawMessage `json:"tools"`
+		ToolChoice json.RawMessage `json:"tool_choice"`
+	}
+	// A decode error is ignored: the body already unmarshalled once in the
+	// caller, so anything failing here leaves both fields empty and the request
+	// is treated as tool-free.
+	_ = json.Unmarshal(body, &probe)
+	if len(probe.Tools) > 0 || len(probe.ToolChoice) > 0 {
+		return "tool calling is not supported by this gateway; " +
+			"remove 'tools' and 'tool_choice'"
+	}
+	for _, m := range messages {
+		if m.Role == "tool" {
+			return "messages with role 'tool' are not supported by this gateway"
+		}
+	}
+	return ""
+}
+
 // maxUpstreamBody caps how much of a provider's response we will buffer.
 //
 // The buffered path reads the whole body into memory so a failed attempt can be
@@ -171,6 +203,21 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if len(req.Messages) == 0 {
 		p.writeError(w, providerUnknown, model, start, http.StatusBadRequest,
 			"field 'messages' must not be empty", "invalid_request_error")
+		return
+	}
+	// Tool calling is out of scope: this gateway proxies user→model completions
+	// only. Refused rather than ignored, because provider.ChatRequest does not
+	// model these fields and encoding/json drops what it cannot model — so a
+	// silent pass would answer a function-calling caller with prose and no
+	// indication its tools were discarded. That is the worst failure mode here:
+	// the request succeeds, the model just never calls the function.
+	//
+	// A targeted probe rather than DisallowUnknownFields, which would also reject
+	// every other OpenAI field the schema deliberately does not model (n, seed,
+	// presence_penalty, response_format, user) — a far wider contract change.
+	if msg := unsupportedToolField(body, req.Messages); msg != "" {
+		p.writeError(w, providerUnknown, model, start, http.StatusBadRequest,
+			msg, "invalid_request_error")
 		return
 	}
 

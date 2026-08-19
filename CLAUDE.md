@@ -17,7 +17,7 @@ DocuMedAI is a full-stack AI-powered medical document analysis system. Users upl
 | Agent workflow | LangGraph StateGraph | `backend/services/chatbot/` |
 | Multi-agent | CrewAI | `nodes.py` — Agents node |
 | RAG pipeline | Qdrant retrieval + BAAI reranker | `backend/services/chatbot/tools/rag.py` |
-| LLMGuard | Go gateway (admission control, rate limit, retry, circuit breaker); OpenAI-compatible API → provider adapter (`openai` generic / `vertex` native) → upstream. Standalone; not in the app's request path | `backend/llmguard/` |
+| LLMGuard | Go gateway (admission control, rate limit, retry, circuit breaker); OpenAI-compatible API → provider adapter (`openai` generic / `vertex` native) → upstream. Chat completions only — `tools`/`tool_choice` are refused with a 400. Standalone; not in the app's request path | `backend/llmguard/` |
 | Memory cache | Redis (TTL 1800s → flush to MongoDB) | `backend/services/utils/redis_client.py` |
 | Persistence | MongoDB | `backend/services/utils/mongo_client.py` |
 | Auth | JWT + Supabase SSR | `backend/services/app/auth_api.py`, `frontend/lib/supabase/` |
@@ -51,6 +51,8 @@ the shared `services.app.auth_deps.decode_bearer_any` (local HS256 + Supabase) a
 tools still work); invalid token → HTTP 401 before any tool runs.
 
 **LLMGuard**: A standalone Go gateway (port 8081) that exposes an OpenAI-compatible `/v1/chat/completions` and translates it to a vendor's native API via a provider adapter. It is **not currently in the request path** — `backend/services/` calls Vertex directly with `ChatVertexAI(project=…, location=…)` (`backend/utils/llm_config.py`), and `crewai.LLM` reaches Vertex through litellm's `vertex_ai/` prefix. Embeddings and the reranker run locally. Both LLMGuard and the app read the same `GOOGLE_CLOUD_PROJECT` / `GOOGLE_CLOUD_LOCATION` vars and authenticate via ADC. See `backend/llmguard/README.md`.
+
+**Scope: user→model completions only.** LLMGuard does not proxy the model→tool half. `tools`, `tool_choice` and `role:"tool"` messages are **refused with a 400**, not ignored — the fields are absent from `provider.ChatRequest`, and since every adapter re-marshals that struct rather than forwarding raw bytes (`openai.go`'s `json.Marshal(&outbound)`, `vertex.go`'s `toNative`), `encoding/json` would silently drop them and hand a function-calling caller a prose answer with no indication why. The check is a **targeted probe** in `proxy.go` (`unsupportedToolField`), deliberately not `DisallowUnknownFields()`, which would also reject every other OpenAI field the schema does not model (`n`, `seed`, `presence_penalty`, `response_format`, `user`) — pinned by `TestUnmodelledOpenAIFieldsStillPass`. `role:"tool"` is checked separately from the raw-body probe because it survives decoding and would otherwise reach the Vertex adapter's `default:` branch and be reinterpreted as an ordinary user turn.
 
 **LLMGuard providers, two tiers — read this before adding a vendor.** `provider/`
 holds only what every adapter shares (the `Provider` interface, the registry, the
@@ -265,7 +267,8 @@ tests pinning the determinism the Phase 6 benchmark depends on. Two rules matter
 Under `provider/`, tests follow the package split: `provider_test.go` covers the registry
 (using a local `stubProvider` — the real adapters live in child packages that import the
 parent, so using one there would be a circular import) and `schema_test.go` pins the
-normalized wire shape. `provider/vertex/` owns the **golden fixtures** in `testdata/`,
+normalized wire shape. `provider/vertex/` owns the **golden fixtures** in `testdata/` (driven by
+`vertex_golden_test.go`),
 compared byte-for-byte with deliberately **no `-update` flag** — a regenerable golden turns
 "the bytes changed" into one command that re-blesses whatever the code now does. Edit a
 fixture by hand and justify it in review. `.gitattributes` pins

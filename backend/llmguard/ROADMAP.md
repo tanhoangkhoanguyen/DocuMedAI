@@ -472,14 +472,15 @@ client contract and genuinely different provider wire formats. This is the core 
 - **Goal:** prove real translation against a genuinely different schema (the credibility centerpiece).
 - **What to do:**
   - Translate OpenAI `messages` → Gemini `contents` + `systemInstruction`; map roles
-    (`assistant`→`model`); map tool/function calls → `functionDeclarations` / `functionCall`.
+    (`assistant`→`model`). (Tool/function-call translation was built here and later
+    removed — the gateway proxies user→model completions only and refuses `tools` with a 400.)
   - Translate Gemini response + SSE chunks back to OpenAI shape.
   - Usage from `usageMetadata`; error mapping from Gemini error envelope.
   - Build against the **public documented `generateContent` schema**; validate with the mock upstream.
 - **AC:**
   - **Golden-file tests** both directions: OpenAI req → `generateContent` JSON, and native
     response/SSE → OpenAI JSON (fixtures checked into `provider/testdata/`).
-  - Tool-call translation covered by at least one golden test.
+  - ~~Tool-call translation covered by at least one golden test.~~ (Removed with tool calling.)
   - Streaming: a sequence of native chunks translates to a valid OpenAI SSE sequence ending in `[DONE]`.
 
 ### Issue 2.4 — Model→provider routing + YAML `model_list`

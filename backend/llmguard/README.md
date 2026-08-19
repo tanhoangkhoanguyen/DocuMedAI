@@ -23,6 +23,12 @@ core — see [Adding a provider](#adding-a-provider).
 Only chat completions pass through. Embeddings and the reranker run locally in the
 backend and never reach LLMGuard.
 
+**Tool calling is out of scope.** The gateway proxies user→model completions only,
+so a request carrying `tools`, `tool_choice` or a `role:"tool"` message is refused
+with a 400. Refused rather than ignored on purpose: the fields are not modelled,
+and `encoding/json` drops what it cannot model — so passing such a request through
+would answer a function-calling caller with prose and no indication why.
+
 ## The model allowlist
 
 A request names **both** an upstream and a model:
