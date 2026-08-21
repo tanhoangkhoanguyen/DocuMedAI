@@ -287,8 +287,16 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer release()
 
 	// --- Rate limit (token bucket, per key+model) ---
+	//
+	// Spanned because Acquire can block for up to RateWaitMax, and that time is
+	// otherwise unattributable: it lands in the root span with no child to explain
+	// it. The span closes on BOTH paths — a granted token and a 429 — since one
+	// left open is never exported.
 	rlKey := apiKeyHint(r) + ":" + model
-	if !p.limiter.Acquire(r.Context(), rlKey, p.cfg.RateWaitMax) {
+	_, waitSpan := startRateLimitWait(r.Context(), provName, model)
+	granted := p.limiter.Acquire(r.Context(), rlKey, p.cfg.RateWaitMax)
+	endRateLimitWait(waitSpan, granted)
+	if !granted {
 		p.metrics.rateLimited.WithLabelValues(provName, model).Inc()
 		markRefused(r.Context(), refusedByQuota, provName, model)
 		p.writeError(w, provName, model, start, http.StatusTooManyRequests,
