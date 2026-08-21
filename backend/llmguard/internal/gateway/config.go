@@ -34,9 +34,16 @@ type Config struct {
 	RedisURL string
 
 	// --- Rate limiting (token bucket, per API key + model) ---
-	RateLimitRPM   int           // sustained requests/min that refill the bucket
-	RateLimitBurst int           // max tokens the bucket can hold (allows short bursts)
-	RateWaitMax    time.Duration // how long a request blocks for a token before we 429
+	RateLimitRPM   int // sustained requests/min that refill the bucket
+	RateLimitBurst int // max tokens the bucket can hold (allows short bursts)
+
+	// RateWaitMax is how long a request blocks for a token before we 429. Read it
+	// as QUEUE DEPTH, not latency saved: lowering it converts a slow success into
+	// a refusal, and a refused caller retries — spending more tokens. At
+	// RateLimitRPM/60 per second, 2s absorbs ~16 requests beyond burst at 480 RPM.
+	// Bounded at all because the wait is paid BEFORE the upstream call, on top of
+	// retry backoff, so it caps tail latency.
+	RateWaitMax time.Duration
 
 	// --- Retry / backoff ---
 	RetryMax     int           // max attempts (1 = no retry)
@@ -181,7 +188,7 @@ func loadConfig() Config {
 
 		RateLimitRPM:   getenvInt("RATE_LIMIT_RPM", 480), // 8 req/s sustained
 		RateLimitBurst: getenvInt("RATE_LIMIT_BURST", 60),
-		RateWaitMax:    getenvDur("RATE_WAIT_MAX", 5*time.Second),
+		RateWaitMax:    getenvDur("RATE_WAIT_MAX", 2*time.Second),
 
 		RetryMax:     getenvInt("RETRY_MAX", 4),
 		RetryBaseDly: getenvDur("RETRY_BASE_DELAY", 300*time.Millisecond),

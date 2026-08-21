@@ -102,7 +102,7 @@ spend — LLMGuard is a reliability gateway and does nothing with those numbers.
 | `GOOGLE_CLOUD_LOCATION` | `us-central1` | Vertex region — appears in both host and path |
 | `PROXY_PORT` | `8081` | |
 | `REDIS_URL` | `redis://la-redis:6379/1` | DB 1 — separate from the app cache (DB 0) |
-| `RATE_LIMIT_RPM` / `RATE_LIMIT_BURST` / `RATE_WAIT_MAX` | `480` / `60` / `5s` | Token bucket |
+| `RATE_LIMIT_RPM` / `RATE_LIMIT_BURST` / `RATE_WAIT_MAX` | `480` / `60` / `2s` | Token bucket. `RATE_WAIT_MAX` is queue depth, not latency saved — lowering it turns a slow success into a 429 |
 | `RETRY_MAX` / `RETRY_BASE_DELAY` / `RETRY_MAX_DELAY` | `4` / `300ms` / `8s` | Backoff |
 | `CIRCUIT_MIN_REQUESTS` / `CIRCUIT_FAIL_RATIO` / `CIRCUIT_OPEN_FOR` | `10` / `0.6` / `20s` | Breaker. `CIRCUIT_OPEN_FOR` is also the TTL of the cross-replica open flag |
 | `MAX_IN_FLIGHT` | `256` | Concurrency ceiling — see below. `0` disables it |

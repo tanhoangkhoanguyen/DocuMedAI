@@ -144,7 +144,7 @@ func realDefaults() Config {
 	return Config{
 		RateLimitRPM:     480,
 		RateLimitBurst:   60,
-		RateWaitMax:      5 * time.Second,
+		RateWaitMax:      2 * time.Second,
 		RetryMax:         4,
 		RetryBaseDly:     300 * time.Millisecond,
 		RetryMaxDly:      8 * time.Second,
