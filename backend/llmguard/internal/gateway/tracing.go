@@ -125,15 +125,6 @@ const (
 	// aggregate, but a counter cannot tell you which ONE request in a trace was
 	// refused and why. That is what this attribute is for.
 	attrRefusedBy = attribute.Key("llmguard.refused_by")
-
-	// attrCoalesced records that a request's flight had more than one caller.
-	//
-	// Deliberately NOT named "dedup.hit". singleflight reports shared=true to the
-	// flight LEADER as well as its followers, so "hit" would claim the leader
-	// reused someone else's response when in fact it made the upstream call.
-	// "coalesced" is true of every caller in the flight, which is what the flag
-	// actually means.
-	attrCoalesced = attribute.Key("llmguard.dedup.coalesced")
 )
 
 // Refusal reasons for attrRefusedBy. One per way a request can be turned away.
@@ -242,6 +233,49 @@ func endAttempt(span trace.Span, res *upstreamResult, err error) {
 	case res != nil:
 		span.SetAttributes(attrStatus.Int(res.status))
 	}
+}
+
+// spanRateLimitWait names the child span covering the token-bucket wait.
+//
+// It exists because the wait is invisible otherwise: Acquire blocks for up to
+// RateWaitMax, and llmguard_rate_limited_total counts only REFUSALS — a request
+// that waited 1.9s and then succeeded is recorded as a plain success. Without
+// this span a trace shows seconds of root-span duration with no child to account
+// for it, which is exactly the "why was THIS request slow" question tracing is
+// here to answer.
+const spanRateLimitWait = "ratelimit.wait"
+
+// attrGranted records how the wait ended: true if a token was taken, false if
+// RateWaitMax elapsed first.
+//
+// Needed because duration alone is ambiguous — a wait that ran the full budget
+// looks identical whether it ended in a token on the last poll or in a 429.
+var attrGranted = attribute.Key("llmguard.ratelimit.granted")
+
+// startRateLimitWait opens the wait span. The returned context is deliberately
+// discarded by the caller: nothing runs INSIDE the wait, so there is no child to
+// parent. It is returned only to match startAttempt/startStream.
+func startRateLimitWait(
+	ctx context.Context, provName, model string,
+) (context.Context, trace.Span) {
+	return tracer().Start(ctx, spanRateLimitWait, trace.WithAttributes(
+		attrProvider.String(provName),
+		attrModel.String(model),
+	))
+}
+
+// endRateLimitWait closes the wait span.
+//
+// A refusal is NOT codes.Error: the gateway did exactly its job, and painting
+// normal quota enforcement red would make an operator hunt for a fault that is
+// not there. Which guard refused the request is already on the root span via
+// markRefused; this span answers only "how long did it cost".
+func endRateLimitWait(span trace.Span, granted bool) {
+	defer span.End()
+	if !span.IsRecording() {
+		return
+	}
+	span.SetAttributes(attrGranted.Bool(granted))
 }
 
 // spanStream names the child span covering one SSE stream.

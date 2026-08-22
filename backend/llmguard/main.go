@@ -72,8 +72,8 @@ func main() {
 			"sample_ratio", cfg.TraceSampleRatio)
 	}
 
-	// Redis backs the rate-limit token bucket (and the cross-replica dedup
-	// extension point). Parse the URL form: redis://host:port/db.
+	// Redis backs the rate-limit token bucket and the cross-replica breaker
+	// signal. Parse the URL form: redis://host:port/db.
 	opt, err := redis.ParseURL(cfg.RedisURL)
 	if err != nil {
 		log.Error("invalid REDIS_URL", "err", err.Error())
@@ -83,13 +83,12 @@ func main() {
 
 	metrics := gateway.NewMetrics()
 	limiter := gateway.NewRateLimiter(rdb, cfg.RateLimitRPM, cfg.RateLimitBurst)
-	deduper := gateway.NewDeduper()
 	// Shares the trip signal across replicas, so an upstream outage costs one
 	// replica's worth of failed requests to detect rather than N. The flag's
 	// lifetime is CircuitOpenFor — the same window the local breaker stays open —
 	// so the two cannot disagree about how long "recently down" lasts.
 	breakerSharer := gateway.NewBreakerSharer(rdb, cfg.CircuitOpenFor)
-	proxy := gateway.NewProxy(cfg, limiter, deduper, breakerSharer, metrics, log)
+	proxy := gateway.NewProxy(cfg, limiter, breakerSharer, metrics, log)
 
 	mux := http.NewServeMux()
 	// All OpenAI-compatible traffic. Clients point their base_url at

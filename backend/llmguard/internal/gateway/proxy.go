@@ -3,6 +3,8 @@ package gateway
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,10 +16,53 @@ import (
 	"sync/atomic"
 	"time"
 
-	"go.opentelemetry.io/otel/trace"
 
 	"documedai/llmguard/provider"
 )
+
+// requestSeed hashes the request body into the retry loop's jitter seed.
+//
+// The seed only has to be stable per request and different between requests:
+// backoffDelay derives its jitter from it, so two callers retrying at the same
+// moment spread out instead of re-colliding. Hashing the body rather than
+// counting requests keeps the delay reproducible for a given request, which is
+// what makes the retry tests assert on a corridor instead of a range.
+func requestSeed(body []byte) string {
+	sum := sha256.Sum256(body)
+	return hex.EncodeToString(sum[:])
+}
+
+// unsupportedToolField reports the client-facing message for a request that asks
+// for tool calling, or "" when the request is servable.
+//
+// The raw body is inspected because ChatRequest does not model these fields; the
+// decoded messages are inspected for role:"tool", which would otherwise reach the
+// Vertex adapter's default branch and be reinterpreted as an ordinary user turn —
+// the same silent misreading, one layer down.
+//
+// json.RawMessage treats an explicit `"tools": null` as present, and that is
+// deliberate: a caller who sends the key at all is asking for tool calling and is
+// better told no than quietly served prose.
+func unsupportedToolField(body []byte, messages []provider.Message) string {
+	var probe struct {
+		Tools      json.RawMessage `json:"tools"`
+		ToolChoice json.RawMessage `json:"tool_choice"`
+	}
+	// A decode error is ignored: the body already unmarshalled once in the
+	// caller, so anything failing here leaves both fields empty and the request
+	// is treated as tool-free.
+	_ = json.Unmarshal(body, &probe)
+	if len(probe.Tools) > 0 || len(probe.ToolChoice) > 0 {
+		return "tool calling is not supported by this gateway; " +
+			"remove 'tools' and 'tool_choice'"
+	}
+	for _, m := range messages {
+		if m.Role == "tool" {
+			return "messages with role 'tool' are not supported by this gateway"
+		}
+	}
+	return ""
+}
 
 // maxUpstreamBody caps how much of a provider's response we will buffer.
 //
@@ -52,8 +97,8 @@ func readUpstreamBody(r io.Reader) ([]byte, error) {
 }
 
 // Proxy is the HTTP handler for /v1/chat/completions. It owns the
-// provider-agnostic concerns — rate limit → dedup → circuit breaker → retry —
-// and delegates every vendor-specific detail (URL, auth, wire format) to a
+// provider-agnostic concerns — rate limit → circuit breaker → retry — and
+// delegates every vendor-specific detail (URL, auth, wire format) to a
 // provider.Provider.
 type Proxy struct {
 	cfg    Config
@@ -63,7 +108,6 @@ type Proxy struct {
 	streamClient *http.Client
 	admitter     *admitter
 	limiter      *RateLimiter
-	deduper      *Deduper
 	breakers     *breakerGroup
 	metrics      *Metrics
 	log          *slog.Logger
@@ -73,7 +117,7 @@ type Proxy struct {
 // built here, and may be nil: a single-replica deployment and the whole test
 // suite run without one, and a nil sharer is a no-op rather than a special case.
 func newProxy(
-	cfg Config, limiter *RateLimiter, deduper *Deduper,
+	cfg Config, limiter *RateLimiter,
 	sharer *BreakerSharer, m *Metrics, log *slog.Logger,
 ) *Proxy {
 	// One shared transport so TCP/TLS connections upstream are reused across
@@ -108,7 +152,6 @@ func newProxy(
 
 		admitter: newAdmitter(cfg.MaxInFlight, m),
 		limiter:  limiter,
-		deduper:  deduper,
 		breakers: newBreakerGroup(cfg, m, sharer),
 		metrics:  m,
 		log:      log,
@@ -160,6 +203,21 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if len(req.Messages) == 0 {
 		p.writeError(w, providerUnknown, model, start, http.StatusBadRequest,
 			"field 'messages' must not be empty", "invalid_request_error")
+		return
+	}
+	// Tool calling is out of scope: this gateway proxies user→model completions
+	// only. Refused rather than ignored, because provider.ChatRequest does not
+	// model these fields and encoding/json drops what it cannot model — so a
+	// silent pass would answer a function-calling caller with prose and no
+	// indication its tools were discarded. That is the worst failure mode here:
+	// the request succeeds, the model just never calls the function.
+	//
+	// A targeted probe rather than DisallowUnknownFields, which would also reject
+	// every other OpenAI field the schema deliberately does not model (n, seed,
+	// presence_penalty, response_format, user) — a far wider contract change.
+	if msg := unsupportedToolField(body, req.Messages); msg != "" {
+		p.writeError(w, providerUnknown, model, start, http.StatusBadRequest,
+			msg, "invalid_request_error")
 		return
 	}
 
@@ -229,8 +287,16 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer release()
 
 	// --- Rate limit (token bucket, per key+model) ---
+	//
+	// Spanned because Acquire can block for up to RateWaitMax, and that time is
+	// otherwise unattributable: it lands in the root span with no child to explain
+	// it. The span closes on BOTH paths — a granted token and a 429 — since one
+	// left open is never exported.
 	rlKey := apiKeyHint(r) + ":" + model
-	if !p.limiter.Acquire(r.Context(), rlKey, p.cfg.RateWaitMax) {
+	_, waitSpan := startRateLimitWait(r.Context(), provName, model)
+	granted := p.limiter.Acquire(r.Context(), rlKey, p.cfg.RateWaitMax)
+	endRateLimitWait(waitSpan, granted)
+	if !granted {
 		p.metrics.rateLimited.WithLabelValues(provName, model).Inc()
 		markRefused(r.Context(), refusedByQuota, provName, model)
 		p.writeError(w, provName, model, start, http.StatusTooManyRequests,
@@ -262,8 +328,8 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Streaming requests cannot be buffered/deduped/replayed as a unit — they
-	// get breaker protection but no retry/dedup.
+	// Streaming requests cannot be buffered and replayed as a unit — they get
+	// breaker protection but no retry.
 	if req.Stream {
 		p.serveStreaming(w, r, prov, &req, start)
 		return
@@ -271,37 +337,31 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p.serveBuffered(w, r, prov, &req, body, start)
 }
 
-// serveBuffered handles the normal (non-streaming) path: dedup → breaker → retry.
+// serveBuffered handles the normal (non-streaming) path: breaker → retry.
 func (p *Proxy) serveBuffered(
 	w http.ResponseWriter, r *http.Request,
 	prov provider.Provider, req *provider.ChatRequest, rawBody []byte, start time.Time,
 ) {
 	model := req.Model
 	provName := prov.Name()
-	key := dedupKey(rawBody)
+	seed := requestSeed(rawBody)
 
-	res, shared, err := p.deduper.Do(key, func() (*upstreamResult, error) {
-		// The breaker wraps the WHOLE retry loop: a tripped breaker should stop
-		// us before we even start retrying. It is this provider's breaker, so a
-		// failing upstream does not shed traffic bound for a healthy one.
-		v, berr := p.breakers.get(provName).Execute(func() (interface{}, error) {
-			return doWithRetry(r.Context(), p.cfg, key,
-				func() { p.metrics.retries.WithLabelValues(provName, model).Inc() },
-				func(ctx context.Context, attempt int) (*upstreamResult, error) {
-					// One child span per attempt. The retry loop knows the attempt
-					// number; what to do with it is decided here, which keeps
-					// retry.go free of an instrumentation dependency.
-					ctx, span := startAttempt(ctx, provName, model, attempt)
-					res, ferr := p.forwardBuffered(ctx, prov, req)
-					endAttempt(span, res, ferr)
-					return res, ferr
-				},
-			)
-		})
-		if berr != nil {
-			return nil, berr
-		}
-		return v.(*upstreamResult), nil
+	// The breaker wraps the WHOLE retry loop: a tripped breaker should stop us
+	// before we even start retrying. It is this provider's breaker, so a failing
+	// upstream does not shed traffic bound for a healthy one.
+	v, err := p.breakers.get(provName).Execute(func() (interface{}, error) {
+		return doWithRetry(r.Context(), p.cfg, seed,
+			func() { p.metrics.retries.WithLabelValues(provName, model).Inc() },
+			func(ctx context.Context, attempt int) (*upstreamResult, error) {
+				// One child span per attempt. The retry loop knows the attempt
+				// number; what to do with it is decided here, which keeps
+				// retry.go free of an instrumentation dependency.
+				ctx, span := startAttempt(ctx, provName, model, attempt)
+				res, ferr := p.forwardBuffered(ctx, prov, req)
+				endAttempt(span, res, ferr)
+				return res, ferr
+			},
+		)
 	})
 
 	if err != nil {
@@ -332,31 +392,17 @@ func (p *Proxy) serveBuffered(
 		return
 	}
 
-	// Counted only once the flight has produced a real response. Every error
-	// branch above returns, so reaching here means the shared result was
-	// actually usable.
-	//
-	// A coalesced FAILURE is not a dedup hit. The counter answers "did a
-	// thundering herd collapse into one upstream call" — a reliability signal —
-	// and a flight that ended in a breaker-open 503 or a transport error
-	// delivered nothing to share. Counting it would report the herd as absorbed
-	// when in fact every caller failed.
-	if shared {
-		p.metrics.dedupHits.Inc()
-	}
-	// Recorded on every request, not only when true: "this flight was solo" is as
-	// useful as the opposite when reading a trace, and an absent attribute reads as
-	// "not instrumented" rather than as false.
-	if span := trace.SpanFromContext(r.Context()); span.IsRecording() {
-		span.SetAttributes(attrCoalesced.Bool(shared))
-	}
+	// Safe unchecked: the only producer of this value is the callback above, and
+	// the breaker-open path returns a nil interface caught by the err guard.
+	res := v.(*upstreamResult)
 
 	p.recordUsage(provName, model, res.usage)
 	p.writeJSON(w, provName, model, start, res.status, res.body, "buffered")
 }
 
 // forwardBuffered performs ONE upstream attempt: build → send → translate. The
-// translated response is buffered so it can be retried and deduped.
+// translated response is buffered so a failed attempt can be discarded and
+// replayed by the retry loop.
 func (p *Proxy) forwardBuffered(
 	ctx context.Context, prov provider.Provider, req *provider.ChatRequest,
 ) (*upstreamResult, error) {
@@ -381,8 +427,8 @@ func (p *Proxy) forwardBuffered(
 		var ue *provider.UpstreamError
 		if errors.As(err, &ue) {
 			// TranslateResponse only sees (status, body), so the header has to
-			// be attached here. The error is what survives the breaker and
-			// deduper on the failure path; the result below is not.
+			// be attached here. The error is what survives the breaker on the
+			// failure path; the result below is not.
 			ue.RetryAfter = resp.Header.Get("Retry-After")
 			return &upstreamResult{status: ue.Status, header: resp.Header.Clone()}, err
 		}

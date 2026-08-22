@@ -102,8 +102,8 @@ func TestResilienceFieldsCoversConfig(t *testing.T) {
 	// MaxInFlight is skipped rather than mirrored for a reason worth stating: it is
 	// a real production default (256), not an unconfigured knob. Mirroring it would
 	// impose a concurrency ceiling on the whole characterization suite, where the
-	// dedup and breaker tests deliberately run many requests at once to observe
-	// coalescing and tripping. A shed request there would look like a retry that
+	// breaker tests deliberately run many requests at once to observe
+	// tripping. A shed request there would look like a retry that
 	// never happened. Leaving it 0 keeps those tests measuring what they were
 	// written to measure; admission_test.go sets the ceiling per test.
 	//

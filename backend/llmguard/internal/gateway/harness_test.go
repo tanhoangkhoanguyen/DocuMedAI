@@ -26,7 +26,7 @@ package gateway
 // a retry waits, never how many run or when the breaker trips.
 //
 // The tests themselves sit beside the source file they exercise —
-// retry_test.go, dedup_test.go, ratelimit_test.go, circuitbreaker_test.go — with
+// retry_test.go, ratelimit_test.go, circuitbreaker_test.go — with
 // proxy.go's larger surface split by path: proxy_buffered_test.go,
 // proxy_streaming_test.go, proxy_errors_test.go, plus usage_test.go for token
 // accounting. A new behavior area gets a new <source>_test.go next to its code.
@@ -55,7 +55,7 @@ import (
 
 // mockUpstream is a mockupstream instance on a loopback server, plus a counter
 // of how many requests actually reached it. The count is the load-bearing
-// assertion for retry, dedup and breaker: it distinguishes "the proxy returned
+// assertion for retry and the breaker: it distinguishes "the proxy returned
 // an error" from "the proxy stopped calling upstream".
 type mockUpstream struct {
 	server *httptest.Server
@@ -144,7 +144,7 @@ func realDefaults() Config {
 	return Config{
 		RateLimitRPM:     480,
 		RateLimitBurst:   60,
-		RateWaitMax:      5 * time.Second,
+		RateWaitMax:      2 * time.Second,
 		RetryMax:         4,
 		RetryBaseDly:     300 * time.Millisecond,
 		RetryMaxDly:      8 * time.Second,
@@ -229,7 +229,7 @@ func newHarnessWithHandler(
 	// assert on ONE process's breaker. A nil sharer is a no-op, so the local
 	// breaker behaves exactly as it did before it existed. breakershare_test.go
 	// covers the shared path against a real Redis.
-	p := newProxy(cfg, limiter, newDeduper(), nil, m,
+	p := newProxy(cfg, limiter, nil, m,
 		slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	return &harness{proxy: p, metrics: m, up: up}

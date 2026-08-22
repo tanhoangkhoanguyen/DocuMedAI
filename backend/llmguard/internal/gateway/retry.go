@@ -246,7 +246,7 @@ func doWithRetry(
 				// Upstream told us exactly how long to wait — respect it, but
 				// never unconditionally. A buggy or hostile provider sending
 				// "Retry-After: 86400" would otherwise park this request for a
-				// day, holding a connection and a singleflight slot. Cap it at
+				// day, holding a connection and an admission slot. Cap it at
 				// the same ceiling backoffDelay already honors.
 				if ra > cfg.RetryMaxDly {
 					ra = cfg.RetryMaxDly

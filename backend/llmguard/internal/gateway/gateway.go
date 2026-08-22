@@ -1,8 +1,8 @@
 package gateway
 
 // Package gateway holds LLMGuard's request pipeline: configuration, the
-// rate limiter, the deduper, the circuit breaker + retry loop, the proxy
-// handler and its Prometheus metrics.
+// rate limiter, the circuit breaker + retry loop, the proxy handler and its
+// Prometheus metrics.
 //
 // It lives under internal/ so nothing outside this module can depend on it,
 // which keeps the pipeline free to change shape without breaking an external
@@ -60,9 +60,6 @@ func NewRateLimiter(rdb *redis.Client, rpm, burst int) *RateLimiter {
 	return newRateLimiter(rdb, rpm, burst)
 }
 
-// NewDeduper builds the in-process singleflight deduper.
-func NewDeduper() *Deduper { return newDeduper() }
-
 // NewBreakerSharer builds the cross-replica circuit-breaker signal. It shares the
 // Redis client with the rate limiter; a nil client yields a nil sharer, which is a
 // working no-op for a single-replica deployment.
@@ -76,10 +73,10 @@ func NewBreakerSharer(rdb *redis.Client, openFor time.Duration) *BreakerSharer {
 //
 // sharer may be nil, disabling cross-replica breaker propagation.
 func NewProxy(
-	cfg Config, limiter *RateLimiter, deduper *Deduper,
+	cfg Config, limiter *RateLimiter,
 	sharer *BreakerSharer, m *Metrics, log *slog.Logger,
 ) *Proxy {
-	return newProxy(cfg, limiter, deduper, sharer, m, log)
+	return newProxy(cfg, limiter, sharer, m, log)
 }
 
 // Getenv reads an environment variable with a fallback. Exported so `main`'s

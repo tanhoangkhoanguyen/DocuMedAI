@@ -217,16 +217,6 @@ func attrString(s sdktrace.ReadOnlySpan, key attribute.Key) (string, bool) {
 	return "", false
 }
 
-// attrBool reads a bool attribute off a span, reporting whether it was set.
-func attrBool(s sdktrace.ReadOnlySpan, key attribute.Key) (bool, bool) {
-	for _, kv := range s.Attributes() {
-		if kv.Key == key {
-			return kv.Value.AsBool(), true
-		}
-	}
-	return false, false
-}
-
 // A shed request is attributed to admission control, not to the rate limiter.
 //
 // This is the pair the wire cannot separate: both return 429. One request holds
@@ -335,12 +325,11 @@ func TestRefusedByUpstreamIsRecorded(t *testing.T) {
 	}
 }
 
-// A successful request records dedup.coalesced=false and NO refusal.
+// A successful request records NO refusal.
 //
-// The negative case is what makes the refusal attribute meaningful when present.
-// And a coalesced flag written only when true cannot be told apart from "not
-// instrumented", which is why it is asserted present-and-false here.
-func TestSuccessRecordsNoRefusalAndSoloFlight(t *testing.T) {
+// The negative case is what makes the refusal attribute meaningful when present:
+// an attribute that appeared on every span would say nothing.
+func TestSuccessRecordsNoRefusal(t *testing.T) {
 	sr := recordSpans(t)
 
 	h := newHarness(t, realDefaults(), mockupstream.Config{}, nil)
@@ -352,14 +341,6 @@ func TestSuccessRecordsNoRefusalAndSoloFlight(t *testing.T) {
 	if got, ok := attrString(span, attrRefusedBy); ok {
 		t.Errorf("%s = %q on a successful request; it must appear only on a refusal",
 			attrRefusedBy, got)
-	}
-	coalesced, ok := attrBool(span, attrCoalesced)
-	if !ok {
-		t.Fatalf("%s is not set; it is recorded on every request so that absent means "+
-			"'not instrumented' rather than 'false'", attrCoalesced)
-	}
-	if coalesced {
-		t.Errorf("%s = true for a single request with no concurrent twin", attrCoalesced)
 	}
 }
 
@@ -743,5 +724,80 @@ func TestStreamFailingBeforeHeaderHasNoFirstFrame(t *testing.T) {
 	if reason, ok := attrString(stream, attrAbortReason); ok {
 		t.Errorf("%s = %q for a pre-header upstream refusal; that is not a deadline "+
 			"abort", attrAbortReason, reason)
+	}
+}
+
+// attrBool reads a bool attribute off a span, reporting whether it was set.
+func attrBool(s sdktrace.ReadOnlySpan, key attribute.Key) (bool, bool) {
+	for _, kv := range s.Attributes() {
+		if kv.Key == key {
+			return kv.Value.AsBool(), true
+		}
+	}
+	return false, false
+}
+
+// A request that WAITS for a token has that wait attributed to a span.
+//
+// This is the gap the span closes. Before it, a request could block for up to
+// RateWaitMax and the trace showed only root-span duration with no child to
+// account for it — measured at 1.01s of request against 0.5ms of
+// upstream.attempt. llmguard_rate_limited_total does not help: it counts
+// refusals, and this request succeeds.
+//
+// Needs a real Redis, for the same reason TestRefusedByQuotaIsRecorded does:
+// with Redis unreachable the limiter fails OPEN and never waits at all.
+func TestRateLimitWaitIsSpanned(t *testing.T) {
+	rdb := testutil.RequireRedis(t)
+
+	cfg := realDefaults()
+	// One token, refilling at 1/s: the second request must wait ~1s for a refill
+	// rather than be refused, which is the case with no other observer.
+	cfg.RateLimitRPM = 60
+	cfg.RateLimitBurst = 1
+	cfg.RateWaitMax = 3 * time.Second
+
+	mcfg := mockupstream.DefaultConfig()
+	mcfg.CompletionTokens = 3
+	h := newHarness(t, cfg, mcfg, newRateLimiter(rdb, cfg.RateLimitRPM, cfg.RateLimitBurst))
+
+	headers := map[string]string{"Authorization": "Bearer sk-test-" + t.Name()}
+	body := chatBody("gemini-2.5-flash", "wait for a token", false)
+
+	// Spend the only token. Recording starts AFTER it: that request goes through
+	// the same handler and would leave a second ratelimit.wait span, which belongs
+	// to the setup rather than to what this test measures.
+	if first := h.do(t, body, headers); first.Code != http.StatusOK {
+		t.Fatalf("first request = %d, want 200\nbody: %s", first.Code, first.Body.String())
+	}
+	sr := recordSpans(t)
+
+	rec, _ := tracedRequest(t, h, sr, body, headers)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 — this request must WAIT and then succeed, "+
+			"not be refused\nbody: %s", rec.Code, rec.Body.String())
+	}
+
+	waits := spansNamed(sr, spanRateLimitWait)
+	if len(waits) != 1 {
+		t.Fatalf("%q spans = %d, want 1", spanRateLimitWait, len(waits))
+	}
+	wait := waits[0]
+
+	// The point of the span: the blocked time is ON it, not lost in the root. A
+	// lower bound only — the exact figure is scheduler-dependent — but it has to
+	// be big enough that a span opened and closed around nothing cannot pass.
+	if d := wait.EndTime().Sub(wait.StartTime()); d < 300*time.Millisecond {
+		t.Errorf("%q lasted %v, want >=300ms: the request waited for a refill, so "+
+			"that time must be attributable to this span", spanRateLimitWait, d)
+	}
+	// Granted, not refused — and recorded either way, so an absent attribute
+	// reads as "not instrumented" rather than as false.
+	granted, ok := attrBool(wait, attrGranted)
+	if !ok {
+		t.Fatalf("%s is not set; it is recorded on both outcomes", attrGranted)
+	}
+	if !granted {
+		t.Errorf("%s = false on a request that got its token", attrGranted)
 	}
 }

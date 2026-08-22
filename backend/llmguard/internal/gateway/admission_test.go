@@ -37,7 +37,7 @@ func TestAdmissionShedsPastCeiling(t *testing.T) {
 	mcfg.Latency = time.Second
 	h := newHarness(t, admissionConfig(1), mcfg, nil)
 
-	// Distinct prompts: identical bodies would coalesce in the deduper and the
+	// Distinct prompts, so each request is its own upstream call and the
 	// second caller would never reach the admitter at all.
 	occupied := make(chan struct{})
 	var wg sync.WaitGroup
@@ -144,8 +144,8 @@ func TestAdmissionDisabledAdmitsEverything(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			// Distinct prompts so the deduper does not coalesce them into one
-			// flight, which would test nothing about concurrency.
+			// Distinct prompts so each goroutine is its own upstream call,
+			// keeping this a test of concurrency rather than of caching.
 			codes[i] = h.do(t, chatBody("gemini-2.5-flash", string(rune('a'+i)), false), nil).Code
 		}(i)
 	}

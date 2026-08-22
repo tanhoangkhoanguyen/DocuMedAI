@@ -2,7 +2,7 @@
 // OpenAI-compatible or Gemini-native LLM provider.
 //
 // It exists so the proxy's resilience behavior — retry/backoff, the circuit
-// breaker, singleflight dedup, Retry-After handling — can be driven against a
+// breaker, Retry-After handling — can be driven against a
 // real upstream over a real socket, in its own process, without spending money
 // or depending on a provider's availability.
 //

@@ -7,9 +7,9 @@ import (
 
 // TestGoldenAssistantMessageShape pins the one Message every client sees.
 //
-// Message carries the tool fields, and each one must be omitempty or this body
-// grows keys existing clients do not expect. This is the narrowest guard on
-// that: an assistant turn with empty content stays exactly two keys.
+// Message is exactly two keys, and any field added to it must be omitempty or
+// this body grows keys existing clients do not expect. This is the narrowest
+// guard on that: an assistant turn with empty content stays exactly two keys.
 //
 // It lives with the schema rather than with the Vertex fixtures it used to sit
 // beside: what it pins is the normalized wire form every adapter shares, so a

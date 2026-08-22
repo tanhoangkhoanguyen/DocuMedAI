@@ -183,6 +183,13 @@ If you can't build and run it, you can't verify anything. Do this first.
 - **Done when:** you can explain lazy refill, why the script is atomic, and what fail-open protects against.
 
 ### Issue C.3 — `dedup.go`: in-flight deduplication with singleflight
+> **REMOVED.** `dedup.go` and its test no longer exist. The deduper only coalesced
+> byte-identical *concurrent* bodies, which real chat traffic almost never produces —
+> the conversation history plus the new user turn differ on every request — so it cost
+> a direct `golang.org/x/sync` dependency, a Prometheus counter and 173 test lines for
+> close to nothing. The body hash survives as `requestSeed` in `proxy.go`, which the
+> retry loop still needs for its jitter seed. This issue is kept as a record of what
+> the code did; read it as history, not as a description of the tree.
 - **Goal:** understand how identical concurrent requests share ONE upstream call (an important cost/quota feature).
 - **What to check:**
   - `Deduper` wraps `singleflight.Group` (`dedup.go:12-16`) — the whole feature is ~20 lines because
@@ -358,7 +365,7 @@ is why they are written down rather than assumed.
 | File:Line | What I observed | Expected? | Note / follow-up |
 |-----------|-----------------|-----------|------------------|
 | `mockupstream/chaos.go:76-78` | `Jitter` changes the **failure verdict**, even though it is correctly excluded from `fingerprint()`. `decide()` draws jitter *conditionally* on `Jitter > 0`, consuming one number from the per-request stream and shifting the failure roll that follows. Measured: **21 of 40 nonces flip** at an unchanged `error_rate=0.5`. | No — the comment at `chaos.go:74-75` claims the fixed draw order prevents exactly this. It only holds for knobs that *always* draw; the error-rate roll already does this correctly (`chaos.go:84`). | **Open with a documented constraint, not an unowned bug.** Determinism still holds *within* a config; what breaks is comparability *across* configs differing only in jitter. **The rule — hold `Jitter` fixed across arms of a comparison** — is now stated in [`mockupstream/README.md`](mockupstream/README.md) → *Jitter shifts the failure verdict* and as a precondition on **Issue 6.3**, its consumer. Not fixed here because drawing jitter unconditionally changes every existing seeded value and invalidates any captured baseline — a Phase 6 decision about baselines. Pinned by `TestJitterShiftsFailureVerdictQuirk`. |
-| `proxy.go` `serveBuffered` | `dedupHits` counts **every** flight participant, because `singleflight` reports `shared=true` to the leader that did the work too. 8 concurrent identical requests → 8 hits, though only 7 upstream calls were avoided. | Off by one per flight *as a cost meter*. | **Accepted, not merely tolerated.** LLMGuard's concern is reliability, not spend, and the counter is a **coalescing signal** — "did a thundering herd collapse into one upstream call" — which the current count answers. An exact callers-saved figure buys precision nobody reads. If **Phase 6.3 scenario C** charts this as "cost saved", either subtract one per flight at chart time or rename the metric. Pinned in `dedup_test.go`. |
+| `proxy.go` `serveBuffered` | **Moot — dedup removed** (see Issue C.3). `dedupHits` counted **every** flight participant, because `singleflight` reports `shared=true` to the leader that did the work too. 8 concurrent identical requests → 8 hits, though only 7 upstream calls were avoided. | Off by one per flight *as a cost meter*. | **Accepted, not merely tolerated.** LLMGuard's concern is reliability, not spend, and the counter is a **coalescing signal** — "did a thundering herd collapse into one upstream call" — which the current count answers. An exact callers-saved figure buys precision nobody reads. If **Phase 6.3 scenario C** charts this as "cost saved", either subtract one per flight at chart time or rename the metric. Pinned in `dedup_test.go`. |
 | `provider/vertex.go` | Buffered completions ship with `id: ""` and `created: 0`; the Vertex adapter never populates them. | No — OpenAI clients that key off response id see an empty string. | Cosmetic but contract-visible. **Phase 2 Issues 2.1-2.3** rebuild this layer with golden-file tests; fix there. Pinned in `proxy_buffered_test.go`. |
 
 ---
@@ -465,14 +472,15 @@ client contract and genuinely different provider wire formats. This is the core 
 - **Goal:** prove real translation against a genuinely different schema (the credibility centerpiece).
 - **What to do:**
   - Translate OpenAI `messages` → Gemini `contents` + `systemInstruction`; map roles
-    (`assistant`→`model`); map tool/function calls → `functionDeclarations` / `functionCall`.
+    (`assistant`→`model`). (Tool/function-call translation was built here and later
+    removed — the gateway proxies user→model completions only and refuses `tools` with a 400.)
   - Translate Gemini response + SSE chunks back to OpenAI shape.
   - Usage from `usageMetadata`; error mapping from Gemini error envelope.
   - Build against the **public documented `generateContent` schema**; validate with the mock upstream.
 - **AC:**
   - **Golden-file tests** both directions: OpenAI req → `generateContent` JSON, and native
     response/SSE → OpenAI JSON (fixtures checked into `provider/testdata/`).
-  - Tool-call translation covered by at least one golden test.
+  - ~~Tool-call translation covered by at least one golden test.~~ (Removed with tool calling.)
   - Streaming: a sequence of native chunks translates to a valid OpenAI SSE sequence ending in `[DONE]`.
 
 ### Issue 2.4 — Model→provider routing + YAML `model_list`
@@ -572,11 +580,15 @@ Prometheus counters say *what*; traces say *why p99 was slow*.
 per-process (`retry.go`) — both **wrong at N replicas**. Making the gateway stateless and correct at N
 is the production-readiness milestone. Issues 5.1 and 5.1b.
 
-*Within one replica:* retry, breaker and dedup all protect the upstream **from** LLMGuard; nothing
+*Within one replica:* retry and the breaker protect the upstream **from** LLMGuard; nothing
 protects LLMGuard from its callers. Concurrency, not arrival rate, is what maps to memory, and
 nothing bounds it — so the gateway is currently a candidate for being the outage. Issue 5.3.
 
 ### Issue 5.1 — Redis-backed cross-replica dedup
+> **WON'T DO.** In-process dedup was removed instead (see Issue C.3): it coalesced
+> byte-identical concurrent bodies, which chat traffic almost never produces. Extending
+> a mechanism that rarely fires across replicas would add a Redis round trip to every
+> request's hot path to win the same nothing.
 - **Goal:** identical concurrent requests coalesce even when they hit different replicas.
 - **What to do:**
   - Replace/augment `singleflight` with a Redis-based in-flight marker (SETNX lock on request hash +

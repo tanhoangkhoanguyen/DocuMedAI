@@ -69,7 +69,7 @@ func TestStreamingHappyPath(t *testing.T) {
 		t.Error("the finishing chunk must carry usage")
 	}
 
-	// Streaming takes the no-retry, no-dedup path: exactly one upstream call.
+	// Streaming takes the no-retry path: exactly one upstream call.
 	if h.up.Hits() != 1 {
 		t.Errorf("upstream hits = %d, want 1", h.up.Hits())
 	}

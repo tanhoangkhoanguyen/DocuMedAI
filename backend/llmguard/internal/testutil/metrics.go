@@ -1,7 +1,7 @@
 package testutil
 
 // Prometheus readers, so tests can assert on the gateway's instrumentation —
-// dedup hits, retries burned, breaker state — instead of only on HTTP output.
+// retries burned, requests shed, breaker state — instead of only on HTTP output.
 
 import (
 	"testing"
@@ -13,7 +13,7 @@ import (
 
 // CounterValue reads the current value of a single (non-vector) counter or
 // gauge, so tests can assert on the proxy's Prometheus instrumentation —
-// dedup hits, retries burned, breaker state — instead of only on HTTP output.
+// retries burned, requests shed, breaker state — instead of only on HTTP output.
 func CounterValue(t *testing.T, c prometheus.Collector) float64 {
 	t.Helper()
 	return testutil.ToFloat64(c)

@@ -3,8 +3,8 @@ package gateway
 // Admission control: a hard ceiling on how many requests may be in flight at
 // once, and a clean refusal for everything past it.
 //
-// This is the one protection LLMGuard did not have. Retry, the circuit breaker
-// and dedup all protect the UPSTREAM from us; nothing protected the gateway from
+// This is the one protection LLMGuard did not have. Retry and the circuit
+// breaker both protect the UPSTREAM from us; nothing protected the gateway from
 // its own callers. The rate limiter looks like it should, but it bounds the
 // arrival RATE (requests per minute) — not the number running concurrently, and
 // those diverge exactly when it matters. At the default 480 RPM with LLM calls
