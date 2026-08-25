@@ -184,27 +184,21 @@ func newBreaker(
 // jitter, honoring an upstream Retry-After header when present. It returns the
 // last result; the caller decides what to send downstream.
 //
-// `attempt` is reported back via onRetry so metrics can count burned attempts.
+// The 0-based attempt number reaches `call`, so a caller that attributes work per
+// attempt needs no second callback.
 func doWithRetry(
 	ctx context.Context,
 	cfg Config,
 	seed string, // used to derive deterministic-but-spread jitter (no global rand)
-	onRetry func(),
 	// call receives the 0-based attempt number so the caller can attribute one
-	// observation per attempt. The counter lives in this loop, and passing it out
-	// keeps the decision about WHAT to observe with the caller — the same division
-	// onRetry already draws for the retry metric — rather than importing an
-	// instrumentation dependency into what is otherwise pure control flow.
+	// observation per attempt, which keeps the decision about WHAT to observe out
+	// of what is otherwise pure control flow.
 	call func(ctx context.Context, attempt int) (*upstreamResult, error),
 ) (*upstreamResult, error) {
 	var last *upstreamResult
 	var lastErr error
 
 	for attempt := 0; attempt < cfg.RetryMax; attempt++ {
-		if attempt > 0 {
-			onRetry()
-		}
-
 		res, err := call(ctx, attempt)
 		if err == nil {
 			return res, nil // success

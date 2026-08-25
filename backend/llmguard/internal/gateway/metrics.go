@@ -21,7 +21,7 @@ const providerUnknown = "unknown"
 // later, optional step — here we only EXPOSE the metrics.
 //
 // Every request-scoped vector leads with `provider`, so a dashboard can split
-// traffic, latency, retries and spend per upstream. With two adapters serving
+// traffic and refusals per upstream. With two adapters serving
 // overlapping models — Gemini via Vertex and via an openai-compat endpoint —
 // a model-only label cannot answer "which upstream is degrading".
 //
@@ -32,10 +32,6 @@ type Metrics struct {
 	// requests counts every inbound proxy request, labelled by provider + model
 	// + final HTTP status returned to the caller.
 	requests *prometheus.CounterVec
-	// latency is the end-to-end time the caller waited, per provider + model.
-	latency *prometheus.HistogramVec
-	// retries counts how many upstream retry attempts we burned, per provider + model.
-	retries *prometheus.CounterVec
 	// rateLimited counts requests rejected by the token bucket (429), per
 	// provider + model. Shedding happens AFTER the provider is resolved, so this
 	// one always carries a real provider name.
@@ -44,8 +40,20 @@ type Metrics struct {
 	// 2=open. Labelled because the breakers are per provider — a single series
 	// would let one upstream's outage overwrite every other upstream's reading.
 	circuitState *prometheus.GaugeVec
-	// tokensUsed sums prompt+completion tokens parsed from upstream `usage`.
-	tokensUsed *prometheus.CounterVec // labels: provider, model, kind(prompt|completion)
+	// streamAborts counts streams cut by a streaming deadline, by provider +
+	// model + reason.
+	//
+	// Needed because an aborted stream is otherwise INVISIBLE here. The header
+	// goes out with the first frame, so requests_total already recorded a 2xx, and
+	// the failure reaches the client as an in-band SSE frame that no server-side
+	// counter observes. Without this, an upstream stalling on every request looks
+	// exactly like ordinary successful traffic.
+	//
+	// The reason label is what makes it actionable, because the causes live on
+	// opposite sides of the gateway: upstream_idle is a provider going quiet
+	// mid-stream, write_idle is clients that stopped reading. One counter for both
+	// would report that streams are being cut without saying who to go fix.
+	streamAborts *prometheus.CounterVec
 	// inFlight is how many requests currently hold an admission slot.
 	//
 	// Unlabelled, unlike every other vector here: the semaphore it mirrors is one
@@ -66,20 +74,6 @@ type Metrics struct {
 	// caller is affected regardless of quota, and it is an operator problem. One
 	// counter for both would hide a capacity incident inside normal throttling.
 	shed *prometheus.CounterVec
-	// streamAborts counts streams cut by a streaming deadline, by provider +
-	// model + reason.
-	//
-	// Needed because an aborted stream is otherwise INVISIBLE here. The header
-	// goes out with the first frame, so requests_total already recorded a 2xx, and
-	// the failure reaches the client as an in-band SSE frame that no server-side
-	// counter observes. Without this, an upstream stalling on every request looks
-	// exactly like ordinary successful traffic.
-	//
-	// The reason label is what makes it actionable, because the causes live on
-	// opposite sides of the gateway: upstream_idle is a provider going quiet
-	// mid-stream, write_idle is clients that stopped reading. One counter for both
-	// would report that streams are being cut without saying who to go fix.
-	streamAborts *prometheus.CounterVec
 }
 
 // newMetrics registers the collectors on the DEFAULT registry, which is what
@@ -98,15 +92,6 @@ func newMetricsWith(reg prometheus.Registerer) *Metrics {
 			Name: "llmguard_requests_total",
 			Help: "Total proxied requests by provider, model and HTTP status.",
 		}, []string{"provider", "model", "status"}),
-		latency: auto.NewHistogramVec(prometheus.HistogramOpts{
-			Name:    "llmguard_request_duration_seconds",
-			Help:    "End-to-end request latency by provider and model.",
-			Buckets: []float64{0.1, 0.25, 0.5, 1, 2, 5, 10, 20, 40, 80},
-		}, []string{"provider", "model"}),
-		retries: auto.NewCounterVec(prometheus.CounterOpts{
-			Name: "llmguard_retries_total",
-			Help: "Upstream retry attempts by provider and model.",
-		}, []string{"provider", "model"}),
 		rateLimited: auto.NewCounterVec(prometheus.CounterOpts{
 			Name: "llmguard_rate_limited_total",
 			Help: "Requests rejected by the token bucket by provider and model.",
@@ -115,10 +100,6 @@ func newMetricsWith(reg prometheus.Registerer) *Metrics {
 			Name: "llmguard_circuit_state",
 			Help: "Circuit breaker state by provider: 0=closed, 1=half-open, 2=open.",
 		}, []string{"provider"}),
-		tokensUsed: auto.NewCounterVec(prometheus.CounterOpts{
-			Name: "llmguard_tokens_total",
-			Help: "Tokens reported by upstream usage, by provider, model and kind.",
-		}, []string{"provider", "model", "kind"}),
 		inFlight: auto.NewGauge(prometheus.GaugeOpts{
 			Name: "llmguard_in_flight",
 			Help: "Requests currently holding an admission slot (compare against MAX_IN_FLIGHT).",
@@ -143,15 +124,15 @@ func newMetricsWith(reg prometheus.Registerer) *Metrics {
 // and reports itself only as an in-band SSE frame, so it lands in no counter at
 // all.
 const (
-	// The upstream went quiet between frames — a provider problem.
+	// The upstream went quiet between frames â€” a provider problem.
 	abortUpstreamIdle = "upstream_idle"
-	// The client stopped reading and writes backed up — a client problem.
+	// The client stopped reading and writes backed up â€” a client problem.
 	abortWriteIdle = "write_idle"
 	// StreamAbsoluteMax elapsed.
 	//
 	// This one is a LLMGuard problem, not either endpoint's. The backstop only
 	// fires once the two inactivity bounds above have failed to, so any value here
-	// means a stream ran 30 minutes while looking active the whole way — either
+	// means a stream ran 30 minutes while looking active the whole way â€” either
 	// the write deadline degraded to a no-op behind a ResponseWriter wrapper, or
 	// an upstream is dribbling frames just fast enough to keep resetting the
 	// watchdog. Both are bugs in the protection itself.

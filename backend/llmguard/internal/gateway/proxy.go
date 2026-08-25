@@ -351,7 +351,6 @@ func (p *Proxy) serveBuffered(
 	// upstream does not shed traffic bound for a healthy one.
 	v, err := p.breakers.get(provName).Execute(func() (interface{}, error) {
 		return doWithRetry(r.Context(), p.cfg, seed,
-			func() { p.metrics.retries.WithLabelValues(provName, model).Inc() },
 			func(ctx context.Context, attempt int) (*upstreamResult, error) {
 				// One child span per attempt. The retry loop knows the attempt
 				// number; what to do with it is decided here, which keeps
@@ -396,7 +395,6 @@ func (p *Proxy) serveBuffered(
 	// the breaker-open path returns a nil interface caught by the err guard.
 	res := v.(*upstreamResult)
 
-	p.recordUsage(provName, model, res.usage)
 	p.writeJSON(w, provName, model, start, res.status, res.body, "buffered")
 }
 
@@ -475,7 +473,7 @@ func (p *Proxy) serveStreaming(
 	//
 	// Ended by DEFER reading state filled in as the stream progresses, rather than
 	// by a call at the tail. The pre-header error branch returns early — twice —
-	// to avoid double-recording latency, and a tail call would be skipped on
+	// to avoid recording the request twice, and a tail call would be skipped on
 	// exactly those paths, leaking a span that is never exported. The deferred
 	// closure reads the variables rather than capturing values, so it observes
 	// whatever the stream ended up doing.
@@ -497,7 +495,6 @@ func (p *Proxy) serveStreaming(
 	// the metric could not tell them apart.
 	var abortReason atomic.Pointer[string]
 
-	var usage provider.Usage
 	// sawFirstFrame keeps the first_frame event to exactly one — a stream emits
 	// thousands of writes and an event per frame is the per-frame span problem in
 	// another shape.
@@ -607,9 +604,6 @@ func (p *Proxy) serveStreaming(
 				continue // a malformed frame shouldn't kill the whole stream
 			}
 			for _, ch := range chunks {
-				if ch.Usage != nil {
-					usage = *ch.Usage
-				}
 				enc, merr := json.Marshal(ch)
 				if merr != nil {
 					continue
@@ -682,8 +676,8 @@ func (p *Proxy) serveStreaming(
 			// from a successful empty completion.
 			//
 			// The return matters: writeError routes through writeJSON, which
-			// already records requests and latency. Falling through to the tail
-			// would observe latency twice for one request.
+			// already counts the request. Falling through would also emit the
+			// in-band error frame and [DONE] on a stream that never opened.
 			var ue *provider.UpstreamError
 			if errors.As(err, &ue) {
 				// Same reasoning as the buffered path: a 429 without a pacing
@@ -717,9 +711,6 @@ func (p *Proxy) serveStreaming(
 		flusher.Flush()
 	}
 
-	// The streaming path now accounts tokens too — the old byte-pipe could not.
-	p.recordUsage(provName, model, usage)
-	p.metrics.latency.WithLabelValues(provName, model).Observe(time.Since(start).Seconds())
 }
 
 // streamAbortReason names which deadline ended a stream, or "" when the failure
@@ -757,16 +748,6 @@ func streamAbortReason(explicit *string, err error, wroteHeader bool) string {
 	return ""
 }
 
-// recordUsage adds normalized token counts to metrics.
-func (p *Proxy) recordUsage(provName, model string, u provider.Usage) {
-	if u.PromptTokens > 0 {
-		p.metrics.tokensUsed.WithLabelValues(provName, model, "prompt").Add(float64(u.PromptTokens))
-	}
-	if u.CompletionTokens > 0 {
-		p.metrics.tokensUsed.WithLabelValues(provName, model, "completion").Add(float64(u.CompletionTokens))
-	}
-}
-
 // writeJSON writes a JSON body and records metrics/log.
 func (p *Proxy) writeJSON(
 	w http.ResponseWriter, provName, model string, start time.Time,
@@ -777,7 +758,6 @@ func (p *Proxy) writeJSON(
 	_, _ = w.Write(body)
 
 	p.metrics.requests.WithLabelValues(provName, model, statusLabel(status)).Inc()
-	p.metrics.latency.WithLabelValues(provName, model).Observe(time.Since(start).Seconds())
 	p.log.Info("request",
 		"provider", provName,
 		"model", model,

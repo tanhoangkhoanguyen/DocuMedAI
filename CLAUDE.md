@@ -223,7 +223,7 @@ stalled-reader bound — invisible to every other streaming test, since they use
 connection. `TestWriteDeadlineSurvivesOtelHandler` pins it. The span tree is deliberately shallow:
 one `upstream.attempt` **per retry attempt** (four red siblings is a retry storm; one slow span is a
 slow provider) and one `stream` per SSE stream carrying `frames` plus a `first_frame` event —
-**time to first token**, which exists nowhere else here because `request_duration_seconds` is
+**time to first token**, which exists nowhere else here because a stream's total duration is
 dominated by how *long* the answer is. There is **no span per frame** (streams reach tens of
 thousands of frames at ~780 bytes each — the exhaustion vector `maxUpstreamBody` exists to prevent)
 and none for provider translation (a few-µs unmarshal observed by a ~1.7µs span). Two attributes
@@ -233,6 +233,8 @@ and local-vs-remote breaker both return **503**, and `llmguard.stream.abort_reas
 subtlety worth keeping: `endStream` runs from a **defer**, because the pre-header error branch returns
 early twice to avoid double-recording latency — a tail call is skipped on exactly those paths and
 leaks a span that is never exported.
+
+**Prometheus keeps state and refusals; ClickHouse took latency.** The split is not about which store is nicer, it is about what each can hold. A gauge has no row to insert — `circuit_state` is the *absence* of requests and `in_flight` is a live count — so those cannot move, and `in_flight` is the only signal that predicts shedding *before* `shed_total` moves. `requests_total` stays as the denominator of every ratio and as the control on dropped spans. `shed_total` and `rate_limited_total` stay because both return **429** and nothing else separates a gateway out of capacity from a caller over quota; `stream_aborts_total` stays for the same reason — an aborted stream already counted as a 2xx when the header left, so the counter is the only server-side witness, and unlike a span it cannot be dropped. What left is what the trace store answers better: `request_duration_seconds` (`quantileExact` over exact durations, no bucket to interpolate), `retries_total` (`GROUP BY TraceId` gives the distribution, not just a total) and `tokens_total` (deliberately not replaced — LLMGuard is a reliability gateway and had no consumer for it).
 
 **Spans land in ClickHouse, not a trace UI.** An OTel Collector (`llmguard/observability/otel-collector.yaml`) receives OTLP and writes `otel.otel_traces`, so the Go code names no backend and swapping stores is a config change. The reason is the benchmark: `quantileExact` over exact nanosecond durations replaces a quantile interpolated between pre-declared histogram bounds, where a p95 read off a 3-second bucket hides any change smaller than the bucket. What this costs is that export is asynchronous and bounded at three points — the SDK batch queue, the collector sending queue, ClickHouse itself — and an overflow at any of them drops spans **silently**. `requests_total` is the control, being incremented in-process: it must equal `count(DISTINCT TraceId)`, and a shortfall means the numbers are incomplete.
 
