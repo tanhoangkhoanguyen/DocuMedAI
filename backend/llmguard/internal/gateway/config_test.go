@@ -119,6 +119,16 @@ func TestResilienceFieldsCoversConfig(t *testing.T) {
 		"IdleTimeout": true, "MaxInFlight": true,
 		"TraceEndpoint": true, "TraceSampleRatio": true,
 		"TraceServiceName": true, "TraceShutdownGrace": true,
+		// The ClickHouse/Usage knobs are skipped on the Trace* reasoning, one step
+		// further: they configure a SINK, not the request pipeline. No
+		// characterization test can observe them, because the harness builds a Proxy
+		// with no usage writer at all — usagelog_test.go constructs one directly with
+		// a fake sink and its own explicit config, which is the only way to assert on
+		// buffer and flush behavior anyway.
+		"ClickHouseAddr": true, "ClickHouseDatabase": true,
+		"ClickHouseUser": true, "ClickHousePassword": true,
+		"UsageBufferSize": true, "UsageBatchSize": true,
+		"UsageFlushInterval": true, "UsageShutdownGrace": true,
 	}
 
 	covered := make(map[string]bool, len(resilienceFields))

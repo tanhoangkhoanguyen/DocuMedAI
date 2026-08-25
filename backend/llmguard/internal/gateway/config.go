@@ -168,6 +168,57 @@ type Config struct {
 	// inside main.go's 15s shutdown budget so a collector that has itself gone away
 	// can never be the reason a drain times out.
 	TraceShutdownGrace time.Duration
+
+	// --- Usage log (ClickHouse) ---
+	//
+	// The durable, per-request record behind cost analytics. Prometheus is
+	// pre-aggregated and forgets individuals; traces are sampled and expire. Neither
+	// can answer "what did this key spend last Tuesday", which is what this is for.
+	//
+	// ClickHouseAddr is the native-protocol address (port 9000, not the 8123 HTTP
+	// one). EMPTY DISABLES the writer entirely: nothing is constructed, no goroutine
+	// runs and no connection is opened.
+	//
+	// Unlike TraceEndpoint, this has a real default, because la-clickhouse is a
+	// default compose service rather than a profile — the usage log is on out of the
+	// box. Empty remains the escape hatch for running the gateway outside that stack.
+	ClickHouseAddr     string
+	ClickHouseDatabase string
+	ClickHouseUser     string
+	ClickHousePassword string
+
+	// UsageBufferSize is the capacity of the hand-off channel, and therefore the
+	// HARD CEILING on rows held in memory.
+	//
+	// This is the knob that makes the writer safe to put behind a request path: a
+	// ClickHouse that stalls or dies costs at most this many rows of memory, after
+	// which rows are dropped and counted rather than queued. Sized so a few seconds
+	// of peak traffic fits — at 480 RPM one flush interval is ~40 rows, so 10k is
+	// three orders of magnitude of headroom before anything is lost.
+	UsageBufferSize int
+
+	// UsageBatchSize is the row count that triggers a flush.
+	//
+	// ClickHouse wants few large inserts rather than many small ones — each insert
+	// creates a part, and parts must then be merged. 1000 is comfortably inside the
+	// range where one insert is one block.
+	UsageBatchSize int
+
+	// UsageFlushInterval bounds how long a row may sit unwritten.
+	//
+	// It bounds a DIFFERENT quantity from UsageBatchSize and neither subsumes the
+	// other: batch size caps how large one insert gets, this caps staleness at low
+	// traffic, where the size trigger would otherwise never fire and rows would sit
+	// in memory indefinitely.
+	UsageFlushInterval time.Duration
+
+	// UsageShutdownGrace bounds the final drain at shutdown.
+	//
+	// The last rows before a process goes down are the most interesting ones, not
+	// the least — a deploy or a crash is exactly when someone asks what the final
+	// requests did. Bounded for the same reason TraceShutdownGrace is: a sink that
+	// has gone away must not be able to spend a shutdown window on its own.
+	UsageShutdownGrace time.Duration
 }
 
 // loadConfig reads the environment and applies sensible production defaults.
@@ -208,6 +259,19 @@ func loadConfig() Config {
 		TraceSampleRatio:   getenvFloat("OTEL_TRACES_SAMPLER_ARG", 1.0),
 		TraceServiceName:   getenv("OTEL_SERVICE_NAME", "llmguard"),
 		TraceShutdownGrace: getenvDur("OTEL_SHUTDOWN_GRACE", 5*time.Second),
+
+		// `default` rather than a dedicated database: the ClickHouse image runs its
+		// init scripts against `default` whatever CLICKHOUSE_DB says, so the table
+		// is namespaced by its own llmguard_ prefix instead. See schema.sql.
+		ClickHouseAddr:     getenv("CLICKHOUSE_ADDR", "la-clickhouse:9000"),
+		ClickHouseDatabase: getenv("CLICKHOUSE_DB", "default"),
+		ClickHouseUser:     getenv("CLICKHOUSE_USER", "default"),
+		ClickHousePassword: os.Getenv("CLICKHOUSE_PASSWORD"),
+
+		UsageBufferSize:    getenvInt("USAGE_BUFFER_SIZE", 10000),
+		UsageBatchSize:     getenvInt("USAGE_BATCH_SIZE", 1000),
+		UsageFlushInterval: getenvDur("USAGE_FLUSH_INTERVAL", 5*time.Second),
+		UsageShutdownGrace: getenvDur("USAGE_SHUTDOWN_GRACE", 5*time.Second),
 	}
 }
 
