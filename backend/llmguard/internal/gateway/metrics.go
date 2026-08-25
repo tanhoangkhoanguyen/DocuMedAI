@@ -82,6 +82,36 @@ type Metrics struct {
 	// mid-stream, write_idle is clients that stopped reading. One counter for both
 	// would report that streams are being cut without saying who to go fix.
 	streamAborts *prometheus.CounterVec
+
+	// --- Usage log (ClickHouse) ---
+	//
+	// All four are UNLABELLED: there is one process-wide writer with one buffer, so
+	// a per-provider split would produce numbers that no single limit corresponds
+	// to — the same reasoning as inFlight above.
+	//
+	// Four rather than one, because "rows dropped" alone cannot see the worst
+	// failure. A ClickHouse that REJECTS every insert loses every row while
+	// usageDropped stays at zero, since the buffer keeps draining normally into a
+	// sink that throws the batch away. usageFlushErrors is the only signal that
+	// separates "we are overloaded" from "the sink is broken", and they need
+	// opposite responses.
+
+	// usageRows counts rows successfully inserted.
+	usageRows prometheus.Counter
+	// usageDropped counts rows refused by a full buffer — the writer's bounded
+	// memory doing its job. Non-zero means ClickHouse is not keeping up (or is
+	// gone) and the gateway chose to lose billing data rather than latency.
+	usageDropped prometheus.Counter
+	// usageFlushErrors counts batches lost to a failed insert. Each one is
+	// UsageBatchSize rows at most, discarded rather than retried — retrying in
+	// process would grow the memory the buffer exists to bound.
+	usageFlushErrors prometheus.Counter
+	// usageBufferDepth is how many rows are waiting to be flushed.
+	//
+	// The saturation predictor, playing the same role against USAGE_BUFFER_SIZE
+	// that inFlight plays against MAX_IN_FLIGHT: it climbs before anything is
+	// dropped, so it is what warns that drops are coming.
+	usageBufferDepth prometheus.Gauge
 }
 
 // newMetrics registers the collectors on the DEFAULT registry, which is what
@@ -137,6 +167,22 @@ func newMetricsWith(reg prometheus.Registerer) *Metrics {
 			Name: "llmguard_stream_aborts_total",
 			Help: "Streams cut by a streaming deadline, by reason (upstream_idle|write_idle).",
 		}, []string{"provider", "model", "reason"}),
+		usageRows: auto.NewCounter(prometheus.CounterOpts{
+			Name: "llmguard_usage_rows_written_total",
+			Help: "Usage rows successfully inserted into ClickHouse.",
+		}),
+		usageDropped: auto.NewCounter(prometheus.CounterOpts{
+			Name: "llmguard_usage_rows_dropped_total",
+			Help: "Usage rows discarded because the writer's buffer was full.",
+		}),
+		usageFlushErrors: auto.NewCounter(prometheus.CounterOpts{
+			Name: "llmguard_usage_flush_errors_total",
+			Help: "Usage batches lost to a failed ClickHouse insert.",
+		}),
+		usageBufferDepth: auto.NewGauge(prometheus.GaugeOpts{
+			Name: "llmguard_usage_buffer_depth",
+			Help: "Usage rows waiting to be flushed (compare against USAGE_BUFFER_SIZE).",
+		}),
 	}
 }
 
