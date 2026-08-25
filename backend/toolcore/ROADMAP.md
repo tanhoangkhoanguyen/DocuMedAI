@@ -72,7 +72,7 @@ Both adapters call the **same** `ToolCore.call_tool`. That single fact is the en
 ### Issue 1.2 — Build `ToolCore` (transport-agnostic executor)
 - **Problem:** execution logic is welded to `MCPServer` and its LLM-catalog formatting; MCP can't reuse it cleanly.
 - **What to do:**
-  - New `backend/services/chatbot/tool_core/core.py`: `ToolCore.list_tools() -> list[ToolSpec]`, `ToolCore.call_tool(name, args: dict, principal: Principal | None) -> ToolResult`.
+  - New `backend/toolcore/core.py`: `MCPServer.list_tools() -> list[ToolSpec]`, `MCPServer.call_tool(name, args: dict, principal: Principal | None) -> ToolResult`. Contracts live beside it in `contracts.py`.
   - Move the 3 handlers here; they call the **unchanged** `get_medical_supporter` ([`medical_supporter.py:71`](../services/chatbot/tools/medical_supporter.py#L71)) / `get_user_document_supporter` ([`user_document_supporter.py:84`](../services/chatbot/tools/user_document_supporter.py#L84)). Preserve the `user_id`-empty short-circuit ([`user_document_supporter.py:45-47`](../services/chatbot/tools/user_document_supporter.py#L45-L47)) by enforcing it in Core as `requires_principal` so *both* surfaces get isolation for free.
   - `ToolResult` carries structured content (text block(s) today; room for richer MCP content types) + timing metadata for Phase 4.
 - **Criteria:** `call_tool("search_user_documents", {...}, principal=None)` refuses (no leak); with a principal it returns the same string the old path did; byte-identical to pre-refactor for the same inputs.
@@ -95,14 +95,14 @@ Both adapters call the **same** `ToolCore.call_tool`. That single fact is the en
 
 > **Transport note:** a stdio transport was built in Issue 2.1 and later **removed** — DocuMedAI's users are served by the in-process core, and the only external surface worth maintaining for a multi-user system is HTTP. stdio references below are historical.
 
-### Issue 2.1 — FastMCP server wrapping the Tool Core
+### Issue 2.1 — MCP server wrapping the Tool Core
 - **Problem:** there is no protocol server at all today.
 - **What to do:**
-  - New `backend/mcp/server.py`: instantiate a FastMCP server; for each `ToolCore.list_tools()` spec, register an MCP tool whose `inputSchema` is the Phase-1 JSON Schema and whose handler calls `ToolCore.call_tool`.
+  - New `backend/mcp_server/server.py`: build a server from the SDK's **low-level** `Server`; for each `list_tools()` spec, expose an MCP tool whose `inputSchema` is the Phase-1 JSON Schema and whose handler calls `call_tool`. Low-level rather than FastMCP's `@tool` decorators because the schemas are already authored on each `ToolSpec` — FastMCP re-derives them from Python signatures, which would make the contract a side effect of a function signature.
   - Map `ToolResult` → MCP content blocks (`TextContent`); surface `ToolInputError` as a proper JSON-RPC error, not a 200 with an error string.
-  - Entry points: `python -m mcp.server --transport stdio` and `--transport http` (streamable-HTTP).
+  - Entry point: `python -m mcp_server`, an ASGI app in `__main__.py` mounting `StreamableHTTPSessionManager` at `/mcp`.
 - **Criteria:** `initialize` returns server capabilities; `tools/list` returns 3 tools with valid schemas; `tools/call` on `identity` works; verified end-to-end in **MCP Inspector** and a scripted stdio client.
-- **Tech:** official **Python MCP SDK / FastMCP**; `mcp.server` stdio + streamable-HTTP transports. New `backend/mcp/requirements.txt` pinning `mcp`.
+- **Tech:** official **Python MCP SDK** (`mcp`), low-level `Server` + streamable-HTTP. The dependency is pinned in `backend/requirements-prod.txt`, not a package-local file — the service reuses the `la-documedai` image with a different command.
 
 ### Issue 2.2 — JWT enforcement for external MCP clients
 - **Problem:** external clients are untrusted; internal callers are already authenticated. The two must not share a trust assumption.
@@ -207,16 +207,16 @@ Collected in Phase 3 (correctness) + Phase 4 (performance). Fill `<>` from real 
 
 | Action | Path | Note |
 |---|---|---|
-| **New** | `backend/services/chatbot/tool_core/core.py` | Tool Core: `list_tools` / `call_tool` / `ToolSpec` / `Principal` / `ToolResult` |
+| **New** | [`backend/toolcore/core.py`](core.py), [`contracts.py`](contracts.py) | Tool Core: `list_tools` / `call_tool` / `ToolSpec` / `Principal` / `ToolResult` |
 | Modify | [`backend/services/chatbot/constants/schemas.py:52-67`](../services/chatbot/constants/schemas.py#L52-L67) | replace `McpToolDefinition`/`ToolParameter` with typed `ToolSpec` + per-tool arg models |
-| Modify | [`backend/services/chatbot/mcp.py`](../services/chatbot/mcp.py) | becomes thin **internal adapter** over Tool Core; keep `get_mcp_client` signature |
+| Removed | `backend/services/chatbot/mcp.py` | the adapter did not survive as a file — `execute_tool_call` in [`core.py`](core.py) is the string-in/string-out shim the planner still calls, and `get_mcp_client` returns the cached core |
 | Reuse (unchanged) | [`medical_supporter.py:71`](../services/chatbot/tools/medical_supporter.py#L71), [`user_document_supporter.py:84`](../services/chatbot/tools/user_document_supporter.py#L84), [`rag.py`](../services/chatbot/tools/rag.py), [`qdrant_client.py`](../vector_database_tests/utils/qdrant_client.py) | Core wraps these; do not touch execution/isolation |
 | Touch (import only) | [`backend/services/chatbot/nodes.py:233-277`](../services/chatbot/nodes.py#L233-L277) | still calls the adapter; behavior identical |
-| **New** | `backend/mcp/server.py`, `backend/mcp/requirements.txt`, `backend/mcp/README.md` | FastMCP server, transports, runbook |
+| **New** | [`backend/mcp_server/server.py`](../mcp_server/server.py), [`__main__.py`](../mcp_server/__main__.py), [`auth.py`](../mcp_server/auth.py), [`README.md`](../mcp_server/README.md) | MCP `Server` + handlers, ASGI app, bearer auth, runbook |
 | Reuse | [`backend/services/app/auth_deps.py:72-116`](../services/app/auth_deps.py#L72-L116) | `decode_bearer_any` for external MCP JWT — do not fork |
 | **New** | `ci_tests/integration/tool_core/`, `ci_tests/integration/mcp/` | contract + conformance + equivalence tests |
 | Modify | [`pytest.ini`](../../pytest.ini), [`.github/workflows/python-ci.yml`](../../.github/workflows/python-ci.yml) | add `mcp` marker; wire new suites + `la-mcp-server` |
-| **New** | [`docker-compose.yml`](../../docker-compose.yml) (`la-mcp-server`), `backend/mcp/prometheus.yml`, Grafana dashboard JSON | serving + observability, optional profiles |
+| **New** | [`docker-compose.yml`](../../docker-compose.yml) (`la-mcp-server`), [`mcp_server/prometheus.yml`](../mcp_server/prometheus.yml), [`mcp_server/grafana_dashboard.json`](../mcp_server/grafana_dashboard.json) | serving + observability, optional profiles |
 
 ---
 

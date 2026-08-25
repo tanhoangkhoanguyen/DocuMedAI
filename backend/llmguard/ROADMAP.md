@@ -51,14 +51,14 @@ every function, and every design choice — and *prove* to themselves that it do
 - Order matters: the files build on each other. Follow phases top to bottom.
 
 **The whole system in one sentence:** a request comes in at `/v1/*`, passes through
-**rate limit → dedup → circuit breaker → retry**, gets its dummy key swapped for the real upstream
+**admit → rate limit → circuit breaker → retry**, gets its dummy key swapped for the real upstream
 key, is forwarded to an OpenAI-compatible endpoint, and the response (or a stream) is sent back —
 with Prometheus metrics recorded throughout.
 
 **Request pipeline (memorize this order — every file maps to a box):**
 ```
-/v1/*  →  Rate limit  →  [stream? pass-through]     ratelimit.go / proxy.go
-                      →  Dedup                       dedup.go
+/v1/*  →  Admit       →  [shed at capacity]          admission.go
+       →  Rate limit  →  [stream? pass-through]      ratelimit.go / proxy.go
                       →  Circuit breaker             retry.go (newBreaker)
                       →  Retry + backoff             retry.go (doWithRetry)
                       →  Build upstream req (swap key) proxy.go (buildUpstreamRequest)
@@ -302,23 +302,25 @@ If you can't build and run it, you can't verify anything. Do this first.
 - **Goal:** map each Prometheus metric back to the code that increments it.
 - **What to check:**
   - `Metrics` struct (`metrics.go:11-27`) — read the comment on each field.
-  - `newMetrics` (`metrics.go:29-61`) — `promauto` auto-registers; note metric names + labels + the
-    latency histogram buckets (`:38`, tuned for slow LLM calls: up to 80s).
-  - Cross-reference each metric to its call site: `requests`/`latency` in `finish` (`proxy.go:252-253`)
-    and streaming (`:176,194`); `retries` in `serveBuffered` (`:104`); `rateLimited` (`:79`);
-    `dedupHits` (`:117`); `circuitState` in `newBreaker` (`retry.go:56-63`); `tokensUsed` in
-    `recordUsage` (`:235-238`).
-- **Verify (hands-on):** exercise each path (a normal request, a rate-limited burst, a duplicate pair, a
-  breaker trip) and confirm the matching metric moves in `/metrics`. This is the best single test that
-  you understand the whole system — each metric is a witness to a code path.
+  - `newMetricsWith` — `promauto` auto-registers on a caller-supplied registry, which is how the
+    tests avoid colliding on the global one. Note the names and the labels each carries.
+  - Cross-reference each metric to its call site: `requests` in `writeJSON` and on the streaming
+    header; `rateLimited` and `shed` on the two refusal paths; `streamAborts` where a stream is
+    cut; `inFlight` in `admission.go`; `circuitState` in `newBreaker` (seeded there, then written
+    only by `OnStateChange`).
+  - Six series is the whole surface, and the absences are deliberate — latency, retries and tokens
+    moved to the trace store or were dropped outright (Phase 4, Issue 4.2).
+- **Verify (hands-on):** exercise each path (a normal request, a rate-limited burst, a breaker trip,
+  a stalled stream) and confirm the matching metric moves in `/metrics`. This is the best single
+  test that you understand the whole system — each metric is a witness to a code path.
 - **Done when:** for any metric name in `/metrics`, you can name the exact function+line that changes it.
 
 ### Issue D.2 — `README.md` vs reality
 - **Goal:** confirm the docs match the code you now understand, and note drift.
 - **What to check:** read `README.md` end to end against what you learned. Check the endpoints table,
   the config table (defaults must match `config.go`), the path-stripping note, and the "deferred
-  features" list (cross-replica dedup, Grafana, billing) — you've now seen the dedup extension point at
-  `dedup.go:38-40`.
+  features" list. Two of those are settled rather than pending: cross-replica dedup is WON'T DO
+  (Issue 5.1) and billing is out of scope (Phase 4) — check the README says so too.
 - **Verify (hands-on):** for each config default in the README, grep `config.go` and confirm it matches.
 - **Done when:** you can list any place the README and code disagree (add to Findings below).
 
@@ -366,7 +368,7 @@ is why they are written down rather than assumed.
 |-----------|-----------------|-----------|------------------|
 | `mockupstream/chaos.go:76-78` | `Jitter` changes the **failure verdict**, even though it is correctly excluded from `fingerprint()`. `decide()` draws jitter *conditionally* on `Jitter > 0`, consuming one number from the per-request stream and shifting the failure roll that follows. Measured: **21 of 40 nonces flip** at an unchanged `error_rate=0.5`. | No — the comment at `chaos.go:74-75` claims the fixed draw order prevents exactly this. It only holds for knobs that *always* draw; the error-rate roll already does this correctly (`chaos.go:84`). | **Open with a documented constraint, not an unowned bug.** Determinism still holds *within* a config; what breaks is comparability *across* configs differing only in jitter. **The rule — hold `Jitter` fixed across arms of a comparison** — is now stated in [`mockupstream/README.md`](mockupstream/README.md) → *Jitter shifts the failure verdict* and as a precondition on **Issue 6.3**, its consumer. Not fixed here because drawing jitter unconditionally changes every existing seeded value and invalidates any captured baseline — a Phase 6 decision about baselines. Pinned by `TestJitterShiftsFailureVerdictQuirk`. |
 | `proxy.go` `serveBuffered` | **Moot — dedup removed** (see Issue C.3). `dedupHits` counted **every** flight participant, because `singleflight` reports `shared=true` to the leader that did the work too. 8 concurrent identical requests → 8 hits, though only 7 upstream calls were avoided. | Off by one per flight *as a cost meter*. | **Accepted, not merely tolerated.** LLMGuard's concern is reliability, not spend, and the counter is a **coalescing signal** — "did a thundering herd collapse into one upstream call" — which the current count answers. An exact callers-saved figure buys precision nobody reads. If **Phase 6.3 scenario C** charts this as "cost saved", either subtract one per flight at chart time or rename the metric. Pinned in `dedup_test.go`. |
-| `provider/vertex.go` | Buffered completions ship with `id: ""` and `created: 0`; the Vertex adapter never populates them. | No — OpenAI clients that key off response id see an empty string. | Cosmetic but contract-visible. **Phase 2 Issues 2.1-2.3** rebuild this layer with golden-file tests; fix there. Pinned in `proxy_buffered_test.go`. |
+| `provider/vertex/vertex.go` | Buffered completions ship with `id: ""` and `created: 0`; the Vertex adapter never populates them. | No — OpenAI clients that key off response id see an empty string. | Cosmetic but contract-visible. **Phase 2 Issues 2.1-2.3** rebuild this layer with golden-file tests; fix there. Pinned in `proxy_buffered_test.go`. |
 
 ---
 
@@ -452,7 +454,7 @@ client contract and genuinely different provider wire formats. This is the core 
         PriceOf(model string) (inPer1K, outPer1K float64)
     }
     ```
-  - Define OpenAI request/response Go structs (the internal canonical shape) in `provider/openai_types.go`.
+  - Define OpenAI request/response Go structs (the internal canonical shape) in `provider/schema.go`.
 - **AC:**
   - Package compiles; interface + canonical types defined and documented with doc comments.
   - No wiring into `proxy.go` yet (pure addition).
@@ -527,48 +529,78 @@ Prometheus counters say *what*; traces say *why p99 was slow*.
 - **What to do:**
   - Add OTel Go SDK + OTLP/HTTP exporter to `go.mod`; init a tracer provider in `main.go`.
   - Config: `OTEL_EXPORTER_OTLP_ENDPOINT`, sampling ratio, service name; **disabled cleanly** if endpoint unset.
-  - Add a Jaeger (or Tempo) service to `docker-compose.yml` for local viewing.
+  - Add an OTLP collector service to `docker-compose.yml` (`la-otel-collector`, on the
+    `observability` profile).
 - **AC:**
-  - With endpoint set, a request produces a trace visible in Jaeger UI.
+  - With endpoint set, a request produces a trace in the store behind the collector.
   - With endpoint unset, service runs normally with zero tracing overhead / no errors.
 
 ### Issue 3.2 — Span the request pipeline
 - **Goal:** one trace per client request with meaningful child spans.
-- **What to do:** create child spans for rate-limit wait → dedup lookup → breaker gate → each retry
-  attempt → provider translate → upstream call → stream duration. Attach attributes (model, provider,
-  status, attempt#, dedup-hit).
+- **What to do:** create child spans for rate-limit wait → each retry attempt → upstream call →
+  stream duration. Attach attributes (model, provider, status, attempt#, refusal reason, abort
+  reason). No span for provider translation — a few-µs unmarshal costs as much to observe as to
+  perform — and none per SSE frame, which is the exhaustion vector `maxUpstreamBody` exists to stop.
 - **AC:**
-  - A single client request shows the full span tree in Jaeger.
+  - A single client request yields the full span tree, queryable by `TraceId`.
   - A request that retries shows multiple upstream-call child spans.
   - A rate-limited request shows time spent in the rate-limit-wait span.
 
 ---
 
-## Phase 4 — ClickHouse usage log & cost analytics
+## Phase 4 — ClickHouse trace store
 
-**Why:** durable, high-write, analytical record of every request → per-key spend & cost dashboards
-(what LiteLLM leans on Postgres for and struggles with at volume). Also the sink for benchmark data.
+**Why:** Prometheus holds pre-aggregated series, so a latency quantile is interpolated between
+pre-declared bucket bounds — at LLM latencies the widest bucket spans seconds, which hides any
+change smaller than the bucket. Phase 6 has to measure differences finer than that, so the durations
+have to be stored exactly. Traces already carry them; what was missing was somewhere durable to put
+them.
 
-### Issue 4.1 — ClickHouse schema + client
-- **Goal:** a table and a writer.
+**Not cost analytics.** The original plan for this phase was a `usage` table with `cost_usd` and
+per-key spend dashboards. That is dropped: LLMGuard is a reliability gateway, and `config.yaml`'s
+`pricing` block stays recorded-but-unread for a later consumer, as its own comment says. Nothing
+here computes money.
+
+### Issue 4.1 — Collector + ClickHouse behind OTLP
+- **Goal:** spans land somewhere durable and queryable, without the gateway naming a backend.
 - **What to do:**
-  - Add ClickHouse to `docker-compose.yml`; add the Go ClickHouse driver to `go.mod`.
-  - Design an append-only `usage` table: ts, request_id, model, provider, prompt_tokens,
-    completion_tokens, cost_usd, latency_ms, upstream_status, retries, dedup_hit, api_key_hint.
-  - Implement a writer with **async batched inserts** (buffer + flush by size/interval).
+  - Add `la-clickhouse` and `la-otel-collector` to `docker-compose.yml` on the `observability`
+    profile; point `OTEL_EXPORTER_OTLP_ENDPOINT` at the collector.
+  - Configure the collector's ClickHouse exporter in `observability/otel-collector.yaml`. Keep the
+    Go code free of any ClickHouse dependency, so swapping stores is a config change.
+  - Give the collector its own ClickHouse user (`observability/clickhouse-user.xml`) — the image
+    restricts `default` to localhost — and create the database up front
+    (`observability/clickhouse-init.sql`), since that user has no `CREATE DATABASE` grant.
 - **AC:**
-  - Table created via a migration/init script on stack up.
-  - A unit/integration test inserts a batch and reads it back.
-  - Writer never blocks the request path (fire-and-forget with bounded buffer; drops + counts on overflow).
+  - A request with tracing on produces rows in `otel.otel_traces`.
+  - `quantileExact` over `Duration` returns p50/p95/p99 per provider from exact nanosecond values.
+  - Tracing off (endpoint unset) leaves the stack working with the store absent.
 
-### Issue 4.2 — Emit a usage row per request + cost calc
-- **Goal:** every completed request produces exactly one accurate row.
+### Issue 4.2 — Move off the metrics the store answers better
+- **Goal:** one place per question, and no metric whose number the store already reports more
+  precisely.
 - **What to do:**
-  - After `finish` (`proxy.go`), compute cost from `provider.PriceOf(model)` × tokens and enqueue a row.
-  - Add a Prometheus counter for cost and for rows dropped on buffer overflow.
+  - Drop `llmguard_request_duration_seconds` (bucketed, and it observed **every** response including
+    refusals, so heavy shedding dragged its p50 *down* while the gateway was failing),
+    `llmguard_retries_total` (`GROUP BY TraceId` gives the distribution, not just a total) and
+    `llmguard_tokens_total` (no consumer — see the scope note above).
+  - Keep what a trace cannot hold or cannot be trusted to: `circuit_state` and `in_flight` are
+    state, with no row to insert, and `in_flight` is the only signal that predicts shedding before
+    `shed_total` moves. Keep `requests_total`, `shed_total`, `rate_limited_total` and
+    `stream_aborts_total` — each is a refusal sharing a status code with something else, and a
+    counter is incremented in-process where a span can be dropped silently.
 - **AC:**
-  - N requests → N rows in ClickHouse (verified in a test) with correct tokens/cost/provider/latency.
-  - A sample analytical query (spend per model, per api-key) returns sensible numbers.
+  - `/metrics` exposes exactly the six kept series; the suite passes with the assertions on removed
+    metrics gone rather than rewritten.
+  - `requests_total` equals `count(DISTINCT TraceId)` in ClickHouse under load — the check that the
+    async export is not dropping spans.
+
+### Issue 4.3 — Benchmark queries in the README
+- **Goal:** the numbers Phase 6 reports are reproducible by someone who did not run the benchmark.
+- **What to do:** document the p50/p95/p99 query, how to reach the store
+  (`clickhouse-client -d otel`), and the dropped-span check. Record that the collector's queue sizes
+  stay at their defaults until a real benchmark says what the load is.
+- **AC:** the README's queries run as written against a live stack.
 
 ---
 
@@ -718,13 +750,21 @@ fixed-QPS, coordinated-omission-aware latency measured from scheduled send time.
   - **A. Overhead:** added p50/p95/p99 = gateway − direct at matched QPS; throughput ceiling vs LiteLLM.
   - **B. Resilience:** 20% injected 503s → client success rate (direct vs gateway); latency-through-an-
     outage-window showing breaker trip → fail-fast → recovery.
-  - **C. Cost saved:** duplicate-heavy workload → dedup hit-rate → upstream calls avoided.
+  - **C. Retry effectiveness:** injected transient failures → requests rescued by retry vs
+    surfaced to the client. Read the attempt distribution from the trace store
+    (`GROUP BY TraceId` over `upstream.attempt`), since no counter carries it. Replaces the
+    dedup arm the original plan had — in-process dedup was removed (Issue C.3).
   - **D. Graceful degradation:** past capacity → clean 429 + `Retry-After`, no collapse. Depends on
     Issue 5.3 — without an in-flight ceiling there is nothing to shed and the arm measures an OOM.
     This is also where `MAX_IN_FLIGHT` gets calibrated against real p95 latency instead of the
     formula's estimate; chart `llmguard_in_flight` against the ceiling and `llmguard_shed_total`.
-  - **E. Feature cost:** overhead delta with rate-limit/dedup/tracing on vs off.
-  - Generate 3–4 charts + a Grafana dashboard.
+    Both are kept in Prometheus precisely because a trace has no row for either (Issue 4.2).
+  - **E. Feature cost:** overhead delta with rate-limit/tracing on vs off. Tracing is the one
+    that matters here: the SDK is installed only when the endpoint is set, so off is a genuine
+    no-op and the delta is the real cost of exporting 100% of spans.
+  - Generate 3–4 charts from the per-run JSON. Latency figures come from the trace store
+    (`quantileExact`), not from a histogram — see Phase 4 for why bucket bounds cannot resolve
+    the differences these arms are measuring.
 - **AC:**
   - Each scenario yields a reproducible number/chart.
   - README top shows: overhead-vs-direct/LiteLLM, success-under-fault, latency-through-outage, throughput.
@@ -732,7 +772,7 @@ fixed-QPS, coordinated-omission-aware latency measured from scheduled send time.
 
 ---
 
-## Phase 7 — Live smoke test (optional, requires real keys)
+## Phase 7 — Running against something real
 
 ### Issue 7.1 — Real provider smoke test
 - **Goal:** confirm the adapters work against real endpoints (not just mock).
@@ -740,7 +780,35 @@ fixed-QPS, coordinated-omission-aware latency measured from scheduled send time.
   chat completions through both adapters. Keep it out of CI (manual, key-gated).
 - **AC:**
   - Both providers return valid OpenAI-shaped responses for buffered + streaming.
-  - Usage tokens + cost recorded correctly in ClickHouse for real responses.
+  - Spans for the real calls land in `otel.otel_traces`, with per-attempt durations queryable
+    by `TraceId`.
+
+### Issue 7.2 — Route DocuMedAI's real traffic through LLMGuard
+- **Goal:** the gateway serves traffic it did not author. Phase 6 runs against `mockupstream`
+  under load the same author wrote; Issue 7.1 uses a real provider but only a handful of
+  scripted calls. Neither exercises real concurrency from real users.
+- **What to do:**
+  - **Verify feasibility first — this is the real risk.** Neither current caller speaks
+    OpenAI-compatible HTTP: `backend/utils/llm_config.py` uses `ChatVertexAI` (native SDK) and
+    CrewAI reaches Vertex through litellm's `vertex_ai/` prefix. Confirm both can be pointed at
+    `http://la-llmguard:8081/v1` before writing anything; record the blocker here if not.
+  - Point the app's LLM config at LLMGuard with Vertex behind it — the `vertex` adapter
+    already handles ADC, so credentials stay server-side.
+  - Add `la-llmguard` to the app's compose dependency chain, and keep a documented env-var
+    escape hatch so a gateway problem cannot take the app down during the trial.
+  - Observe `llmguard_in_flight` against arrival rate under genuine load: when the upstream
+    slows, arrivals stay flat while concurrency climbs, which is the failure mode admission
+    control exists to bound. That relationship is invisible to k6, which measures client-side.
+  - Record what observed concurrency says about `MAX_IN_FLIGHT=256` — it was chosen by
+    reasoning, not measurement.
+- **AC:**
+  - A chat message from the frontend produces a reply whose upstream call went through
+    LLMGuard (`llmguard_requests_total` increments for it).
+  - Buffered and SSE paths both work unchanged from the user's point of view;
+    `ci_tests/integration/api` still passes.
+  - The escape hatch is documented and verified.
+  - CLAUDE.md and `README.md` no longer say LLMGuard is "not in the request path" — that
+    becomes false the moment this lands.
 
 ---
 
@@ -762,8 +830,10 @@ fixed-QPS, coordinated-omission-aware latency measured from scheduled send time.
 Phase 0 (learn) ─> Phase 1 (harness) ─┬─> Phase 2 (providers) ─┬─> Phase 3 (OTel)
                                       │                        ├─> Phase 4 (ClickHouse)
                                       │                        └─> Phase 5 (multi-replica)
-                                      └───────────────────────────> Phase 6 (benchmark) ─> Phase 7 (live smoke)
+                                      └───────────────────────────> Phase 6 (benchmark) ─> Phase 7 (real traffic)
 ```
 Phase 0 (learn) gates everything; Phase 1 (harness) gates all build work. Phase 6 depends on Phase 1's
 mock upstream and benefits from Phases 2/5 being done (so the benchmark reflects the real gateway).
-Phases 3/4/5 are independent of each other and can be done in any order after Phase 2.
+Phases 3/4/5 are independent of each other and can be done in any order after Phase 2. Issue 7.2
+additionally wants Issue 5.3's in-flight ceiling in place, since observing concurrency against a
+ceiling is most of the point.
