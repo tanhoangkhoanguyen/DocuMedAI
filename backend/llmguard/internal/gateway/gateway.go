@@ -55,6 +55,23 @@ func SetupTracing(ctx context.Context, cfg Config) (func(context.Context) error,
 	return setupTracing(ctx, cfg)
 }
 
+// NewUsageWriter builds the ClickHouse usage log: a bounded, fire-and-forget
+// writer that batches per-request rows for cost analytics.
+//
+// An empty cfg.ClickHouseAddr returns (nil, nil) — the usage log is off, and a
+// nil *UsageWriter is a working no-op, so main needs no conditional around it.
+//
+// An unreachable ClickHouse is NOT an error here: the gateway has no depends_on
+// for it, so losing a startup race with a still-booting container must not
+// permanently disable the log. Only options the driver rejects outright are
+// returned as an error, and even that is not worth exiting for — a usage row is
+// not required to serve a request correctly.
+func NewUsageWriter(
+	ctx context.Context, cfg Config, m *Metrics, log *slog.Logger,
+) (*UsageWriter, error) {
+	return newUsageWriter(ctx, cfg, m, log)
+}
+
 // NewRateLimiter builds the Redis-backed token bucket shared across replicas.
 func NewRateLimiter(rdb *redis.Client, rpm, burst int) *RateLimiter {
 	return newRateLimiter(rdb, rpm, burst)

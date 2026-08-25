@@ -82,6 +82,20 @@ func main() {
 	rdb := redis.NewClient(opt)
 
 	metrics := gateway.NewMetrics()
+
+	// The usage log. Fire-and-forget behind a bounded buffer, so it can neither
+	// add latency to a request nor grow without limit when ClickHouse is slow or
+	// gone. Deliberately NOT fatal on failure, unlike the provider setup above: a
+	// gateway with no usage log still serves every request correctly, so refusing
+	// to start would trade a working service for a missing billing row.
+	usage, err := gateway.NewUsageWriter(context.Background(), cfg, metrics, log)
+	if err != nil {
+		log.Warn("usage log disabled", "err", err.Error())
+	} else if usage != nil {
+		log.Info("usage log enabled",
+			"addr", cfg.ClickHouseAddr, "database", cfg.ClickHouseDatabase)
+	}
+
 	limiter := gateway.NewRateLimiter(rdb, cfg.RateLimitRPM, cfg.RateLimitBurst)
 	deduper := gateway.NewDeduper()
 	// Shares the trip signal across replicas, so an upstream outage costs one
@@ -175,6 +189,16 @@ func main() {
 	defer flushCancel()
 	if err := shutdownTracing(flushCtx); err != nil {
 		log.Warn("tracing shutdown", "err", err.Error())
+	}
+
+	// Drain the usage buffer for the same reason spans are flushed above: the last
+	// rows before a process goes down are the ones someone will ask about. Its own
+	// budget, again so a ClickHouse that has gone away cannot spend the window
+	// Redis still needs after it.
+	usageCtx, usageCancel := context.WithTimeout(context.Background(), cfg.UsageShutdownGrace)
+	defer usageCancel()
+	if err := usage.Close(usageCtx); err != nil {
+		log.Warn("usage log shutdown", "err", err.Error())
 	}
 
 	_ = rdb.Close()
