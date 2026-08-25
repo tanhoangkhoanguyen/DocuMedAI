@@ -109,7 +109,7 @@ spend — LLMGuard is a reliability gateway and does nothing with those numbers.
 | `UPSTREAM_TIMEOUT` / `MAX_IDLE_CONNS` | `120s` / `100` | HTTP client. `UPSTREAM_TIMEOUT` bounds the **buffered** path only — see below |
 | `SERVER_IDLE_TIMEOUT` | `120s` | Idle keep-alive connections. There is deliberately no write timeout — see `main.go` |
 | `STREAM_WRITE_IDLE` / `STREAM_IDLE_TIMEOUT` / `STREAM_ABSOLUTE_MAX` | `30s` / `60s` / `30m` | Streaming deadlines — see below. `0` disables each |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | — | **Empty disables tracing entirely.** OTLP/HTTP collector base URL, e.g. `http://la-jaeger:4318` — see below |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | — | **Empty disables tracing entirely.** OTLP/HTTP collector base URL, e.g. `http://la-otel-collector:4318` — see below |
 | `OTEL_SERVICE_NAME` / `OTEL_TRACES_SAMPLER_ARG` / `OTEL_SHUTDOWN_GRACE` | `llmguard` / `1.0` / `5s` | Service name, head-sampling ratio, span-flush budget at shutdown |
 
 ### Admission control
@@ -254,14 +254,6 @@ requests_total (Prometheus)  ==  count(DISTINCT TraceId) (ClickHouse)
 A shortfall means spans were dropped; raise `send_batch_size` / the sending queue in
 `otel-collector.yaml`. Those values are deliberately left at their defaults until a real benchmark
 says what the load is — guessing now would just be a different wrong number.
-
-Local viewing:
-
-```bash
-OTEL_EXPORTER_OTLP_ENDPOINT=http://la-jaeger:4318 \
-  docker compose --profile observability up -d la-jaeger la-llmguard
-# traces at http://localhost:16686
-```
 
 ### Auth
 

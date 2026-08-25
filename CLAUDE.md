@@ -234,6 +234,8 @@ subtlety worth keeping: `endStream` runs from a **defer**, because the pre-heade
 early twice to avoid double-recording latency — a tail call is skipped on exactly those paths and
 leaks a span that is never exported.
 
+**Spans land in ClickHouse, not a trace UI.** An OTel Collector (`llmguard/observability/otel-collector.yaml`) receives OTLP and writes `otel.otel_traces`, so the Go code names no backend and swapping stores is a config change. The reason is the benchmark: `quantileExact` over exact nanosecond durations replaces a quantile interpolated between pre-declared histogram bounds, where a p95 read off a 3-second bucket hides any change smaller than the bucket. What this costs is that export is asynchronous and bounded at three points — the SDK batch queue, the collector sending queue, ClickHouse itself — and an overflow at any of them drops spans **silently**. `requests_total` is the control, being incremented in-process: it must equal `count(DISTINCT TraceId)`, and a shortfall means the numbers are incomplete.
+
 The pipeline lives in `internal/gateway/` (config, proxy, admission, retry, breakershare,
 ratelimit, metrics, idlewatchdog, writedeadline, tracing);
 `main.go` at the module root is a thin composition root, and `internal/gateway/gateway.go` is the
@@ -301,12 +303,13 @@ Redis-backed tests (the rate limiter's Lua token bucket) use **DB 15** via
 | MCP server | 8090 (`observability` scrape target; always available) |
 | Prometheus | 9090 (`observability` profile) |
 | Grafana | 3000 (`observability` profile) |
-| Jaeger UI | 16686 (`observability` profile) · OTLP/HTTP on 4318 |
+| OTel Collector | 4318 OTLP/HTTP (`observability` profile) |
+| ClickHouse | 8123 HTTP, 9000 native (`observability` profile) |
 
 Swagger UI: `http://localhost:2010/docs`
 LLMGuard metrics: `http://localhost:8081/metrics`
-Jaeger UI: `http://localhost:16686` (`observability` profile; tracing is off unless
-`OTEL_EXPORTER_OTLP_ENDPOINT` is set)
+Traces: `docker exec la-clickhouse-service clickhouse-client -d otel` (`observability`
+profile; tracing is off unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set)
 MCP endpoint: `http://localhost:8090/mcp/` · metrics: `http://localhost:8090/metrics/`
 (both are `Mount`s — the **trailing slash matters**, the slashless form 307-redirects)
 
