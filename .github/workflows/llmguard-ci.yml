@@ -50,10 +50,30 @@ jobs:
           --health-timeout 3s
           --health-retries 10
 
+      # The usage writer's insert path is columnar block encoding done inside the
+      # driver, so a fake sink can prove the buffer logic but never that a row
+      # survives the wire format with its types intact.
+      # testutil.RequireClickHouse skips when it is absent (a laptop), which means
+      # CI has to supply it or the round-trip test would silently never run
+      # anywhere — the same reasoning as the Redis service above.
+      clickhouse:
+        image: clickhouse/clickhouse-server:24.8-alpine
+        ports:
+          - 9000:9000
+          - 8123:8123
+        options: >-
+          --health-cmd "wget --spider -q http://127.0.0.1:8123/ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+
     env:
       # DB 15, matching testutil.DefaultRedisURL — never the app's DB 0 or the
       # proxy's own DB 1.
       TEST_REDIS_URL: redis://127.0.0.1:6379/15
+      # The NATIVE port. Tests create and use their own llmguard_test database
+      # (testutil.TestClickHouseDatabase), never the gateway's own.
+      TEST_CLICKHOUSE_ADDR: 127.0.0.1:9000
 
     steps:
       - uses: actions/checkout@v4
