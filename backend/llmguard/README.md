@@ -214,6 +214,47 @@ mirror `upstream.attempt`, and streams reach tens of thousands of frames at ~780
 each — the same exhaustion vector `maxUpstreamBody` exists to prevent. Translation is an in-memory
 unmarshal of a few µs, which a ~1.7µs span would cost as much to observe as to perform.
 
+### Trace store (ClickHouse)
+
+Spans go to an OTel Collector, which writes them to ClickHouse. The gateway names no backend — it
+exports OTLP — so swapping the store is a change in `observability/otel-collector.yaml`, not in Go.
+
+```bash
+docker compose --profile observability up -d la-clickhouse la-otel-collector
+OTEL_EXPORTER_OTLP_ENDPOINT=http://la-otel-collector:4318 docker compose up -d la-llmguard
+```
+
+Why a store at all: **durations land exactly**, so a quantile is computed rather than interpolated
+between pre-declared histogram bounds. That is what a benchmark needs — a p95 read off a 3-second
+bucket is worth ±1s, which hides any change smaller than the bucket.
+
+```sql
+-- p50/p95/p99 per provider, exact, over every attempt
+SELECT SpanAttributes['llmguard.provider'] AS provider,
+       count() AS attempts,
+       quantileExact(0.50)(Duration)/1e6 AS p50_ms,
+       quantileExact(0.95)(Duration)/1e6 AS p95_ms,
+       quantileExact(0.99)(Duration)/1e6 AS p99_ms
+FROM otel.otel_traces
+WHERE SpanName = 'upstream.attempt'
+GROUP BY provider;
+```
+
+Reach it with `docker exec la-clickhouse-service clickhouse-client -d otel`, or over HTTP on 8123.
+
+**Check for dropped spans before trusting a benchmark.** Export is asynchronous and bounded at three
+points — the SDK's batch queue, the collector's sending queue, ClickHouse itself — and an overflow at
+any of them drops spans **silently**: no error, no log, no failed request. Prometheus is the control,
+because `requests_total` is incremented in-process and cannot be lost:
+
+```
+requests_total (Prometheus)  ==  count(DISTINCT TraceId) (ClickHouse)
+```
+
+A shortfall means spans were dropped; raise `send_batch_size` / the sending queue in
+`otel-collector.yaml`. Those values are deliberately left at their defaults until a real benchmark
+says what the load is — guessing now would just be a different wrong number.
+
 Local viewing:
 
 ```bash
@@ -291,6 +332,9 @@ compose is the only supported build path.
 | `internal/testutil/redis.go` | Live-Redis gate for the Lua token-bucket tests |
 | `internal/testutil/polling.go` | `Eventually` — waits on state that settles asynchronously |
 | `internal/testutil/metrics.go` | Prometheus readers, so tests can assert on instrumentation |
+| `observability/otel-collector.yaml` | OTLP in, ClickHouse out — the only place the trace store is named |
+| `observability/clickhouse-user.xml` | The collector's ClickHouse user (the image's `default` is localhost-only) |
+| `observability/clickhouse-init.sql` | Creates the `otel` database; the collector creates its own tables |
 
 The pipeline sits under `internal/` so nothing outside this module can depend on
 it, leaving it free to change shape. Only `gateway.go` is exported; everything

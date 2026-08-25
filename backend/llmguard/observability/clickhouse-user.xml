@@ -1,0 +1,17 @@
+<!-- The image restricts the default user to localhost, so a client in another
+     container is refused (reported as "authentication failed"). This adds a
+     dedicated user for the collector instead of widening default's network ACL.
+
+     No password: the port is never published and only the collector shares this
+     network. Set one here and in otel-collector.yaml before exposing 9000. -->
+<clickhouse>
+  <users>
+    <otel>
+      <no_password/>
+      <networks><ip>::/0</ip></networks>
+      <profile>default</profile>
+      <quota>default</quota>
+      <access_management>0</access_management>
+    </otel>
+  </users>
+</clickhouse>

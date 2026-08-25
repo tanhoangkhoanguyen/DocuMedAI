@@ -77,10 +77,9 @@ services:
       PROXY_PORT: "8081"
       REDIS_URL: redis://la-redis:6379/1 # DB 1 — separate from the app cache on DB 0
       # Tracing is OFF unless this is set, so the default stack runs untraced and
-      # the gateway does not depend on la-jaeger being up. Enable it with the
-      # observability profile, or export OTEL_EXPORTER_OTLP_ENDPOINT yourself:
-      #   OTEL_EXPORTER_OTLP_ENDPOINT=http://la-jaeger:4318       #     docker compose --profile observability up -d la-jaeger la-llmguard
-      # The SDK appends /v1/traces to it. Traces appear at http://localhost:16686.
+      # depends on no collector being up. The SDK appends /v1/traces to the value.
+      #   OTEL_EXPORTER_OTLP_ENDPOINT=http://la-otel-collector:4318   # spans -> ClickHouse
+      #   OTEL_EXPORTER_OTLP_ENDPOINT=http://la-jaeger:4318           # spans -> Jaeger UI
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-llmguard}
     depends_on:
@@ -281,6 +280,56 @@ services:
     networks:
       - documedai-net
 
+  la-clickhouse:
+    profiles: ["observability"]
+    # Trace store. Columnar, so a span table stays cheap to scan and quantiles are
+    # computed exactly instead of interpolated from histogram buckets.
+    image: clickhouse/clickhouse-server:24.8-alpine
+    restart: unless-stopped
+    container_name: la-clickhouse-service
+    # Deliberately no environment block. Any CLICKHOUSE_* var makes the entrypoint
+    # boot a temporary server to apply it, and that one holds every port so the
+    # real process never listens. The collector creates the database and schema
+    # itself (create_schema in otel-collector.yaml).
+    ulimits:
+      # ClickHouse opens a file per column part and fails on the default 1024.
+      nofile: { soft: 262144, hard: 262144 }
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - ./backend/llmguard/observability/clickhouse-user.xml:/etc/clickhouse-server/users.d/otel.xml:ro
+      - ./backend/llmguard/observability/clickhouse-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "8123:8123" # HTTP — what `curl`/`clickhouse-client --port 8123` uses
+    healthcheck:
+      # 127.0.0.1, not localhost: the server binds IPv4 only, and localhost
+      # resolves to ::1 first inside the container.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8123/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - documedai-net
+
+  la-otel-collector:
+    profiles: ["observability"]
+    # Sits between the gateway and ClickHouse so the Go code stays storage-agnostic:
+    # it exports OTLP and never names a backend. Swapping stores is a config change.
+    image: otel/opentelemetry-collector-contrib:0.115.1
+    restart: unless-stopped
+    container_name: la-otel-collector-service
+    command: ["--config=/etc/otel-collector.yaml"]
+    volumes:
+      - ./backend/llmguard/observability/otel-collector.yaml:/etc/otel-collector.yaml:ro
+    ports:
+      # 4318 in-network; published on 4319 because la-jaeger still holds 4318.
+      - "4319:4318"
+    depends_on:
+      la-clickhouse:
+        condition: service_healthy
+    networks:
+      - documedai-net
+
   la-jaeger:
     profiles: ["observability"]
     # all-in-one: collector + storage + UI in one container, in-memory. Traces are
@@ -353,6 +402,7 @@ networks:
 
 volumes:
   models_cache:
+  clickhouse_data:
   grafana_data:
 
 secrets:
