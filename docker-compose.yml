@@ -52,6 +52,59 @@ services:
       retries: 5
       start_period: 5s
 
+  la-clickhouse:
+    # The usage log's store: a durable, per-request record for cost analytics
+    # (backend/llmguard/internal/gateway/usagelog.go). Prometheus is
+    # pre-aggregated and Jaeger's traces expire, so neither can answer "what did
+    # this API key spend last Tuesday" — that needs a table.
+    #
+    # A DEFAULT service rather than a profile, unlike la-jaeger/la-prometheus:
+    # the gateway writes usage rows out of the box, and Phase 4.2's cost
+    # calculation assumes the rows are there.
+    image: clickhouse/clickhouse-server:24.8-alpine
+    restart: unless-stopped
+    container_name: la-clickhouse-service
+    environment:
+      # No CLICKHOUSE_DB on purpose. The image's entrypoint builds its
+      # clickhouse-client WITHOUT --database, so every /docker-entrypoint-initdb.d
+      # script runs against `default` no matter what this is set to — setting it
+      # would create an llmguard database that the init script then does not use,
+      # which is worse than not having one. The table namespaces itself with an
+      # llmguard_ prefix instead. See backend/llmguard/internal/gateway/schema.sql.
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: ""
+      # Without this the server refuses to create users/roles on first boot.
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    ports:
+      - "8123:8123"                      # HTTP — clickhouse-client, dashboards, /ping
+      - "9000:9000"                      # native protocol — what the Go driver uses
+    networks:
+      - documedai-net
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      # The SAME file usagelog.go embeds, so the table the init script creates
+      # and the one the writer ensures at startup cannot drift. NOTE the image
+      # runs this ONLY when the data directory is empty — the writer's own
+      # ensureSchema is what covers a pre-existing volume.
+      - ./backend/llmguard/internal/gateway/schema.sql:/docker-entrypoint-initdb.d/01-usage.sql:ro
+    ulimits:
+      # ClickHouse warns loudly and degrades below this; the image's own docs
+      # call it out as required.
+      nofile:
+        soft: 262144
+        hard: 262144
+    mem_limit: 4g
+    healthcheck:
+      # 127.0.0.1, NOT localhost. Inside this image localhost resolves to ::1
+      # first, while the server listens on 0.0.0.0 only — so the localhost form
+      # fails with "connection refused" against a perfectly healthy server and
+      # the container never leaves the unhealthy state.
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8123/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
   la-llmguard:
     # LLMGuard — OpenAI-compatible gateway with an internal provider adapter:
     # rate limit, retry/backoff, circuit breaker, in-flight dedup, Prometheus
@@ -83,9 +136,18 @@ services:
       # The SDK appends /v1/traces to it. Traces appear at http://localhost:16686.
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-llmguard}
+      # Usage log. The NATIVE port (9000), not the 8123 HTTP one. Set this empty
+      # to disable the writer entirely — nothing is constructed and no goroutine
+      # runs, the same escape hatch MAX_IN_FLIGHT=0 provides for admission control.
+      CLICKHOUSE_ADDR: ${CLICKHOUSE_ADDR-la-clickhouse:9000}
     depends_on:
       la-redis:
         condition: service_healthy
+      # Deliberately NO depends_on for la-clickhouse. The usage writer is
+      # fire-and-forget behind a bounded buffer and its connection heals on its
+      # own, so a ClickHouse that is slow to start or down must never be able to
+      # delay or block the gateway — that would let a billing sink become the
+      # availability problem it exists to stay out of.
     ports:
       - "8081:8081"                      # expose for local /metrics + smoke tests
     networks:
@@ -354,6 +416,7 @@ networks:
 volumes:
   models_cache:
   grafana_data:
+  clickhouse_data:
 
 secrets:
   # Sourced from the HF_TOKEN env var. Required by the la-documedai build — set it
