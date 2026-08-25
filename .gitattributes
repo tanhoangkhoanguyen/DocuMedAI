@@ -6,3 +6,8 @@
 # a Windows checkout, so pin LF: the test normalizes newlines when reading, but
 # only this stops a CRLF fixture from being committed and confusing the next reader.
 backend/llmguard/provider/vertex/testdata/** text eol=lf
+
+# The usage-log DDL is mounted into ClickHouse's Linux init directory AND
+# embedded into the Go binary. core.autocrlf would hand both a CRLF copy of a
+# file that only ever runs on Linux, so pin LF for the same reason as above.
+backend/llmguard/internal/gateway/schema.sql text eol=lf
