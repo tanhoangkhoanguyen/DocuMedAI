@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"documedai/llmguard/internal/testutil"
 	"documedai/llmguard/mockupstream"
 	"documedai/llmguard/provider"
 )
@@ -44,10 +43,6 @@ func TestRetryExhaustsAtRetryMax(t *testing.T) {
 	}
 	if env.Error.Type != "upstream_error" {
 		t.Errorf("error.type = %q, want upstream_error", env.Error.Type)
-	}
-	// retries metric counts attempts beyond the first.
-	if got := testutil.LabeledCounterValue(t, h.metrics.retries, modelLabels("gemini-2.5-flash")...); got != 3 {
-		t.Errorf("retries metric = %v, want 3 (RetryMax-1)", got)
 	}
 }
 
@@ -103,9 +98,6 @@ func TestRetryThenSucceed(t *testing.T) {
 	}
 	if h.up.Hits() > 4 {
 		t.Errorf("upstream hits = %d, must never exceed RetryMax=4", h.up.Hits())
-	}
-	if got := testutil.LabeledCounterValue(t, h.metrics.retries, modelLabels("gemini-2.5-flash")...); got < 1 {
-		t.Errorf("retries metric = %v, want at least 1", got)
 	}
 }
 
@@ -351,7 +343,7 @@ func TestDeadlineKeepsUpstreamError(t *testing.T) {
 	defer cancel()
 
 	attempts := 0
-	_, err := doWithRetry(ctx, cfg, "seed", func() {}, func(context.Context, int) (*upstreamResult, error) {
+	_, err := doWithRetry(ctx, cfg, "seed", func(context.Context, int) (*upstreamResult, error) {
 		attempts++
 		ue := &provider.UpstreamError{
 			Status: http.StatusTooManyRequests,
@@ -382,7 +374,7 @@ func TestClientCancelReportsCancellation(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	_, err := doWithRetry(ctx, cfg, "seed", func() {}, func(context.Context, int) (*upstreamResult, error) {
+	_, err := doWithRetry(ctx, cfg, "seed", func(context.Context, int) (*upstreamResult, error) {
 		cancel() // the client disconnects during the first attempt
 		ue := &provider.UpstreamError{
 			Status: http.StatusTooManyRequests,

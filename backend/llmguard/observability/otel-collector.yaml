@@ -1,0 +1,41 @@
+# OTel Collector: receives spans over OTLP and writes them to ClickHouse.
+#
+# The gateway exports OTLP and knows nothing about the storage backend — swapping
+# ClickHouse for another store is a change here, not in Go.
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  # Bounds the collector's own memory: a burst is dropped here rather than OOMing
+  # the container. send_batch_size trades insert frequency for row-batch size —
+  # ClickHouse is far faster on few large inserts than many small ones.
+  batch:
+    timeout: 5s
+    send_batch_size: 1024
+
+exporters:
+  clickhouse:
+    endpoint: tcp://la-clickhouse:9000?dial_timeout=10s
+    database: otel
+    # Dedicated user; the default one is localhost-only in this image.
+    username: otel
+    # The exporter creates its own schema on first run, so no migration step.
+    create_schema: true
+    # Traces older than this are dropped by ClickHouse TTL. Long enough to compare
+    # a benchmark against last month's; short enough to stay on one disk.
+    ttl: 720h
+    # Retries cover a ClickHouse restart; the queue absorbs it without dropping.
+    retry_on_failure:
+      enabled: true
+    sending_queue:
+      enabled: true
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [clickhouse]

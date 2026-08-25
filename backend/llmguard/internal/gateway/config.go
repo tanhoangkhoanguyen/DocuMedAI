@@ -141,7 +141,7 @@ type Config struct {
 
 	// --- Tracing (OpenTelemetry) ---
 	//
-	// TraceEndpoint is the OTLP/HTTP collector base URL, e.g. http://la-jaeger:4318.
+	// TraceEndpoint is the OTLP/HTTP collector base URL, e.g. http://la-otel-collector:4318.
 	//
 	// EMPTY DISABLES TRACING ENTIRELY, and that is the whole switch: no SDK provider
 	// is installed and the global tracer stays OpenTelemetry's no-op. Read with a

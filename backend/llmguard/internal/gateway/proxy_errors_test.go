@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"documedai/llmguard/internal/testutil"
 	"documedai/llmguard/mockupstream"
 )
 
@@ -151,31 +150,30 @@ func TestUnmodelledOpenAIFieldsStillPass(t *testing.T) {
 // client saw before — only the upstream attempt COUNT changed.
 func TestUpstreamErrorPassthrough(t *testing.T) {
 	cases := []struct {
-		name        string
-		mockStatus  int
-		wantCode    int
-		wantType    string
-		wantHits    int64
-		wantRetries float64
+		name       string
+		mockStatus int
+		wantCode   int
+		wantType   string
+		wantHits   int64
 	}{
 		// Retryable: the full RetryMax budget is spent before giving up.
 		{name: "429 is retried then surfaced", mockStatus: http.StatusTooManyRequests,
 			wantCode: http.StatusTooManyRequests, wantType: "rate_limit",
-			wantHits: 4, wantRetries: 3},
+			wantHits: 4},
 		{name: "500 is retried then surfaced", mockStatus: http.StatusInternalServerError,
 			wantCode: http.StatusInternalServerError, wantType: "upstream_error",
-			wantHits: 4, wantRetries: 3},
+			wantHits: 4},
 		{name: "503 is retried then surfaced", mockStatus: http.StatusServiceUnavailable,
 			wantCode: http.StatusServiceUnavailable, wantType: "upstream_error",
-			wantHits: 4, wantRetries: 3},
+			wantHits: 4},
 		// Not retryable: one attempt, no backoff. Retrying a client error would
 		// fail identically every time.
 		{name: "400 is not retried", mockStatus: http.StatusBadRequest,
 			wantCode: http.StatusBadRequest, wantType: "invalid_request_error",
-			wantHits: 1, wantRetries: 0},
+			wantHits: 1},
 		{name: "401 is not retried", mockStatus: http.StatusUnauthorized,
 			wantCode: http.StatusUnauthorized, wantType: "auth_error",
-			wantHits: 1, wantRetries: 0},
+			wantHits: 1},
 	}
 
 	for _, tc := range cases {
@@ -199,15 +197,6 @@ func TestUpstreamErrorPassthrough(t *testing.T) {
 			}
 			if got := h.up.Hits(); got != tc.wantHits {
 				t.Errorf("upstream hits = %d, want %d", got, tc.wantHits)
-			}
-			// The retries metric is the second witness: it counts attempts
-			// beyond the first, so 0 proves no backoff sleep was burned.
-			if got := testutil.LabeledCounterValue(
-				t,
-				h.metrics.retries,
-				modelLabels("gemini-2.5-flash")...,
-			); got != tc.wantRetries {
-				t.Errorf("retries metric = %v, want %v", got, tc.wantRetries)
 			}
 		})
 	}

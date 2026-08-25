@@ -45,7 +45,7 @@ func LabeledGaugeValue(t *testing.T, vec *prometheus.GaugeVec, labels ...string)
 // HistogramVec has recorded — not their sum.
 //
 // It answers "how many times was this request counted", which is how a
-// double-observed latency shows up. ToFloat64 cannot be used here: it panics on
+// a double-observed histogram shows up. ToFloat64 cannot be used here: it panics on
 // anything that is not a single-value metric, so the histogram has to be written
 // out and read directly.
 func HistogramCount(t *testing.T, vec *prometheus.HistogramVec, labels ...string) uint64 {

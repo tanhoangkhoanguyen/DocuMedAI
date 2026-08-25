@@ -9,7 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	"documedai/llmguard/internal/testutil"
 	"documedai/llmguard/mockupstream"
 	"documedai/llmguard/provider"
 )
@@ -105,13 +104,6 @@ func TestStreamingUpstreamErrorReturnsEnvelope(t *testing.T) {
 	// No retry on the streaming path: one attempt only, even for a 500.
 	if h.up.Hits() != 1 {
 		t.Errorf("upstream hits = %d, want 1 (streaming does not retry)", h.up.Hits())
-	}
-	// writeError routes through writeJSON, which records the request itself. The
-	// tail of serveStreaming records latency unconditionally, so a missing return
-	// in the pre-header branch would observe this request twice — invisible to
-	// every status assertion above.
-	if got := testutil.HistogramCount(t, h.metrics.latency, modelLabels("gemini-2.5-flash")...); got != 1 {
-		t.Errorf("latency observations = %d, want 1 — a failed request must be counted once", got)
 	}
 }
 

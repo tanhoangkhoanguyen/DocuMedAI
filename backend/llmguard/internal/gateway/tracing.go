@@ -182,8 +182,8 @@ const spanAttempt = "upstream.attempt"
 // Attempt-span attributes.
 const (
 	// attrAttempt is the 0-based attempt number: 0 is the first try, not a retry.
-	// It matches doWithRetry's own loop counter, and deliberately not
-	// llmguard_retries_total, which counts only attempts after the first.
+	// It matches doWithRetry's own loop counter. A counter could only ever
+	// carry a total, never one request's attempts.
 	attrAttempt = attribute.Key("llmguard.retry.attempt")
 
 	// attrStatus is the upstream's HTTP status for this attempt.
@@ -313,9 +313,9 @@ const (
 	// token.
 	//
 	// This is the number an LLM gateway is judged on and it exists nowhere else
-	// here: request_duration_seconds measures the whole stream, which is dominated
-	// by how LONG the answer is rather than by how fast the gateway and provider
-	// started producing it. A span event is the cheapest possible way to record it
+	// here: a stream's total duration is dominated by how LONG the answer is
+	// rather than by how fast the gateway and provider started producing it. A
+	// span event is the cheapest possible way to record it
 	// (no new span, no new metric) and it lands on the timeline exactly where a
 	// reader looks for it.
 	eventFirstFrame = "first_frame"
