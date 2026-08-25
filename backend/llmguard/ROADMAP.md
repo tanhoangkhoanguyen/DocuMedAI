@@ -541,8 +541,16 @@ Prometheus counters say *what*; traces say *why p99 was slow*.
 **Why:** durable, high-write, analytical record of every request → per-key spend & cost dashboards
 (what LiteLLM leans on Postgres for and struggles with at volume). Also the sink for benchmark data.
 
-### Issue 4.1 — ClickHouse schema + client
+### Issue 4.1 — ClickHouse schema + client ✅ **DONE**
 - **Goal:** a table and a writer.
+- **Landed as:** `internal/gateway/usagelog.go` + `schema.sql`, `internal/testutil/clickhouse.go`,
+  the `la-clickhouse` compose service and a ClickHouse service container in `llmguard-ci.yml`.
+  The table is `llmguard_usage` in `default` (the image runs init scripts against `default`
+  regardless of `CLICKHOUSE_DB`); `schema.sql` is the single source of truth, embedded in the
+  binary *and* mounted as the init script. No row is emitted yet — that is 4.2.
+- **Driver pinned to `clickhouse-go/v2 v2.40.1`**, the highest release declaring `go 1.23.0`.
+  v2.40.2+ declares 1.24 and v2.48 declares 1.25, either of which would push the module past
+  the Dockerfile's `golang:1.23` — the same trap `7dd89b7` hit with otelhttp.
 - **What to do:**
   - Add ClickHouse to `docker-compose.yml`; add the Go ClickHouse driver to `go.mod`.
   - Design an append-only `usage` table: ts, request_id, model, provider, prompt_tokens,

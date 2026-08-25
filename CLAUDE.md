@@ -232,8 +232,28 @@ subtlety worth keeping: `endStream` runs from a **defer**, because the pre-heade
 early twice to avoid double-recording latency — a tail call is skipped on exactly those paths and
 leaks a span that is never exported.
 
+**The usage log is bounded by design, and that is its whole contract.** ClickHouse holds a durable
+per-request row because Prometheus is pre-aggregated and traces expire — neither can answer "what did
+this key spend last Tuesday". But a billing sink must never become a new way to fail a request, so
+`usagelog.go` is fire-and-forget behind a **bounded** channel: `Write` returns nothing (there is no
+error a handler could act on), a full buffer **drops and counts** rather than blocking, and a failed
+insert **discards** its batch rather than retrying — retrying would grow exactly the memory the
+buffer caps, turning a ClickHouse outage into a gateway outage. Hence no `depends_on` from
+`la-llmguard`. Four metrics, not one, because `rows_dropped` alone is blind to the worst case: a
+ClickHouse that *rejects* every insert loses every row while drops stay at zero, so
+`usage_flush_errors_total` is what separates "overloaded" from "sink is broken". The two flush
+triggers bound different quantities — `USAGE_BATCH_SIZE` caps insert size, `USAGE_FLUSH_INTERVAL`
+caps staleness at low traffic where size never fires. Shutdown **flushes** on its own budget, same
+reasoning as the span flush. Two ClickHouse-image quirks dictate the schema's shape: init scripts run
+**only on an empty data dir** (so the writer re-runs the DDL at startup) and **always against
+`default`** regardless of `CLICKHOUSE_DB` (so the table is `llmguard_usage` in `default`, not `usage`
+in a dedicated database). `schema.sql` is one unqualified statement, `go:embed`-ed *and* mounted as
+the init script, so the two paths cannot drift — and unqualified is what lets the test create it in an
+isolated `llmguard_test` database. Driver pinned to `clickhouse-go/v2 v2.40.1`, the highest release
+declaring `go 1.23.0`.
+
 The pipeline lives in `internal/gateway/` (config, proxy, admission, retry, breakershare, dedup,
-ratelimit, metrics, idlewatchdog, writedeadline, tracing);
+ratelimit, metrics, idlewatchdog, writedeadline, tracing, usagelog);
 `main.go` at the module root is a thin composition root, and `internal/gateway/gateway.go` is the
 entire exported surface between them. Everything else in the package stays unexported, and tests
 sit beside the code they exercise so nothing is exported merely to be testable.
@@ -296,6 +316,7 @@ Redis-backed tests (the rate limiter's Lua token bucket) use **DB 15** via
 | Redis | 6379 |
 | LLMGuard (Go) | 8081 |
 | MCP server | 8090 (`observability` scrape target; always available) |
+| ClickHouse | 9000 (native — what the Go driver uses) · 8123 (HTTP) |
 | Prometheus | 9090 (`observability` profile) |
 | Grafana | 3000 (`observability` profile) |
 | Jaeger UI | 16686 (`observability` profile) · OTLP/HTTP on 4318 |

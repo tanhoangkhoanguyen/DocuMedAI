@@ -106,6 +106,10 @@ spend — LLMGuard is a reliability gateway and does nothing with those numbers.
 | `STREAM_WRITE_IDLE` / `STREAM_IDLE_TIMEOUT` / `STREAM_ABSOLUTE_MAX` | `30s` / `60s` / `30m` | Streaming deadlines — see below. `0` disables each |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | — | **Empty disables tracing entirely.** OTLP/HTTP collector base URL, e.g. `http://la-jaeger:4318` — see below |
 | `OTEL_SERVICE_NAME` / `OTEL_TRACES_SAMPLER_ARG` / `OTEL_SHUTDOWN_GRACE` | `llmguard` / `1.0` / `5s` | Service name, head-sampling ratio, span-flush budget at shutdown |
+| `CLICKHOUSE_ADDR` | `la-clickhouse:9000` | Usage log. **Empty disables it entirely.** The **native** port, not HTTP's 8123 — see below |
+| `CLICKHOUSE_DB` / `CLICKHOUSE_USER` / `CLICKHOUSE_PASSWORD` | `default` / `default` / — | Connection. The table namespaces itself as `llmguard_usage` — see below |
+| `USAGE_BUFFER_SIZE` / `USAGE_BATCH_SIZE` / `USAGE_FLUSH_INTERVAL` | `10000` / `1000` / `5s` | Bounded buffer + the two flush triggers |
+| `USAGE_SHUTDOWN_GRACE` | `5s` | Budget for draining buffered rows at shutdown |
 
 ### Admission control
 
@@ -217,6 +221,80 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://la-jaeger:4318 \
 # traces at http://localhost:16686
 ```
 
+### Usage log (ClickHouse)
+
+The durable, per-request record behind cost analytics. Prometheus is
+pre-aggregated and forgets individuals; traces are sampled and expire in the
+collector. Neither can answer *"what did this API key spend last Tuesday"* — that
+is a question about a specific row weeks later, which is a database.
+
+**The design constraint is that a billing sink must never become a new way to
+fail a request.** Everything else follows from it:
+
+- `Write` is fire-and-forget: it cannot block and cannot fail, so it returns
+  nothing. There is no error a request handler could usefully act on.
+- The hand-off is a **bounded** channel with a non-blocking send. `USAGE_BUFFER_SIZE`
+  is a hard ceiling on memory; past it rows are **dropped and counted**. Losing a
+  billing row is recoverable, adding latency to every request is not.
+- A failed insert **discards** its batch rather than retrying. Retrying in process
+  would grow exactly the memory the buffer exists to bound, turning a ClickHouse
+  outage into a gateway outage. Durable delivery across a sink outage is the
+  deferred Kafka item in `ROADMAP.md`.
+
+`la-clickhouse` therefore has **no `depends_on`** from `la-llmguard`, and the
+gateway starts and serves normally whether it is up or not.
+
+**Two flush triggers, bounding different quantities.** `USAGE_BATCH_SIZE` caps how
+large one insert gets (and the blast radius of one failed insert);
+`USAGE_FLUSH_INTERVAL` caps how long a row may sit unwritten, which is the only
+thing that gets a row out at low traffic where the size trigger never fires. The
+ticker is deliberately not reset after a size-triggered flush — the worst case is
+one near-empty flush, and it avoids the reset races a `time.Timer` invites.
+
+**Shutdown flushes rather than drops**, on its own `USAGE_SHUTDOWN_GRACE` budget:
+the last rows before a process goes down are the ones someone will ask about, and
+the bound stops a sink that has gone away from spending a window Redis still
+needs after it.
+
+| Metric | Meaning |
+|--------|---------|
+| `llmguard_usage_rows_written_total` | Rows successfully inserted |
+| `llmguard_usage_rows_dropped_total` | Rows refused by a full buffer — the ceiling doing its job |
+| `llmguard_usage_flush_errors_total` | Batches lost to a failed insert |
+| `llmguard_usage_buffer_depth` | Rows waiting; chart against `USAGE_BUFFER_SIZE` |
+
+`rows_dropped` alone is not enough, which is why there are four: a ClickHouse that
+**rejects** every insert loses every row while `rows_dropped` stays at zero,
+because the buffer keeps draining normally into a sink that throws the batch away.
+`flush_errors` is the only signal separating "we are overloaded" from "the sink is
+broken", and those need opposite responses.
+
+**The table** is `llmguard_usage` in the `default` database, defined once in
+[`internal/gateway/schema.sql`](internal/gateway/schema.sql) — the same file
+compose mounts into the image's init directory and `go:embed` compiles into the
+binary, so the two can never drift. It is append-only, `MergeTree`, partitioned
+monthly and expired by a 90-day TTL.
+
+> Two ClickHouse-image quirks the schema shape is dictated by, worth knowing
+> before editing it:
+>
+> - The image runs `/docker-entrypoint-initdb.d/*.sql` **only when the data
+>   directory is empty**. A developer with a pre-existing volume would never get
+>   the table, which is why the writer also runs the same DDL at startup
+>   (`IF NOT EXISTS`, so it is free).
+> - The entrypoint builds its `clickhouse-client` **without `--database`**, so
+>   init scripts always run against `default` no matter what `CLICKHOUSE_DB` says.
+>   That is why the table is `llmguard_usage` in `default` rather than `usage` in a
+>   dedicated database: the prefix buys the same namespacing without a wrapper
+>   shell script mounted beside the SQL.
+
+```bash
+docker compose exec la-clickhouse clickhouse-client --query "DESCRIBE llmguard_usage"
+```
+
+Cost calculation and the per-request emission are **not** here — the table is
+populated starting in ROADMAP Issue 4.2.
+
 ### Auth
 
 Each `type` authenticates differently, and the config never holds the secret
@@ -280,11 +358,14 @@ compose is the only supported build path.
 | `internal/gateway/breakershare.go` | Propagates a breaker trip to other replicas via Redis |
 | `internal/gateway/dedup.go` | In-flight de-duplication (singleflight) |
 | `internal/gateway/metrics.go` | Prometheus collectors |
+| `internal/gateway/usagelog.go` | Bounded, fire-and-forget batched writer for the ClickHouse usage log |
+| `internal/gateway/schema.sql` | The `llmguard_usage` table — embedded in the binary *and* mounted as ClickHouse's init script |
 | `provider/` | What every adapter shares: normalized schema, `Provider` interface + registry, error vocabulary |
 | `provider/openai/` | The **generic** adapter — every OpenAI-compatible upstream, config-only |
 | `provider/vertex/` | The **native** adapter for Vertex AI `generateContent` (+ golden fixtures) |
 | `mockupstream/` | Deterministic fake provider used by every test (and the benchmark) |
 | `internal/testutil/redis.go` | Live-Redis gate for the Lua token-bucket tests |
+| `internal/testutil/clickhouse.go` | Live-ClickHouse gate for the usage round-trip test (isolated `llmguard_test` database) |
 | `internal/testutil/polling.go` | `Eventually` — waits on state that settles asynchronously |
 | `internal/testutil/metrics.go` | Prometheus readers, so tests can assert on instrumentation |
 
