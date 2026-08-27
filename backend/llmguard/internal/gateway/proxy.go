@@ -16,7 +16,6 @@ import (
 	"sync/atomic"
 	"time"
 
-
 	"documedai/llmguard/provider"
 )
 
@@ -248,6 +247,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// cfg.Provider. Once routing is config-driven those differ, and labelling with
 	// the configured default would silently attribute traffic to the wrong upstream.
 	provName := prov.Name()
+	// The pair is the unit the limiter budgets and the breaker keys on, so it is
+	// built once here rather than reassembled at each of those call sites.
+	route := provider.Route{Provider: provName, Model: model}
 
 	// --- Admission control (concurrency ceiling) ---
 	//
@@ -297,8 +299,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// per-caller bucket would be fairness between tenants — a different job, and
 	// one this gateway has no authenticated tenant to do it for.
 	_, waitSpan := startRateLimitWait(r.Context(), provName, model)
-	granted := p.limiter.Acquire(
-		r.Context(), provider.Route{Provider: provName, Model: model}, p.cfg.RateWaitMax)
+	granted := p.limiter.Acquire(r.Context(), route, p.cfg.RateWaitMax)
 	endRateLimitWait(waitSpan, granted)
 	if !granted {
 		p.metrics.rateLimited.WithLabelValues(provName, model).Inc()
@@ -322,7 +323,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// unavailable, which is a different claim from the 429s above. The local
 	// breaker remains the authority on recovery, so this never blocks a half-open
 	// probe from running once the flag lapses.
-	if p.breakers.openElsewhere(r.Context(), provName) {
+	if p.breakers.openElsewhere(r.Context(), route) {
 		// Separates "another replica found this provider down" from the local
 		// breaker's identical 503 below — the difference between acting on someone
 		// else's evidence and on our own.
@@ -351,9 +352,10 @@ func (p *Proxy) serveBuffered(
 	seed := requestSeed(rawBody)
 
 	// The breaker wraps the WHOLE retry loop: a tripped breaker should stop us
-	// before we even start retrying. It is this provider's breaker, so a failing
-	// upstream does not shed traffic bound for a healthy one.
-	v, err := p.breakers.get(provName).Execute(func() (interface{}, error) {
+	// before we even start retrying. It is this ROUTE's breaker, so one failing
+	// model does not shed traffic bound for a healthy one on the same upstream.
+	breaker := p.breakers.get(provider.Route{Provider: provName, Model: req.Model})
+	v, err := breaker.Execute(func() (interface{}, error) {
 		return doWithRetry(r.Context(), p.cfg, seed,
 			func(ctx context.Context, attempt int) (*upstreamResult, error) {
 				// One child span per attempt. The retry loop knows the attempt
@@ -507,7 +509,8 @@ func (p *Proxy) serveStreaming(
 	// and everything already flushed belongs to the client, so a failure can only
 	// be APPENDED to the stream — never rewritten as an error envelope.
 	var wroteHeader bool
-	_, err := p.breakers.get(provName).Execute(func() (interface{}, error) {
+	breaker := p.breakers.get(provider.Route{Provider: provName, Model: req.Model})
+	_, err := breaker.Execute(func() (interface{}, error) {
 		httpReq, berr := prov.BuildRequest(streamCtx, req)
 		if berr != nil {
 			return nil, berr

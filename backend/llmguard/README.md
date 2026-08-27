@@ -8,7 +8,7 @@ client (base_url=…)  →  la-llmguard :8081  →  provider adapter  →  Verte
                          ├ admission control (in-flight ceiling, sheds 429)
                          ├ rate limit (Redis token bucket)
                          ├ retry + backoff (honors Retry-After)
-                         ├ circuit breaker (one per provider, shared across replicas)
+                         ├ circuit breaker (one per route, shared across replicas)
                          └ Prometheus /metrics
 ```
 
@@ -314,7 +314,7 @@ compose is the only supported build path.
 | `internal/gateway/admission.go` | In-flight ceiling (counting semaphore) + shedding |
 | `internal/gateway/ratelimit.go` | Redis token bucket (atomic Lua) |
 | `internal/gateway/tracing.go` | Tracer provider setup + span/attribute vocabulary |
-| `internal/gateway/retry.go` | Backoff + jitter + Retry-After + per-provider circuit breakers |
+| `internal/gateway/retry.go` | Backoff + jitter + Retry-After + per-route circuit breakers |
 | `internal/gateway/breakershare.go` | Propagates a breaker trip to other replicas via Redis |
 | `internal/gateway/metrics.go` | Prometheus collectors |
 | `provider/` | What every adapter shares: normalized schema, `Provider` interface + registry, error vocabulary |

@@ -179,8 +179,16 @@ the gateway is full. It sits before the rate limiter (which can block for `RateW
 `llmguard_rate_limited_total`: both are 429s, but one is a caller over quota and the other an operator
 capacity problem.
 
+**The breaker keys on the route, and 429 does not trip it.** Both were per provider and
+`isRetryable`, and both were wrong for the same reason: they conflated "this upstream is sick" with
+something narrower. One bad model took every healthy model on that upstream with it, and a spent
+quota opened a circuit that then found the quota still spent — a self-inflicted outage the breaker
+could not probe its way out of. So `tripsBreaker` is 5xx-and-transport-only (`isRetryable` still
+retries 429), and `llmguard_circuit_state` carries `provider` **and** `model`. Quota is the rate
+limiter's job, budgeted per route in `config.yaml`.
+
 **Breaker state is cross-replica.** `breakershare.go` publishes
-`llmguard:breaker:open:<provider>` (TTL `CIRCUIT_OPEN_FOR`) when a local breaker opens, so N replicas
+`llmguard:breaker:open:<provider>:<model>` (TTL `CIRCUIT_OPEN_FOR`) when a local breaker opens, so N replicas
 don't each burn `CIRCUIT_MIN_REQUESTS` failures learning the same outage. What crosses is the **trip
 signal, not the counters** — sharing counters would put Redis on every request's hot path. Only the
 **positive** reading is cached: caching "healthy" would delay a replica's entry into an outage, which

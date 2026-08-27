@@ -66,7 +66,7 @@ func TestCircuitBreakerTrips(t *testing.T) {
 		t.Errorf("upstream hits = %d, want %d — an open breaker must not dispatch",
 			got, hitsBeforeTrip)
 	}
-	if got := testutil.LabeledGaugeValue(t, h.metrics.circuitState, "mock"); got != 2 {
+	if got := testutil.LabeledGaugeValue(t, h.metrics.circuitState, "mock", "gemini-2.5-flash"); got != 2 {
 		t.Errorf("circuitState gauge = %v, want 2 (open)", got)
 	}
 }
@@ -130,7 +130,7 @@ func TestCircuitBreakerRecovers(t *testing.T) {
 		t.Fatalf("status after trip = %d, want 503 — the breaker must be open before "+
 			"recovery means anything", rec.Code)
 	}
-	if got := testutil.LabeledGaugeValue(t, h.metrics.circuitState, "mock"); got != 2 {
+	if got := testutil.LabeledGaugeValue(t, h.metrics.circuitState, "mock", "gemini-2.5-flash"); got != 2 {
 		t.Fatalf("circuitState gauge = %v, want 2 (open)", got)
 	}
 
@@ -156,7 +156,7 @@ func TestCircuitBreakerRecovers(t *testing.T) {
 	}, "the breaker never closed after CircuitOpenFor elapsed with a healthy upstream")
 
 	// --- The gauge alone does not prove traffic flows; check the response ---
-	if got := testutil.LabeledGaugeValue(t, h.metrics.circuitState, "mock"); got != 0 {
+	if got := testutil.LabeledGaugeValue(t, h.metrics.circuitState, "mock", "gemini-2.5-flash"); got != 0 {
 		t.Errorf("circuitState gauge = %v, want 0 (closed) after a successful probe", got)
 	}
 	if got := decodeChat(t, recovered); len(got.Choices) == 0 || got.Choices[0].Message.Content == "" {
@@ -205,7 +205,7 @@ func TestCircuitBreakerIgnoresClientErrors(t *testing.T) {
 
 	// Closed throughout: 0 is the gauge's initial value and its closed value,
 	// so the load-bearing assertion is that it never became 2 (open).
-	if got := testutil.LabeledGaugeValue(t, h.metrics.circuitState, "mock"); got == 2 {
+	if got := testutil.LabeledGaugeValue(t, h.metrics.circuitState, "mock", "gemini-2.5-flash"); got == 2 {
 		t.Errorf("circuitState gauge = %v — %d client errors must not open the breaker",
 			got, requests)
 	}
@@ -282,10 +282,92 @@ func TestCircuitBreakerIsolatesProviders(t *testing.T) {
 	}
 
 	// And the gauges disagree, which an unlabelled gauge could not express.
-	if got := testutil.LabeledGaugeValue(t, h.metrics.circuitState, "mock"); got != 2 {
+	if got := testutil.LabeledGaugeValue(t, h.metrics.circuitState, "mock", "gemini-2.5-flash"); got != 2 {
 		t.Errorf("circuitState{provider=\"mock\"} = %v, want 2 (open)", got)
 	}
-	if got := testutil.LabeledGaugeValue(t, h.metrics.circuitState, "healthy"); got != 0 {
+	if got := testutil.LabeledGaugeValue(t, h.metrics.circuitState, "healthy", "gemini-2.5-flash"); got != 0 {
 		t.Errorf("circuitState{provider=\"healthy\"} = %v, want 0 (closed)", got)
+	}
+}
+
+// Sustained upstream 429s do NOT open the breaker.
+//
+// Contract test: the trip rule used to be isRetryable, so 429 both retried and
+// tripped. Quota exhaustion is not ill health — opening on it fails fast for
+// CircuitOpenFor, then finds the quota still spent, so the breaker cannot recover
+// on its own evidence. Retry still applies; only the trip rule changed.
+func TestCircuitBreakerIgnoresUpstreamRateLimits(t *testing.T) {
+	const requests = 15 // past CircuitMinReqs=10
+
+	cfg := realDefaults()
+	cfg.RetryBaseDly = time.Millisecond // timing only
+	cfg.RetryMaxDly = 5 * time.Millisecond
+
+	mcfg := mockupstream.DefaultConfig()
+	mcfg.ErrorRate = 1.0
+	mcfg.ErrorStatus = http.StatusTooManyRequests
+	h := newHarness(t, cfg, mcfg, nil)
+
+	for i := 1; i <= requests; i++ {
+		rec := h.do(t, chatBody("gemini-2.5-flash", fmt.Sprintf("quota %d", i), false), nil)
+		// The vendor's own 429 is surfaced, never converted to the breaker's 503.
+		if rec.Code != http.StatusTooManyRequests {
+			t.Fatalf("request %d: status = %d, want 429", i, rec.Code)
+		}
+	}
+
+	if got := testutil.LabeledGaugeValue(
+		t, h.metrics.circuitState, "mock", "gemini-2.5-flash"); got == 2 {
+		t.Errorf("circuitState = %v — %d upstream 429s must not open the breaker",
+			got, requests)
+	}
+}
+
+// One route's outage does not shed another route on the SAME provider.
+//
+// Contract test: the breaker was keyed on the provider, so a single sick model
+// took every model on that upstream with it. Both routes here share provider
+// "mock" and differ only by model, which is the case a per-provider key cannot
+// express.
+func TestCircuitBreakerIsolatesRoutesOnOneProvider(t *testing.T) {
+	cfg := realDefaults()
+	cfg.RetryBaseDly = time.Millisecond
+	cfg.RetryMaxDly = 5 * time.Millisecond
+
+	mcfg := mockupstream.DefaultConfig()
+	mcfg.ErrorRate = 1.0
+	mcfg.ErrorStatus = http.StatusInternalServerError
+	h := newHarness(t, cfg, mcfg, nil)
+
+	// A second route on the same provider. The upstream fails for both; only the
+	// first one's breaker is driven to trip.
+	provider.SetRoutes([]provider.Route{
+		{Provider: "mock", Model: "gemini-2.5-flash"},
+		{Provider: "mock", Model: "gemini-2.5-pro"},
+	})
+
+	for i := 1; i <= 10; i++ {
+		if rec := h.do(t, chatBody("gemini-2.5-flash", fmt.Sprintf("sick %d", i), false), nil); rec.Code != http.StatusInternalServerError {
+			t.Fatalf("request %d: status = %d, want 500", i, rec.Code)
+		}
+	}
+	if rec := h.do(t, chatBody("gemini-2.5-flash", "one more", false), nil); rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 — the flash route's breaker must be open", rec.Code)
+	}
+
+	// The other model on the same upstream still dispatches: it reaches the
+	// upstream and surfaces its 500, rather than being shed with the 503 above.
+	if rec := h.do(t, chatBody("gemini-2.5-pro", "untouched", false), nil); rec.Code != http.StatusInternalServerError {
+		t.Errorf("pro route status = %d, want 500 — one model's open breaker must not "+
+			"shed another model on the same provider", rec.Code)
+	}
+
+	if got := testutil.LabeledGaugeValue(
+		t, h.metrics.circuitState, "mock", "gemini-2.5-flash"); got != 2 {
+		t.Errorf("circuitState{model=\"gemini-2.5-flash\"} = %v, want 2 (open)", got)
+	}
+	if got := testutil.LabeledGaugeValue(
+		t, h.metrics.circuitState, "mock", "gemini-2.5-pro"); got == 2 {
+		t.Errorf("circuitState{model=\"gemini-2.5-pro\"} = %v, want != 2", got)
 	}
 }
