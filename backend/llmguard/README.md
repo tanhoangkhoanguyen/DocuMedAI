@@ -341,6 +341,7 @@ compose is the only supported build path.
 | `internal/gateway/ratelimit.go` | Redis token bucket (atomic Lua) |
 | `internal/gateway/tracing.go` | Tracer provider setup + span/attribute vocabulary |
 | `observability/alerts.yml` | Prometheus alert rules for the six kept metrics |
+| `bench/load.js` | Open-loop k6 driver (fixed arrival rate, no coordinated omission) |
 | `internal/gateway/retry.go` | Backoff + jitter + Retry-After + per-route circuit breakers |
 | `internal/gateway/breakershare.go` | Propagates a breaker trip to other replicas via Redis |
 | `internal/gateway/metrics.go` | Prometheus collectors |

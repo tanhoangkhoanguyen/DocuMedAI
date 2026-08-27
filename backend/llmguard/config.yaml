@@ -67,8 +67,13 @@ providers:
 # same model through a second upstream draws on that upstream's quota. A route
 # without one falls back to RATE_LIMIT_RPM / RATE_LIMIT_BURST, which is all a
 # single-upstream deployment needs to say. Take the numbers from the vendor's quota
-# page — guessing high means the provider answers 429, which retry treats as
-# transient and amplifies.
+# page where there is one — guessing high means the provider answers 429, which
+# retry treats as transient and amplifies.
+#
+# Vertex is the exception: pay-as-you-go uses dynamic shared quota and publishes no
+# per-minute request limit, so the number below is not a vendor figure. It is a
+# self-imposed ceiling, and the only way to a defensible one is to measure the
+# throughput this project actually needs.
 model_list:
   - model_name: gemini-2.5-flash
     provider: vertex
