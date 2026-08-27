@@ -765,6 +765,20 @@ fixed-QPS, coordinated-omission-aware latency measured from scheduled send time.
   - **E. Feature cost:** overhead delta with rate-limit/tracing on vs off. Tracing is the one
     that matters here: the SDK is installed only when the endpoint is set, so off is a genuine
     no-op and the delta is the real cost of exporting 100% of spans.
+  - **F. Calibrate the load balancer.** `nginx/nginx.conf` carries four numbers that were taken
+    as defaults rather than derived, and this is the arm that produces the evidence to set them.
+    Two are only meaningful once `worker_processes` is decided, because `keepalive` and
+    `worker_connections` are **per worker** and nginx defaults to one worker per CPU — so on an
+    8-core host the pool is really 8 x `keepalive`:
+    - `worker_processes` — unset today. Pin it, so the two below mean what they say.
+    - `keepalive 32` — needs to exceed steady-state concurrency per replica, which scenario D
+      measures.
+    - `worker_connections 1024` — each SSE stream holds two connections here (client +
+      upstream), so this is ~512 concurrent streams per worker. Compare against
+      `MAX_IN_FLIGHT` x replica count once D has calibrated the ceiling.
+    - `fail_timeout=10s` against `CIRCUIT_OPEN_FOR=20s` — nginx re-admits traffic to a replica
+      whose own breaker is still open. Decide whether the two windows should match, or whether
+      the earlier probe is wanted; either way it should be a decision.
   - Generate 3–4 charts from the per-run JSON. Latency figures come from the trace store
     (`quantileExact`), not from a histogram — see Phase 4 for why bucket bounds cannot resolve
     the differences these arms are measuring.
@@ -772,6 +786,9 @@ fixed-QPS, coordinated-omission-aware latency measured from scheduled send time.
   - Each scenario yields a reproducible number/chart.
   - README top shows: overhead-vs-direct/LiteLLM, success-under-fault, latency-through-outage, throughput.
   - The north-star story sentence is filled in with real measured numbers.
+  - Every nginx value in **F** is either changed with a measurement behind it or left alone with
+    a comment saying which measurement says it is fine. A default that survives on purpose is a
+    decision; one that survives because nobody looked is not.
 
 ---
 

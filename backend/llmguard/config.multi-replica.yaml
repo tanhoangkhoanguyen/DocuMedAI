@@ -24,6 +24,3 @@ model_list:
   # against one stack works against the other by changing "provider" alone.
   - model_name: gemini-2.5-flash
     provider: mock
-    pricing:
-      input_per_1k: 0.000075
-      output_per_1k: 0.0003

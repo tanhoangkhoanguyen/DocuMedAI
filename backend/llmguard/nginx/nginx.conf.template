@@ -1,9 +1,21 @@
 # nginx in front of N LLMGuard replicas — the `multi-replica` compose profile.
 # Proves the gateway is stateless: shared state (rate-limit bucket, breaker
 # flag) lives in Redis, not here.
+#
+# A .template, not a .conf: the nginx image runs envsubst over /etc/nginx/templates
+# at startup, so the tuning knobs below come from the environment like every other
+# service's do. Defaults live in docker-compose.yml, overridable from .env.
+#
+# NONE of the four values below is measured. `keepalive` and `worker_connections`
+# are per WORKER, so they only mean what they say because worker_processes is
+# pinned; and fail_timeout is nginx's default rather than a match for the
+# gateway's CIRCUIT_OPEN_FOR. Benchmark scenario F calibrates all four.
+worker_processes ${NGINX_WORKER_PROCESSES};
 
 events {
-    worker_connections 1024;
+    # Each SSE stream holds two connections here (client + upstream), so this is
+    # ~half as many concurrent streams.
+    worker_connections ${NGINX_WORKER_CONNECTIONS};
 }
 
 http {
@@ -21,12 +33,13 @@ http {
         # statelessness this profile exists to demonstrate.
         least_conn;
 
-        server la-llmguard-replica:8081 max_fails=3 fail_timeout=10s;
+        server la-llmguard-replica:8081
+            max_fails=${NGINX_MAX_FAILS} fail_timeout=${NGINX_FAIL_TIMEOUT};
 
         # Must stay under the gateway's SERVER_IDLE_TIMEOUT (120s), or the
         # server closes a pooled connection first and nginx sends a request
         # into a dying socket — a rare, confusing 502.
-        keepalive 32;
+        keepalive ${NGINX_KEEPALIVE};
         keepalive_timeout 60s;
     }
 

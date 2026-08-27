@@ -31,7 +31,7 @@ from vector_database_tests.utils.qdrant_client import get_qdrant_client
 from toolcore.core import get_mcp_client
 from utils.rag import get_rag_client
 from utils.pattern_cipher import get_pattern_cipher
-from utils.llm_config import get_vertex_project, get_vertex_location  # Vertex AI config
+from utils.llm_config import get_vertex_project, get_vertex_location, build_chat_model  # Vertex AI config
 
 
 LONGTERM_COLLECTION = "LongtermMemory"
@@ -48,12 +48,11 @@ class TopicChecker(Runnable):
             reranking_model: str,
             reranking_threshold: float,
         ):
-        self.__llm = ChatVertexAI(
-                model = chat_model,
-                temperature = temperature,
-                project = get_vertex_project(),
-                location = get_vertex_location(),
-            )
+        # Routed through LLMGuard when LLM_GATEWAY_URL is set, so this node's
+        # summarisation gets the gateway's retry and circuit breaking. It is the
+        # only node eligible: the others call with_structured_output, which
+        # LangChain implements with tool calling and LLMGuard refuses with a 400.
+        self.__llm = build_chat_model(chat_model, temperature)
         self.__rag_client = get_rag_client(
             chat_model = chat_model,
             temperature = temperature,
