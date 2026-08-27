@@ -255,6 +255,32 @@ A shortfall means spans were dropped; raise `send_batch_size` / the sending queu
 `otel-collector.yaml`. Those values are deliberately left at their defaults until a real benchmark
 says what the load is — guessing now would just be a different wrong number.
 
+### Alerts
+
+`observability/alerts.yml` turns the six kept metrics into rules, mounted into
+Prometheus by the `observability` profile. There is no Alertmanager here, so a firing
+alert shows on `http://localhost:9090/alerts` rather than paging anyone.
+
+One rule per signal nothing else can report:
+
+| Alert | Why a rule and not a dashboard |
+|-------|-------------------------------|
+| `LLMGuardCircuitOpen` | An open breaker is the ABSENCE of requests — no counter moves while it holds |
+| `LLMGuardShedding` | Shares its 429 with quota refusals; only `shed_total` says the gateway is full |
+| `LLMGuardInFlightHigh` | The one signal that predicts shedding *before* `shed_total` moves |
+| `LLMGuardRateLimitingSustained` | Brief refusals are normal; ten minutes means a misconfigured budget |
+| `LLMGuardStreamAbsoluteMaxHit` | Fires only once both inactivity bounds failed — a bug report, not a metric |
+| `LLMGuardErrorRateHigh` | 5xx as a share of traffic, which no single counter expresses |
+
+Thresholds are starting points. `in_flight > 179` is 70% of the default
+`MAX_IN_FLIGHT=256` and is hardcoded because the ceiling is an env var, not a metric —
+re-derive it if the ceiling is retuned.
+
+**Prometheus scrapes replicas directly**, via Compose DNS (`dns_sd_configs`), not through
+nginx: each replica keeps its own registry, so a proxied scrape round-robins and returns a
+different replica's counters each time. The `instance` label separates them, which matters
+because `in_flight` is per process and must never be summed across replicas.
+
 ### Auth
 
 Each `type` authenticates differently, and the config never holds the secret
@@ -314,6 +340,7 @@ compose is the only supported build path.
 | `internal/gateway/admission.go` | In-flight ceiling (counting semaphore) + shedding |
 | `internal/gateway/ratelimit.go` | Redis token bucket (atomic Lua) |
 | `internal/gateway/tracing.go` | Tracer provider setup + span/attribute vocabulary |
+| `observability/alerts.yml` | Prometheus alert rules for the six kept metrics |
 | `internal/gateway/retry.go` | Backoff + jitter + Retry-After + per-route circuit breakers |
 | `internal/gateway/breakershare.go` | Propagates a breaker trip to other replicas via Redis |
 | `internal/gateway/metrics.go` | Prometheus collectors |

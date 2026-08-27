@@ -393,6 +393,9 @@ services:
       - "--config.file=/etc/prometheus/prometheus.yml"
     volumes:
       - ./backend/mcp_server/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      # Alert rules live with the service they describe, not with the scrape
+      # config, so editing LLMGuard's alerts does not touch the MCP server's.
+      - ./backend/llmguard/observability/alerts.yml:/etc/prometheus/alerts.yml:ro
     ports:
       - "9090:9090"
     networks:
