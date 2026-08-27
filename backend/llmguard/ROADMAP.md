@@ -10,7 +10,7 @@
 > **Phase 1 is now complete.** `make test` / `make lint` run in CI on every PR touching
 > `backend/llmguard/**`; `mockupstream/` exists with its own tests pinning the determinism
 > Phase 6 depends on; and the proxy pipeline has characterization tests sitting beside
-> the code they exercise (`retry_test.go`, `dedup_test.go`, `proxy_*_test.go`, …). See
+> the code they exercise (`retry_test.go`, `proxy_*_test.go`, …). See
 > **Findings** below for what those tests turned up.
 
 This is the single roadmap for `llmguard`. It has two parts:
@@ -24,7 +24,7 @@ This is the single roadmap for `llmguard`. It has two parts:
 
 **North-star story (what the finished project claims)**
 > "Reliability-first LLM gateway (Go): OpenAI-compatible multi-provider API with circuit breaking,
-> provider-aware retries, and cross-replica dedup. Open-loop, coordinated-omission-aware benchmark
+> provider-aware retries, and cross-replica breaker state. Open-loop, coordinated-omission-aware benchmark
 > proves < N ms p99 overhead and 99%+ client success under 20% upstream fault injection (vs ~80%
 > direct), validated head-to-head against LiteLLM."
 
@@ -247,6 +247,10 @@ If you can't build and run it, you can't verify anything. Do this first.
   from a hash instead of a random number.
 
 ### Issue C.6 — `proxy.go` buffered path: dedup → breaker → retry → forward
+> **PARTLY REMOVED.** The dedup layer is gone (see Issue C.3), so the real nesting is now
+> `breaker.Execute( doWithRetry( forwardBuffered ))` and there is no `shared` flag and no
+> `dedupHits` counter. Everything else in this issue still describes the tree — read the
+> dedup half as history.
 - **Goal:** see how C.2–C.5 compose into the real non-streaming request.
 - **What to check:**
   - `serveBuffered` (`proxy.go:96-130`) — the nesting: `deduper.Do( breaker.Execute( doWithRetry( forwardBuffered )))`.
@@ -376,7 +380,7 @@ is why they are written down rather than assumed.
 
 Once every Phase-0 issue's "Done when" is checked, you can explain the whole proxy to someone else —
 that is the gate to building. Phases 1–6 below extend it (multi-provider, OpenTelemetry, ClickHouse,
-cross-replica dedup, benchmark). From here, each issue uses **Goal / What to do / AC**.
+cross-replica breaker state, benchmark). From here, each issue uses **Goal / What to do / AC**.
 
 ---
 
@@ -426,8 +430,7 @@ cannot *understand* whether a change broke behavior. This phase changes no runti
 - **What to do:**
   - Point the existing proxy at the mock upstream (via `OPENAI_UPSTREAM_BASE`).
   - Write table tests covering: happy-path buffered, happy-path stream, 429 rate-limit shedding,
-    retry-then-succeed, circuit-breaker trip under sustained 5xx, dedup coalescing of identical
-    concurrent requests, usage-token extraction.
+    retry-then-succeed, circuit-breaker trip under sustained 5xx, usage-token extraction.
 - **AC:**
   - All behaviors above have a passing test.
   - Tests run against the mock only (no network, no keys).
@@ -608,9 +611,9 @@ here computes money.
 
 **Why:** two separate gaps, both about the gateway holding up rather than the upstream.
 
-*Across replicas:* dedup is in-process `singleflight` (`dedup.go`) and the circuit breaker is
-per-process (`retry.go`) — both **wrong at N replicas**. Making the gateway stateless and correct at N
-is the production-readiness milestone. Issues 5.1 and 5.1b.
+*Across replicas:* the circuit breaker is per-process (`retry.go`), which is **wrong at N
+replicas**. Making the gateway stateless and correct at N is the production-readiness milestone.
+Issue 5.1b. (Issue 5.1, cross-replica dedup, is WON'T DO — in-process dedup was removed instead.)
 
 *Within one replica:* retry and the breaker protect the upstream **from** LLMGuard; nothing
 protects LLMGuard from its callers. Concurrency, not arrival rate, is what maps to memory, and
@@ -632,7 +635,7 @@ nothing bounds it — so the gateway is currently a candidate for being the outa
   - Redis down → both still succeed independently (fail-open), asserted by a test.
 
 ### Issue 5.1b — Cross-replica circuit-breaker state
-- **Why:** dedup is not the only per-process state. The breaker in `retry.go` is per replica, so at
+- **Why:** the breaker in `retry.go` is per-process state. It is per replica, so at
   N replicas an upstream absorbs **N × `CircuitMinReqs`** doomed requests before anything trips, and
   a replica restarted mid-outage begins from a clean slate and hammers a provider the others already
   know is down. Both defeat the point of having a breaker.
@@ -659,7 +662,7 @@ nothing bounds it — so the gateway is currently a candidate for being the outa
   - The flag expires on its own, so a crashed replica cannot pin the others open.
 
 ### Issue 5.3 — Admission control & backpressure
-- **Why:** every existing protection (retry, breaker, dedup) shields the **upstream** from LLMGuard.
+- **Why:** every existing protection (retry, breaker) shields the **upstream** from LLMGuard.
   Nothing shields **LLMGuard from its own callers**. The rate limiter looks like it should, but it
   bounds the arrival *rate* (RPM), not the number of requests running concurrently — and those
   diverge exactly when it matters. At 480 RPM with 20s calls, ~160 are legitimately in flight; if

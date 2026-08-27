@@ -1,0 +1,29 @@
+# LLMGuard allowlist — MULTI-REPLICA PROFILE ONLY.
+#
+# Separate from config.yaml, which routes to Vertex and needs real GCP ADC. This
+# one routes to the in-stack mock, so the profile runs on any machine with no
+# cloud project and no spend. Mounted over /config.yaml in la-llmguard-replica;
+# the default la-llmguard service still uses config.yaml.
+
+version: 1
+
+providers:
+  # The mock speaks the OpenAI wire format, so the generic openai-compat adapter
+  # reaches it by configuration alone — the same path a real OpenRouter or vLLM
+  # upstream takes. base_url omits /chat/completions; the adapter appends it.
+  - name: mock
+    type: openai-compat
+    base_url: http://la-mockupstream:8090/v1
+    # An env var NAME, and it must be SET: LLMGuard treats a declared-but-empty
+    # key as the same outage as a wrong one and refuses to start. The replica
+    # service wires MOCK_API_KEY=dummy for this.
+    api_key_env: MOCK_API_KEY
+
+model_list:
+  # Same model name as the production allowlist, so a request body written
+  # against one stack works against the other by changing "provider" alone.
+  - model_name: gemini-2.5-flash
+    provider: mock
+    pricing:
+      input_per_1k: 0.000075
+      output_per_1k: 0.0003
