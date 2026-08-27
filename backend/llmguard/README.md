@@ -424,12 +424,12 @@ time-to-first-token silently becomes full completion latency.
 
 ### Proving a replica can die
 
-`bench/killreplica` opens 12 concurrent SSE streams against a 3-replica stack,
+`cmd/killreplica` opens 12 concurrent SSE streams against a 3-replica stack,
 SIGKILLs one replica mid-delivery, and asserts what the fleet did:
 
 ```bash
-go run ./bench/killreplica              # enforce the threshold
-go run ./bench/killreplica -threshold 0 # measure only, never fail
+go run ./cmd/killreplica              # enforce the threshold
+go run ./cmd/killreplica -threshold 0 # measure only, never fail
 ```
 
 Streams pinned to the dying replica **do** drop: nginx can retry only before it has
