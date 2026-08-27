@@ -137,9 +137,10 @@ func runStream(ctx context.Context, client *http.Client, url, prompt string) str
 		return res
 	}
 	req.Header.Set("Content-Type", "application/json")
-	// A per-stream bearer so one bucket does not throttle the whole run:
-	// apiKeyHint keys the rate limiter on the last 6 characters of the token.
-	req.Header.Set("Authorization", "Bearer sk-killreplica-"+prompt)
+	// No Authorization header: the rate-limit bucket is keyed on the route, so a
+	// per-stream token would not give each stream its own budget. Every stream here
+	// shares one bucket by design, which is why the profile's route leaves
+	// rate_limit undeclared and takes the generous RATE_LIMIT_BURST default.
 
 	resp, err := client.Do(req)
 	if err != nil {

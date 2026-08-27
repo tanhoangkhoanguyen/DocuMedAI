@@ -21,6 +21,8 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+
+	"documedai/llmguard/provider"
 )
 
 // LoadConfig reads the environment and applies production defaults.
@@ -56,8 +58,13 @@ func SetupTracing(ctx context.Context, cfg Config) (func(context.Context) error,
 }
 
 // NewRateLimiter builds the Redis-backed token bucket shared across replicas.
-func NewRateLimiter(rdb *redis.Client, rpm, burst int) *RateLimiter {
-	return newRateLimiter(rdb, rpm, burst)
+//
+// limits carries each route's own budget from config.yaml; rpm/burst are the
+// fallback for routes that declare none. Pass mc.Limits() for it.
+func NewRateLimiter(
+	rdb *redis.Client, rpm, burst int, limits map[provider.Route]RouteLimit,
+) *RateLimiter {
+	return newRateLimiter(rdb, rpm, burst, limits)
 }
 
 // NewBreakerSharer builds the cross-replica circuit-breaker signal. It shares the

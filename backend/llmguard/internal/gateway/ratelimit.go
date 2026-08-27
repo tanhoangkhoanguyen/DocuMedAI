@@ -5,21 +5,40 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+
+	"documedai/llmguard/provider"
 )
 
 // RateLimiter is a distributed token bucket backed by Redis (diagram box 1).
 //
 // Why Redis and not an in-memory limiter: the bucket state must be shared if the
 // service is ever scaled to >1 replica, so every replica throttles against the
-// SAME provider quota. The bucket is keyed per (api-key + model) so a burst on
-// one model doesn't starve another.
+// SAME provider quota.
+//
+// The budget is per ROUTE, because that is what a quota is: a vendor publishes
+// one limit for vertex/gemini-2.5-flash and a different one for pro, and the same
+// model through a second upstream draws on that upstream's quota. Routes with no
+// declared limit fall back to the process-wide default, which is what a
+// single-upstream deployment wants and all the config file needs to say.
 //
 // The refill+take is done in a single Lua script so it is ATOMIC under
 // concurrency — no read-modify-write race between competing requests.
 type RateLimiter struct {
-	rdb   *redis.Client
-	rpm   int // sustained requests/min → refill rate
-	burst int // bucket capacity
+	rdb *redis.Client
+	// rpm/burst are the fallback for a route that declares no limit of its own.
+	rpm   int
+	burst int
+	// limits is read-only after construction, so it needs no lock: it is built
+	// once from config.yaml and the config is not reloaded.
+	limits map[provider.Route]RouteLimit
+}
+
+// forRoute resolves the budget a route is throttled against.
+func (r *RateLimiter) forRoute(route provider.Route) (rpm, burst int) {
+	if l, ok := r.limits[route]; ok {
+		return l.RPM, l.Burst
+	}
+	return r.rpm, r.burst
 }
 
 // tokenBucketScript implements lazy refill: instead of a background ticker we
@@ -57,22 +76,32 @@ redis.call("PEXPIRE", KEYS[1], 120000)
 return allowed
 `)
 
-func newRateLimiter(rdb *redis.Client, rpm, burst int) *RateLimiter {
-	return &RateLimiter{rdb: rdb, rpm: rpm, burst: burst}
+func newRateLimiter(
+	rdb *redis.Client, rpm, burst int, limits map[provider.Route]RouteLimit,
+) *RateLimiter {
+	return &RateLimiter{rdb: rdb, rpm: rpm, burst: burst, limits: limits}
 }
 
 // Acquire blocks until a token is available or maxWait elapses. Returns true if
 // a token was granted, false if we should reject the caller with 429.
 //
+// The route selects the budget AND scopes the bucket, so one route running hot
+// cannot spend another's quota. maxWait is the caller's patience, not part of the
+// budget.
+//
 // We poll with a short interval instead of a blocking pop because the token
 // bucket refills continuously — a brief wait usually succeeds and smooths bursts
 // rather than failing fast.
-func (r *RateLimiter) Acquire(ctx context.Context, key string, maxWait time.Duration) bool {
-	rate := float64(r.rpm) / 60.0 // tokens per second
+func (r *RateLimiter) Acquire(
+	ctx context.Context, route provider.Route, maxWait time.Duration,
+) bool {
+	rpm, burst := r.forRoute(route)
+	rate := float64(rpm) / 60.0 // tokens per second
+	key := route.Provider + ":" + route.Model
 	deadline := time.Now().Add(maxWait)
 
 	for {
-		ok, err := r.take(ctx, key, rate)
+		ok, err := r.take(ctx, key, rate, burst)
 		if err != nil {
 			// Fail OPEN: if Redis is unreachable we must not block all LLM
 			// traffic. Retry/circuit-breaker downstream still protect upstream.
@@ -110,11 +139,13 @@ func (r *RateLimiter) Acquire(ctx context.Context, key string, maxWait time.Dura
 	}
 }
 
-func (r *RateLimiter) take(ctx context.Context, key string, rate float64) (bool, error) {
+func (r *RateLimiter) take(
+	ctx context.Context, key string, rate float64, burst int,
+) (bool, error) {
 	now := float64(time.Now().UnixNano()) / 1e9
 	res, err := tokenBucketScript.Run(ctx, r.rdb,
 		[]string{"llmguard:bucket:" + key},
-		r.burst, rate, now,
+		burst, rate, now,
 	).Int()
 	if err != nil {
 		return false, err

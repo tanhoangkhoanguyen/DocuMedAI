@@ -292,9 +292,13 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// otherwise unattributable: it lands in the root span with no child to explain
 	// it. The span closes on BOTH paths — a granted token and a 429 — since one
 	// left open is never exported.
-	rlKey := apiKeyHint(r) + ":" + model
+	// Keyed on the ROUTE, not the caller: the bucket exists to protect the
+	// upstream's published quota, which is the sum of every caller's traffic. A
+	// per-caller bucket would be fairness between tenants — a different job, and
+	// one this gateway has no authenticated tenant to do it for.
 	_, waitSpan := startRateLimitWait(r.Context(), provName, model)
-	granted := p.limiter.Acquire(r.Context(), rlKey, p.cfg.RateWaitMax)
+	granted := p.limiter.Acquire(
+		r.Context(), provider.Route{Provider: provName, Model: model}, p.cfg.RateWaitMax)
 	endRateLimitWait(waitSpan, granted)
 	if !granted {
 		p.metrics.rateLimited.WithLabelValues(provName, model).Inc()
@@ -784,16 +788,13 @@ func (p *Proxy) writeError(
 
 // --- small helpers ---
 
-// apiKeyHint derives a short, non-secret bucket label from the caller's key so
-// rate-limit buckets are per-key without logging the key itself.
-func apiKeyHint(r *http.Request) string {
-	auth := r.Header.Get("Authorization")
-	auth = strings.TrimPrefix(auth, "Bearer ")
-	if len(auth) <= 8 {
-		return "anon"
-	}
-	return auth[len(auth)-6:] // last 6 chars — stable, low-collision, not the secret
-}
+// The rate-limit bucket used to carry a caller hint derived from the last six
+// characters of the bearer token. It is gone with the move to per-route budgets,
+// and deliberately not replaced: those six characters are caller-chosen, so they
+// identified nobody — a client could mint a fresh bucket, or spend another's, by
+// editing them. Fairness between callers needs an authenticated tenant, which
+// this gateway does not have. What the bucket protects instead is the upstream's
+// published quota, and that is a property of the route.
 
 func statusLabel(status int) string {
 	switch {

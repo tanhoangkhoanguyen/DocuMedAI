@@ -12,6 +12,7 @@ import (
 
 	"documedai/llmguard/internal/testutil"
 	"documedai/llmguard/mockupstream"
+	"documedai/llmguard/provider"
 )
 
 // Needs a real Redis: shedding requires a live token bucket that can return
@@ -30,7 +31,7 @@ func TestRateLimitShedding(t *testing.T) {
 
 	mcfg := mockupstream.DefaultConfig()
 	mcfg.CompletionTokens = 3
-	h := newHarness(t, cfg, mcfg, newRateLimiter(rdb, cfg.RateLimitRPM, cfg.RateLimitBurst))
+	h := newHarness(t, cfg, mcfg, newRateLimiter(rdb, cfg.RateLimitRPM, cfg.RateLimitBurst, nil))
 
 	// The bucket is keyed on (api-key hint + model); a unique key keeps this run
 	// independent of anything already in the DB.
@@ -85,20 +86,21 @@ func TestRateLimitAcquireRespectsWaitDeadline(t *testing.T) {
 		rpm     = 12                     // → 0.2 tokens/s → 1.25s poll interval
 		maxWait = 300 * time.Millisecond // deliberately shorter than one interval
 	)
-	limiter := newRateLimiter(rdb, rpm, 1)
+	limiter := newRateLimiter(rdb, rpm, 1, nil)
 
-	// A key unique to this run, so nothing already in the DB affects it.
-	key := "deadline-test:" + t.Name()
+	// A route unique to this run, so nothing already in the DB affects it. The
+	// bucket is keyed on provider+model, so varying the model is enough.
+	route := provider.Route{Provider: "deadline-test", Model: t.Name()}
 
 	// Drain the single token. The bucket starts full, so this must succeed.
-	if !limiter.Acquire(context.Background(), key, maxWait) {
+	if !limiter.Acquire(context.Background(), route, maxWait) {
 		t.Fatal("first Acquire returned false; the bucket starts full")
 	}
 
 	// The bucket is empty and refills at 0.2/s, so no token can appear within
 	// maxWait — this call is guaranteed to run out the clock.
 	began := time.Now()
-	granted := limiter.Acquire(context.Background(), key, maxWait)
+	granted := limiter.Acquire(context.Background(), route, maxWait)
 	elapsed := time.Since(began)
 
 	if granted {
@@ -119,9 +121,9 @@ func TestRateLimitAcquireRespectsWaitDeadline(t *testing.T) {
 //
 // This is the property that makes the limiter horizontally scalable: adding a
 // replica must not raise the effective rate. The bucket lives in Redis and the
-// key is derived entirely from request identity — apiKeyHint(r) + ":" + model in
-// proxy.go, with nothing replica-local in it — so two processes serving the same
-// caller and model address the same hash. This test pins that end to end rather
+// key is derived entirely from the route — provider + model, with nothing
+// replica-local in it — so two processes serving the same route address the same
+// hash. This test pins that end to end rather
 // than trusting it: if either limiter kept state of its own, or derived a
 // different key, every caller would find a full bucket and `allowed` would come
 // back at 2*burst.
@@ -155,13 +157,13 @@ func TestRateLimitSharedAcrossReplicas(t *testing.T) {
 		maxWait = 0
 	)
 
-	// Both limiters MUST pass this same string — one shared bucket is the entire
-	// point. t.Name() keeps it unique per run so nothing already in DB 15 can
-	// pollute the count.
-	key := "shared-replica-test:" + t.Name()
+	// Both limiters MUST pass this same route — one shared bucket is the entire
+	// point, and the route is what the bucket is keyed on. t.Name() keeps it
+	// unique per run so nothing already in DB 15 can pollute the count.
+	route := provider.Route{Provider: "shared-replica-test", Model: t.Name()}
 
-	replicaA := newRateLimiter(rdbA, rpm, burst)
-	replicaB := newRateLimiter(rdbB, rpm, burst)
+	replicaA := newRateLimiter(rdbA, rpm, burst, nil)
+	replicaB := newRateLimiter(rdbB, rpm, burst, nil)
 
 	// Twice the burst, so the bucket is guaranteed to run dry and the refused half
 	// is not an artifact of offering too little load.
@@ -190,7 +192,7 @@ func TestRateLimitSharedAcrossReplicas(t *testing.T) {
 			}
 			servedBy[i] = name
 			<-start
-			granted[i] = limiter.Acquire(context.Background(), key, maxWait)
+			granted[i] = limiter.Acquire(context.Background(), route, maxWait)
 		}()
 	}
 	close(start)
@@ -224,5 +226,64 @@ func TestRateLimitSharedAcrossReplicas(t *testing.T) {
 		t.Errorf("rejected = %d, want >= 1 — nothing was refused, so the limiter was "+
 			"not enforcing (a Redis error makes Acquire fail open and grant everyone)",
 			rejected)
+	}
+}
+
+// A route's own limit is used instead of the process default, and each route gets
+// its own bucket.
+//
+// Contract test, not characterization: per-route budgets are new, so there is no
+// prior behavior to preserve. Two claims, and the second is the one a shared
+// bucket would break — if the key ignored the provider, a burst on one route
+// would spend the other's quota and the second drain would come up short.
+func TestRateLimitPerRouteBudget(t *testing.T) {
+	rdb := testutil.RequireRedis(t)
+
+	// Deliberately different from the fallback below, so a limiter that ignored
+	// the declared limit would grant the wrong number and fail.
+	const (
+		routeBurst    = 3
+		fallbackBurst = 9
+		maxWait       = 0 // one attempt per call; never wait for a refill
+	)
+
+	// 6 RPM = 0.1 tokens/s, so nothing refills during the test and the counts are
+	// exact rather than a race against the clock.
+	declared := provider.Route{Provider: "per-route-a", Model: t.Name()}
+	other := provider.Route{Provider: "per-route-b", Model: t.Name()}
+	undeclared := provider.Route{Provider: "per-route-c", Model: t.Name()}
+
+	limiter := newRateLimiter(rdb, 6, fallbackBurst, map[provider.Route]RouteLimit{
+		declared: {RPM: 6, Burst: routeBurst},
+		other:    {RPM: 6, Burst: routeBurst},
+	})
+
+	drain := func(route provider.Route, attempts int) int {
+		granted := 0
+		for range attempts {
+			if limiter.Acquire(context.Background(), route, maxWait) {
+				granted++
+			}
+		}
+		return granted
+	}
+
+	// The declared budget wins over the fallback.
+	if got := drain(declared, fallbackBurst); got != routeBurst {
+		t.Errorf("declared route granted %d, want its own burst %d "+
+			"(the process fallback is %d)", got, routeBurst, fallbackBurst)
+	}
+
+	// A second route with the same budget is unaffected by the first running dry,
+	// which is what proves the bucket is keyed per route.
+	if got := drain(other, fallbackBurst); got != routeBurst {
+		t.Errorf("second route granted %d, want %d — a drained route must not "+
+			"spend another's quota", got, routeBurst)
+	}
+
+	// A route the config says nothing about falls back to the process default.
+	if got := drain(undeclared, fallbackBurst+1); got != fallbackBurst {
+		t.Errorf("undeclared route granted %d, want the fallback burst %d",
+			got, fallbackBurst)
 	}
 }
