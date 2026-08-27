@@ -457,8 +457,14 @@ func run(c config) error {
 	check(shortCompleted == 0,
 		"every surviving stream ran to full length (%d completed short, want 0)", shortCompleted)
 
-	// Only the victim's share of round-robin can be lost. More than that means the
+	// Only the victim's share of the fleet can be lost. More than that means the
 	// failure spread beyond the replica that died.
+	//
+	// The ceiling assumes an even split, which least_conn gives here because every
+	// stream is opened at once against idle replicas and the mock's latency is
+	// uniform. Under skewed load a replica can legitimately hold more than its
+	// even share, so this is a property of the harness's own traffic, not a claim
+	// about the balancer.
 	ceiling := (c.streams + len(ids) - 1) / len(ids)
 	check(dropped <= ceiling,
 		"drops confined to the victim's share (dropped=%d, ceiling=%d for %d streams over %d replicas)",

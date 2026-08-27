@@ -422,6 +422,12 @@ committed `config.yaml` is untouched. `nginx/nginx.conf` documents the three set
 that are not optional — `proxy_buffering off` above all, since without it
 time-to-first-token silently becomes full completion latency.
 
+Balancing is **least-conn**, not the round-robin default. An LLM request runs for
+seconds and its duration tracks the answer length, so counting requests spreads them
+evenly while leaving one replica holding the long ones — and because `MAX_IN_FLIGHT`
+is per process, that replica sheds with a 429 while its peers sit idle. Least-conn
+tracks the quantity the semaphore actually bounds.
+
 ### Proving a replica can die
 
 `cmd/killreplica` opens 12 concurrent SSE streams against a 3-replica stack,
