@@ -27,6 +27,12 @@ import { Trend, Rate } from "k6/metrics";
 const BASE_URL = __ENV.BASE_URL || "http://la-nginx:80";
 const PROVIDER = __ENV.PROVIDER || "mock";
 const MODEL = __ENV.MODEL || "gemini-2.5-flash";
+// vertex-direct = the no-proxy arm, Gemini native shape. A direct-to-MOCK arm
+// needs no mode: point BASE_URL at la-mockupstream:8090.
+const MODE = __ENV.MODE || "gateway";
+// Full :generateContent URL + OAuth token (gcloud auth print-access-token, ~1h).
+const VERTEX_URL = __ENV.VERTEX_URL || "";
+const VERTEX_TOKEN = __ENV.VERTEX_TOKEN || "";
 const QPS = Number(__ENV.QPS || 20);
 const DURATION = __ENV.DURATION || "30s";
 const STREAM = (__ENV.STREAM || "false") === "true";
@@ -41,6 +47,9 @@ const MAX_VUS = Number(__ENV.MAX_VUS || Math.max(50, QPS * 10));
 const served = new Trend("served_duration", true);
 const shed = new Rate("shed_rate");
 const upstreamErr = new Rate("upstream_error_rate");
+// TTFT through the proxy chain: first byte of a streamed reply. Buffered
+// replies arrive whole, so recorded only when STREAM=true.
+const ttft = new Trend("ttft", true);
 
 export const options = {
   scenarios: {
@@ -49,7 +58,8 @@ export const options = {
       rate: QPS,
       timeUnit: "1s",
       duration: DURATION,
-      preAllocatedVUs: Math.min(MAX_VUS, Math.max(10, QPS * 2)),
+      // All of it up front: spawning VUs mid-run is itself what drops iterations.
+      preAllocatedVUs: MAX_VUS,
       maxVUs: MAX_VUS,
     },
   },
@@ -72,18 +82,37 @@ const payload = (i) =>
     messages: [{ role: "user", content: `load ${i} ${__VU}` }],
   });
 
-export default function () {
-  const res = http.post(`${BASE_URL}/v1/chat/completions`, payload(__ITER), {
-    headers: { "Content-Type": "application/json" },
-    // Long enough not to cut a slow-but-healthy reply, since a client timeout
-    // would be recorded as a gateway failure.
-    timeout: "120s",
+const vertexPayload = (i) =>
+  JSON.stringify({
+    contents: [{ role: "user", parts: [{ text: `load ${i} ${__VU}` }] }],
   });
 
+export default function () {
+  const res =
+    MODE === "vertex-direct"
+      ? http.post(VERTEX_URL, vertexPayload(__ITER), {
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${VERTEX_TOKEN}`,
+          },
+          timeout: "120s",
+        })
+      : http.post(`${BASE_URL}/v1/chat/completions`, payload(__ITER), {
+          headers: { "Content-Type": "application/json" },
+          // Long enough not to cut a slow-but-healthy reply, since a client timeout
+          // would be recorded as a gateway failure.
+          timeout: "120s",
+        });
+
+  // In vertex-direct mode a 429 is Google's, not a shed; config.MODE in the
+  // summary keeps them apart.
   shed.add(res.status === 429);
   upstreamErr.add(res.status >= 500);
   if (res.status === 200) {
     served.add(res.timings.duration);
+    if (STREAM) {
+      ttft.add(res.timings.waiting);
+    }
   }
 
   check(res, {
@@ -92,16 +121,32 @@ export default function () {
   });
 }
 
-// Records the config alongside the numbers, so a result file says what produced it
-// — the same discipline the vector-DB lab uses. Only written when asked for, since
-// returning anything from handleSummary REPLACES k6's own end-of-test report.
+// Exporting handleSummary REPLACES k6's own report (returning {} silences it),
+// so stdout is always written by hand here. SUMMARY_JSON=1 additionally archives
+// the full metrics with the config that produced them — the vector-DB lab's
+// discipline.
 export function handleSummary(data) {
-  if (__ENV.SUMMARY_JSON !== "1") {
-    return {}; // keep k6's default text summary on stdout
+  const v = (n) => (data.metrics[n] && data.metrics[n].values) || {};
+  const ms = (x) => (x === undefined ? "-" : x.toFixed(1) + "ms");
+  const lines = [
+    `iterations=${v("iterations").count || 0} dropped=${v("dropped_iterations").count || 0}`,
+    `shed_rate=${(v("shed_rate").rate || 0).toFixed(4)} upstream_error_rate=${(v("upstream_error_rate").rate || 0).toFixed(4)}`,
+  ];
+  for (const n of ["served_duration", "ttft", "http_req_duration"]) {
+    const t = v(n);
+    if (t.med !== undefined)
+      lines.push(`${n}: med=${ms(t.med)} p95=${ms(t["p(95)"])} p99=${ms(t["p(99)"])} max=${ms(t.max)}`);
   }
-  const out = {
-    config: { BASE_URL, PROVIDER, MODEL, QPS, DURATION, STREAM, MAX_VUS },
-    metrics: data.metrics,
-  };
-  return { "bench-summary.json": JSON.stringify(out, null, 2) };
+  const out = { stdout: "\n" + lines.join("\n") + "\n" };
+  if (__ENV.SUMMARY_JSON === "1") {
+    out["bench-summary.json"] = JSON.stringify(
+      {
+        config: { BASE_URL, PROVIDER, MODEL, MODE, QPS, DURATION, STREAM, MAX_VUS },
+        metrics: data.metrics,
+      },
+      null,
+      2,
+    );
+  }
+  return out;
 }

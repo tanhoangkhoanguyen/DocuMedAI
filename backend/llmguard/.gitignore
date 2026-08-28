@@ -21,3 +21,9 @@ bin/
 *.test
 coverage.out
 coverage.html
+
+# Benchmark output. Per-run archives from bench/sweep.sh, and the summary a
+# hand-run k6 writes into whatever directory it was pointed at; the numbers that
+# survive a run live in RESULTS.md, not in the raw files.
+bench/results/
+bench-summary.json
