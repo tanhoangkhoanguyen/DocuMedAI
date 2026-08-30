@@ -359,17 +359,16 @@ max_workers = 4  # requires ≥8 CPU cores
 
 ## Required Environment Variables
 
-Create `.env` in project root:
-```
-OPENAI_API_KEY=
-GEMINI_API_KEY=
-LANGCHAIN_API_KEY=
-LANGCHAIN_TRACING_V2=true
-SUPABASE_JWT_SECRET=
-AUTH_JWT_SECRET=
-NEXT_PUBLIC_SUPABASE_URL=
-NEXT_PUBLIC_SUPABASE_ANON_KEY=
-```
+Copy `.env.example` to `.env` in the project root — it is the authority, grouped
+by what reads each var (app / auth / LLMGuard / benchmark-only). Two things worth
+knowing before editing it:
+
+- `la-llmguard` and its replicas load the **whole** `.env` via `env_file`, so any
+  var there reaches the gateway even when `docker-compose.yml` never names it.
+  That is how `RATE_LIMIT_RPM` and `MAX_IN_FLIGHT` are set.
+- The benchmark-only block stays commented for normal runs. `MOCK_LATENCY` makes
+  the mock upstream slow on purpose, and a raised `RATE_LIMIT_RPM` disables the
+  limiter — both silently change what any other measurement means.
 
 ## Data Flow: Chat Message
 
