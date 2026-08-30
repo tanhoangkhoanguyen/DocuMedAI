@@ -3,6 +3,9 @@
 `load.js` drives the gateway at a fixed arrival rate and reports what it did.
 Requires the `multi-replica` profile up (nginx on 8082, replicas, mock upstream).
 
+Numbers: [RESULTS.md](RESULTS.md). How they were produced:
+[PROCEDURE.md](PROCEDURE.md). This file is the driver's own reference.
+
 ```bash
 # from backend/llmguard/
 docker run --rm -i --network documedai_documedai-net \
