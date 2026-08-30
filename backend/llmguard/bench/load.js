@@ -107,6 +107,12 @@ export default function () {
   // In vertex-direct mode a 429 is Google's, not a shed; config.MODE in the
   // summary keeps them apart.
   shed.add(res.status === 429);
+  // A status code alone cannot say WHOSE 429 this is: the gateway shedding, its
+  // rate limiter, or the upstream's own quota. Off by default because one line
+  // per failure buries the summary at any real error rate.
+  if (__ENV.DEBUG_ERRORS === "1" && res.status !== 200) {
+    console.log(`status=${res.status} ${String(res.body).slice(0, 300)}`);
+  }
   upstreamErr.add(res.status >= 500);
   if (res.status === 200) {
     served.add(res.timings.duration);
