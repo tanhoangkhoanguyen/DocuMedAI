@@ -210,6 +210,15 @@ services:
       # into one blob" look identical, making proxy_buffering unverifiable.
       MOCK_CHUNK_DELAY: ${MOCK_CHUNK_DELAY:-120ms}
       MOCK_COMPLETION_TOKENS: ${MOCK_COMPLETION_TOKENS:-24}
+      # Benchmark knobs, all defaulting to the mock's own defaults (unset ==
+      # absent). Scenario A needs MOCK_LATENCY to stand in for a real model's
+      # seconds-long reply: at the mock's native ~1ms, MAX_IN_FLIGHT is
+      # unreachable at any QPS a driver can offer. Scenario D uses the error
+      # knobs to drive the breaker from both sides of CircuitFailRatio.
+      MOCK_LATENCY: ${MOCK_LATENCY:-}
+      MOCK_JITTER: ${MOCK_JITTER:-}
+      MOCK_ERROR_RATE: ${MOCK_ERROR_RATE:-}
+      MOCK_ERROR_STATUS: ${MOCK_ERROR_STATUS:-}
     # No host port: replicas reach it as la-mockupstream:8090 via compose DNS.
     networks:
       - documedai-net
