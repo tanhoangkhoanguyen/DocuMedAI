@@ -89,6 +89,23 @@ refusals separately, as a result — finding where shedding starts is what the
 benchmark is for. The only asserted threshold is `dropped_iterations == 0`,
 which is about the driver, not the gateway.
 
+## The client saturates first
+
+`dropped_iterations` catches a driver that cannot *start* iterations on time. It
+does not catch one that starts them and then runs out of sockets: those surface
+as `connection reset by peer` / `EOF`, and nginx logs them as **499** — the
+client hung up, not the gateway refusing. A ladder step that fails this way says
+nothing about the gateway.
+
+Measured here (Windows laptop, both driver and stack): clean through 160 QPS,
+then 320 QPS collapsed into 499s within one second, at a point where
+`in_flight` was around a third of `MAX_IN_FLIGHT`. That ceiling is the driver's,
+not the gateway's — which is why published numbers need the driver on its own
+machine.
+
+So read a failed step by its shape first: 429s are a result, 499s and transport
+errors are a broken measurement.
+
 ## Arms
 
 - gateway → mock: the default.
