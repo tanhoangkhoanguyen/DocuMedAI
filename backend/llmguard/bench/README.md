@@ -117,8 +117,12 @@ errors are a broken measurement.
 - gateway → Vertex: the default arm against the single-replica stack
   (`BASE_URL=http://la-llmguard:8081`, `PROVIDER=vertex`).
 
-`ttft` records time-to-first-byte for streamed 200s only — through nginx this
-is the number `proxy_buffering off` exists to protect.
+`ttfb_header` records time to the response HEADER for streamed 200s — not
+time-to-first-token. k6 has no streaming reader, and a proxy forwards the header
+before deciding anything about the body, so this cannot see buffering: measured
+here, `proxy_buffering on` and `off` were indistinguishable on it. Real TTFT
+needs a client that reads the body frame by frame — `curl -N`, or curl's
+`time_starttransfer`.
 
 ## Not yet done
 

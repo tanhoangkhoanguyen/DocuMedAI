@@ -47,9 +47,12 @@ const MAX_VUS = Number(__ENV.MAX_VUS || Math.max(50, QPS * 10));
 const served = new Trend("served_duration", true);
 const shed = new Rate("shed_rate");
 const upstreamErr = new Rate("upstream_error_rate");
-// TTFT through the proxy chain: first byte of a streamed reply. Buffered
-// replies arrive whole, so recorded only when STREAM=true.
-const ttft = new Trend("ttft", true);
+// Time to response HEADER, not to first token: k6 exposes no streaming reader,
+// and `waiting` stops when the status line arrives. A proxy forwards that header
+// before it has decided anything about the body, so this cannot detect
+// buffering — it measures how long the gateway took to start answering. Recorded
+// only when STREAM=true, where that is a number worth having on its own.
+const ttfbHeader = new Trend("ttfb_header", true);
 
 export const options = {
   scenarios: {
@@ -117,7 +120,7 @@ export default function () {
   if (res.status === 200) {
     served.add(res.timings.duration);
     if (STREAM) {
-      ttft.add(res.timings.waiting);
+      ttfbHeader.add(res.timings.waiting);
     }
   }
 
@@ -138,7 +141,7 @@ export function handleSummary(data) {
     `iterations=${v("iterations").count || 0} dropped=${v("dropped_iterations").count || 0}`,
     `shed_rate=${(v("shed_rate").rate || 0).toFixed(4)} upstream_error_rate=${(v("upstream_error_rate").rate || 0).toFixed(4)}`,
   ];
-  for (const n of ["served_duration", "ttft", "http_req_duration"]) {
+  for (const n of ["served_duration", "ttfb_header", "http_req_duration"]) {
     const t = v(n);
     if (t.med !== undefined)
       lines.push(`${n}: med=${ms(t.med)} p95=${ms(t["p(95)"])} p99=${ms(t["p(99)"])} max=${ms(t.max)}`);

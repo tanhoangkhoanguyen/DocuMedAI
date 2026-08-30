@@ -53,11 +53,15 @@ http {
     # Don't forward a hop-by-hop "close", which would defeat the pool.
     proxy_set_header Connection "";
 
-    # THE LOAD-BEARING LINE. LLMGuard does not send X-Accel-Buffering: no, so
-    # without this nginx holds SSE frames and delivers a whole generation as one
-    # late blob — time-to-first-token silently becomes full latency, every
-    # response still a valid 200. At http level, not per-location, because
-    # streaming is a body flag ({"stream": true}), not a route.
+    # Kept as insurance, not as a fix for something observed. LLMGuard sends no
+    # X-Accel-Buffering: no, so this is the only thing telling nginx not to hold
+    # SSE frames — but measured against the mock at 24 frames x 120ms, `on` and
+    # `off` were indistinguishable (ttfb 2.003s vs 2.006s, total 4.894s vs
+    # 4.898s): nginx forwards a chunked text/event-stream body that the upstream
+    # flushes per frame. The failure it guards against needs conditions this
+    # stack does not reproduce, and time-to-first-token is worth more than the
+    # buffer. At http level, not per-location, because streaming is a body flag
+    # ({"stream": true}), not a route.
     proxy_buffering off;
     proxy_request_buffering off;
 
