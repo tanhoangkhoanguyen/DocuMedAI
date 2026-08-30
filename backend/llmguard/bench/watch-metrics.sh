@@ -13,9 +13,12 @@ OUT="${OUT:-/out/metrics.csv}"
 echo "ts,replica,in_flight,shed_total,rate_limited_total" > "$OUT"
 
 # Sum of one metric's samples (counters carry labels; the gauge passes through).
+# Matched by string, not regex: a "^name($|{)" pattern has to survive both shell
+# and awk quoting, and silently matches nothing when it does not -- which reads
+# as a flat zero gauge rather than as an error.
 scrape() { # $1=ip $2=metric
   wget -qO- -T 2 "http://$1:$PORT/metrics" 2>/dev/null |
-    awk -v m="$2" '$1 ~ "^"m"($|{)" { s += $NF } END { printf "%s", s+0 }'
+    awk -v m="$2" '$1 == m || index($1, m "{") == 1 { s += $NF } END { printf "%s", s+0 }'
 }
 
 while :; do
