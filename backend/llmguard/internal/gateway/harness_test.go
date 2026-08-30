@@ -151,6 +151,7 @@ func realDefaults() Config {
 		CircuitMinReqs:   10,
 		CircuitFailRatio: 0.6,
 		CircuitOpenFor:   20 * time.Second,
+		CircuitInterval:  60 * time.Second,
 		UpstreamTimeout:  120 * time.Second,
 		MaxIdleConns:     100,
 

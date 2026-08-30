@@ -133,6 +133,14 @@ func newBreaker(
 	return gobreaker.NewCircuitBreaker(gobreaker.Settings{
 		Name:    route.String(),
 		Timeout: cfg.CircuitOpenFor, // how long to stay open before half-open probe
+		// Roll the counts over a window. gobreaker's zero value means "never
+		// reset while closed", which makes the failure ratio a lifetime average:
+		// a replica that has served 17k requests needs 25k failures to reach 0.6,
+		// so the breaker stops being able to open at all. Measured on the
+		// multi-replica stack — an 80% error rate left it closed indefinitely,
+		// and the same load tripped it in 15 requests after a restart. Longer
+		// uptime meant less protection, which is backwards.
+		Interval: cfg.CircuitInterval,
 		ReadyToTrip: func(c gobreaker.Counts) bool {
 			if c.Requests < cfg.CircuitMinReqs {
 				return false // need a minimum sample before tripping

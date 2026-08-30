@@ -54,6 +54,10 @@ type Config struct {
 	CircuitMinReqs   uint32        // min requests in a window before the breaker may trip
 	CircuitFailRatio float64       // fraction of failures that trips the breaker
 	CircuitOpenFor   time.Duration // how long the breaker stays open before half-open probe
+	// CircuitInterval is the window the failure ratio is measured over. Without
+	// it the ratio is a lifetime average and a long-lived replica can no longer
+	// trip; see newBreaker.
+	CircuitInterval time.Duration
 
 	// --- Admission control ---
 	//
@@ -197,6 +201,9 @@ func loadConfig() Config {
 		CircuitMinReqs:   uint32(getenvInt("CIRCUIT_MIN_REQUESTS", 10)),
 		CircuitFailRatio: getenvFloat("CIRCUIT_FAIL_RATIO", 0.6),
 		CircuitOpenFor:   getenvDur("CIRCUIT_OPEN_FOR", 20*time.Second),
+		// 60s: long enough to hold CircuitMinReqs at low traffic, short enough
+		// that a healthy hour cannot mask the minute an upstream is failing.
+		CircuitInterval: getenvDur("CIRCUIT_INTERVAL", 60*time.Second),
 
 		MaxInFlight: getenvInt("MAX_IN_FLIGHT", 256),
 

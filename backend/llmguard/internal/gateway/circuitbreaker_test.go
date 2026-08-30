@@ -371,3 +371,62 @@ func TestCircuitBreakerIsolatesRoutesOnOneProvider(t *testing.T) {
 		t.Errorf("circuitState{model=\"gemini-2.5-pro\"} = %v, want != 2", got)
 	}
 }
+
+// TestCircuitBreakerTripsAfterALongHealthyHistory pins the fix for a breaker that
+// stopped being able to open.
+//
+// gobreaker's zero Interval means "never reset the counts while closed", which
+// makes the failure ratio a LIFETIME average rather than a current reading. A
+// replica that has served thousands of requests carries a denominator no burst
+// of failures can move: measured on the multi-replica stack, an 80% error rate
+// left the breaker closed indefinitely after ~17k healthy requests, while the
+// same load tripped it in 15 requests on a freshly started replica -- longer
+// uptime meant less protection.
+//
+// The healthy prelude is what makes this a regression test: drop it and the
+// assertion passes with Interval unset.
+func TestCircuitBreakerTripsAfterALongHealthyHistory(t *testing.T) {
+	cfg := realDefaults()
+	cfg.RetryBaseDly = time.Millisecond // timing only
+	cfg.RetryMaxDly = 5 * time.Millisecond
+	// Shortened from the production minute so the test crosses a window boundary
+	// in seconds. It cannot go much lower: a window must be long enough to hold
+	// CircuitMinReqs observations, or every request lands in a fresh generation
+	// and Requests never reaches the minimum -- at 100ms this test failed for
+	// that reason, not for the one it exists to catch.
+	cfg.CircuitInterval = 2 * time.Second
+
+	// failing flips once the healthy prelude is done. The mock's config is fixed
+	// at construction, so the switch lives in the intercept instead.
+	var failing atomic.Bool
+	h := newHarnessWithHandler(t, cfg, mockupstream.DefaultConfig(), nil,
+		func(mock http.Handler, w http.ResponseWriter, r *http.Request) {
+			if failing.Load() {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
+			mock.ServeHTTP(w, r)
+		})
+
+	// Long enough that a lifetime ratio could never reach 0.6 again: 200
+	// successes would need 300 failures, far past the 10 sent below.
+	for i := 0; i < 200; i++ {
+		if rec := h.do(t, chatBody("gemini-2.5-flash", fmt.Sprintf("healthy %d", i), false), nil); rec.Code != http.StatusOK {
+			t.Fatalf("healthy prelude %d: status = %d, want 200", i, rec.Code)
+		}
+	}
+
+	failing.Store(true)
+	// Let the healthy window close, which is what Interval buys: the counts the
+	// prelude accumulated are dropped rather than averaged against forever.
+	time.Sleep(2100 * time.Millisecond)
+	// CircuitMinReqs=10 observations at a 1.0 failure ratio is exactly the trip
+	// condition, measured over CircuitInterval rather than over all time.
+	for i := 0; i < 10; i++ {
+		h.do(t, chatBody("gemini-2.5-flash", fmt.Sprintf("failing %d", i), false), nil)
+	}
+
+	if got := testutil.LabeledGaugeValue(t, h.metrics.circuitState, modelLabels("gemini-2.5-flash")...); got != 2 {
+		t.Errorf("circuit_state = %v, want 2 (open) -- a healthy history is diluting the failure ratio", got)
+	}
+}
