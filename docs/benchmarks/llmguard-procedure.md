@@ -1,6 +1,6 @@
 # Benchmark procedure
 
-Commands that produced [RESULTS.md](RESULTS.md), in order. Run from
+Commands that produced [llmguard-results.md](llmguard-results.md), in order. Run from
 `backend/llmguard/` unless noted. Numbers land in `bench/results/<utc>/`.
 
 On Git Bash: `export MSYS_NO_PATHCONV=1` before any `docker run` with `-v`, or
@@ -40,6 +40,17 @@ done'
 **Collector sees both.** Run any step below and confirm `metrics.csv` has two
 distinct replica IPs and a non-zero `in_flight`. A flat zero column is the bug
 `aa8e86d` fixed, and it looks like an idle gateway rather than an error.
+
+**Restart nginx after any `--force-recreate` of the replicas.** nginx resolves
+the upstream name once at startup — there is no `resolver` directive — so
+replicas that came back on new IPs are invisible to it, and traffic piles onto
+whichever old IP still answers. This reads exactly like a load-balancing bug and
+is not one: after `up -d --force-recreate la-nginx`, 40 requests split 20/20.
+
+**Set benchmark vars in `.env`, not inline.** `la-llmguard-replica` and
+`la-mockupstream` load `.env` via `env_file`, which overrides `VAR=x docker
+compose ...` on the command line. Verify with `docker inspect` rather than
+assuming the recreate took.
 
 ## 1. Set the upstream's latency
 
@@ -156,6 +167,32 @@ to make the breaker un-trippable.
 
 `DEBUG_ERRORS=1` prints response bodies, which is the only way to tell whose 429
 or 503 you are looking at.
+
+## 4b. Cross-replica breaker flag
+
+Drive ONE replica by its IP (not through nginx) so the other stays untouched,
+then send the untouched one a handful of requests. It refuses them without
+calling upstream, and its own `circuit_state` never appears — proof the refusal
+came from the flag rather than from its own breaker.
+
+```bash
+# reset, then read the two replica IPs
+docker exec la-redis-service redis-cli -n 1 DEL llmguard:breaker:open:mock:gemini-2.5-flash
+docker compose -f ../../docker-compose.yml --profile multi-replica \
+  up -d --force-recreate la-llmguard-replica && sleep 15
+docker run --rm --network documedai_documedai-net alpine:3 sh -c \
+  'nslookup la-llmguard-replica 2>/dev/null | awk "/^Address/ && \$2 !~ /:/ && \$2 != \"127.0.0.11\" {print \$2}"'
+```
+
+Load the first IP directly (`-e BASE_URL=http://<loaded-ip>:8081`), then hit the
+other with ~12 requests and read its metrics. Repeat after
+`redis-cli -n 1 DEL llmguard:breaker:open:...` for the contrast: without the flag
+the same replica burns `CIRCUIT_MIN_REQUESTS` requests at ~10.3s each before
+tripping itself.
+
+Timing note: the flag's TTL is `CIRCUIT_OPEN_FOR` (20s), so a `TTL` of `-2` a
+minute after a run means it expired, not that it was never published. To catch
+publication, poll `EXISTS` during the run.
 
 ## 5. Streaming
 

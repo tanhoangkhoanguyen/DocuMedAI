@@ -10,7 +10,7 @@ nginx + mockupstream + Redis + ClickHouse). Upstream is `mockupstream` with
 `MOCK_LATENCY=2000ms` — a stand-in for a real model's think time, without which
 `MAX_IN_FLIGHT` is unreachable at any QPS a driver can offer.
 
-Steps and commands: [PROCEDURE.md](PROCEDURE.md).
+Steps and commands: [llmguard-procedure.md](llmguard-procedure.md).
 
 ## A — Capacity
 
@@ -73,6 +73,23 @@ The second row only passes since the `Interval` fix below.
 | `proxy_buffering off` | 2.006s | 4.898s |
 
 Indistinguishable. See the finding below.
+
+## Cross-replica breaker flag
+
+One replica was driven to trip; a second replica that had served **zero**
+requests then got 12, with and without the flag in Redis.
+
+| 12 requests to the untouched replica | with flag | flag deleted |
+|---|---|---|
+| its own `circuit_state` | no series — never tripped | 2 |
+| upstream calls | none, refused on arrival | ~10 requests x 4 attempts |
+| wall time | immediate | ~10.3s per request until it tripped |
+
+The flag saves a replica from re-learning an outage a peer already found. It is
+**not** a push: `openElsewhere` is checked on the request path, so an idle
+replica never changes state — it refuses the first request it receives and
+that is the whole mechanism. Publishing was observed ~9.5s into a 20 QPS run at
+an 80% error rate, TTL 20s (`CIRCUIT_OPEN_FOR`).
 
 ## Retry
 

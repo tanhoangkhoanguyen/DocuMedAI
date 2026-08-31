@@ -3,8 +3,11 @@
 `load.js` drives the gateway at a fixed arrival rate and reports what it did.
 Requires the `multi-replica` profile up (nginx on 8082, replicas, mock upstream).
 
-Numbers: [RESULTS.md](RESULTS.md). How they were produced:
-[PROCEDURE.md](PROCEDURE.md). This file is the driver's own reference.
+Numbers and the runbook live in
+[docs/benchmarks/](../../../docs/benchmarks/) —
+[llmguard-results.md](../../../docs/benchmarks/llmguard-results.md) and
+[llmguard-procedure.md](../../../docs/benchmarks/llmguard-procedure.md). This
+file is the driver's own reference.
 
 ```bash
 # from backend/llmguard/
@@ -129,7 +132,7 @@ needs a client that reads the body frame by frame — `curl -N`, or curl's
 
 ## Not yet done
 
-The LiteLLM arm, the three-arm runner and the charts are Issue 6.2 / 6.3.
+The charts are Issue 6.3. The LiteLLM arm is WON'T DO -- see Issue 6.2.
 Published numbers come from the two-VM GCP setup (driver and stack on separate
 machines, same region as Vertex); local runs are for finding bugs in the
 method, not for RESULTS.

@@ -7,10 +7,10 @@
 ## 1. Context
 
 ### Why this change
-DocuMedAI ships a file called [`backend/services/chatbot/mcp.py`](../services/chatbot/mcp.py) named `MCPServer`, but it is **not** Model Context Protocol. It is an in-process `Dict[str, McpToolDefinition]` of Python callables ([`mcp.py:97`](../services/chatbot/mcp.py#L97)), selected by an LLM from a **plaintext** catalog string (`format_registry`, [`mcp.py:104-111`](../services/chatbot/mcp.py#L104-L111)) and executed in a threadpool ([`nodes.py:267-277`](../services/chatbot/nodes.py#L267-L277)). There is:
+DocuMedAI ships a file called [`backend/services/chatbot/mcp.py`](../../backend/services/chatbot/mcp.py) named `MCPServer`, but it is **not** Model Context Protocol. It is an in-process `Dict[str, McpToolDefinition]` of Python callables ([`mcp.py:97`](../../backend/services/chatbot/mcp.py#L97)), selected by an LLM from a **plaintext** catalog string (`format_registry`, [`mcp.py:104-111`](../../backend/services/chatbot/mcp.py#L104-L111)) and executed in a threadpool ([`nodes.py:267-277`](../../backend/services/chatbot/nodes.py#L267-L277)). There is:
 
 - no JSON-RPC 2.0, no transport (stdio/HTTP), no client/server separation,
-- no JSON-Schema tool typing (every tool takes the same untyped `ToolParameter` envelope, [`schemas.py:59-67`](../services/chatbot/constants/schemas.py#L59-L67)),
+- no JSON-Schema tool typing (every tool takes the same untyped `ToolParameter` envelope, [`schemas.py:59-67`](../../backend/services/chatbot/constants/schemas.py#L59-L67)),
 - no interoperability — no external MCP host can reach these tools.
 
 For an **AI Infra** portfolio this naming is a liability: it implies a capability the code doesn't have.
@@ -34,7 +34,7 @@ A shared **Tool Core** consumed two ways — the internal agent calls it **direc
 - The internal agent/runtime **must NOT call MCP over the network** — it keeps direct in-process tool execution.
 - MCP exists **only** as an external protocol interface over the *same shared execution core*.
 - **JWT enforced for external MCP clients**; internal execution keeps using the existing authenticated app context.
-- Observability must **not duplicate** the [`vector_database_tests/`](../vector_database_tests/) ann-benchmarks method. That lab measures vector-engine recall/latency; this harness measures MCP **serving/protocol** overhead — a different axis.
+- Observability must **not duplicate** the [`vector_database_tests/`](../../backend/vector_database_tests/) ann-benchmarks method. That lab measures vector-engine recall/latency; this harness measures MCP **serving/protocol** overhead — a different axis.
 
 ### Out of scope (covered by other projects)
 Guardrails, rate limiting, circuit breakers, dynamic/hot-loadable registries, governance. Optimize purely for **capability serving, MCP interoperability, protocol design, resource serving, and observability**. Résumé audience: **AI Infra / Platform**.
@@ -45,11 +45,11 @@ Guardrails, rate limiting, circuit breakers, dynamic/hot-loadable registries, go
 
 The whole roadmap hinges on one refactor: **extract a Tool Core** that both consumers share.
 
-**Today's coupling** — `mcp.py` *is* the registry, the prompt formatter, AND the executor, and imports tool implementations directly (`get_medical_supporter`, `get_user_document_supporter`). Config (model/embedding/rerank) is bound at singleton construction (`get_mcp_client`, [`mcp.py:134-159`](../services/chatbot/mcp.py#L134-L159)); only `message` + `user_id` are per-call (`execute_tool_call`, [`mcp.py:116-132`](../services/chatbot/mcp.py#L116-L132)).
+**Today's coupling** — `mcp.py` *is* the registry, the prompt formatter, AND the executor, and imports tool implementations directly (`get_medical_supporter`, `get_user_document_supporter`). Config (model/embedding/rerank) is bound at singleton construction (`get_mcp_client`, [`mcp.py:134-159`](../../backend/services/chatbot/mcp.py#L134-L159)); only `message` + `user_id` are per-call (`execute_tool_call`, [`mcp.py:116-132`](../../backend/services/chatbot/mcp.py#L116-L132)).
 
 **Target** — a transport-agnostic **Tool Core** exposing typed `list_tools()` / `call_tool(name, args, principal)` with **JSON-Schema input contracts**. Two thin adapters sit on top:
 
-1. **Internal adapter** — what [`nodes.py`](../services/chatbot/nodes.py) calls today, behavior preserved (LLM picks from catalog → threadpool → text results). Passes the already-authenticated `user_id` from `GraphState.user_info` as the principal ([`nodes.py:331`](../services/chatbot/nodes.py#L331)).
+1. **Internal adapter** — what [`nodes.py`](../../backend/services/chatbot/nodes.py) calls today, behavior preserved (LLM picks from catalog → threadpool → text results). Passes the already-authenticated `user_id` from `GraphState.user_info` as the principal ([`nodes.py:331`](../../backend/services/chatbot/nodes.py#L331)).
 2. **MCP adapter** — an MCP server mapping each Tool Core tool to an MCP tool, verifying a JWT per request, deriving the principal from verified claims, serving streamable-HTTP.
 
 Both adapters call the **same** `ToolCore.call_tool`. That single fact is the entire story: *one execution core, two serving surfaces, measured overhead between them.*
@@ -61,9 +61,9 @@ Both adapters call the **same** `ToolCore.call_tool`. That single fact is the en
 **Phase goal:** decouple tool *definitions + execution* from registry/transport, and give every tool a real JSON-Schema input contract. No behavior change for the internal agent.
 
 ### Issue 1.1 — Define typed tool contracts (JSON Schema)
-- **Problem:** every tool takes the identical untyped `ToolParameter` envelope ([`schemas.py:59-67`](../services/chatbot/constants/schemas.py#L59-L67)); no per-tool schema ⇒ no MCP `inputSchema`, no validation, no introspection.
+- **Problem:** every tool takes the identical untyped `ToolParameter` envelope ([`schemas.py:59-67`](../../backend/services/chatbot/constants/schemas.py#L59-L67)); no per-tool schema ⇒ no MCP `inputSchema`, no validation, no introspection.
 - **What to do:**
-  - Add a `ToolSpec` model: `name`, `title`, `description`, `input_schema` (JSON Schema dict), `handler`, `requires_principal: bool`. Replace the frozen `McpToolDefinition` ([`schemas.py:52-56`](../services/chatbot/constants/schemas.py#L52-L56)).
+  - Add a `ToolSpec` model: `name`, `title`, `description`, `input_schema` (JSON Schema dict), `handler`, `requires_principal: bool`. Replace the frozen `McpToolDefinition` ([`schemas.py:52-56`](../../backend/services/chatbot/constants/schemas.py#L52-L56)).
   - Author arg schemas for the 3 tools: `search_medical_knowledge({query: str})`, `search_user_documents({query: str})` (principal-scoped), `identity({})`.
   - Split **runtime config** (model/embedding/rerank — infra concern; stays bound at Core construction) from **call args** (query — caller concern; validated per-call).
 - **Criteria:** each tool has a valid JSON Schema; invalid args raise a typed `ToolInputError`; `identity` accepts empty args.
@@ -73,7 +73,7 @@ Both adapters call the **same** `ToolCore.call_tool`. That single fact is the en
 - **Problem:** execution logic is welded to `MCPServer` and its LLM-catalog formatting; MCP can't reuse it cleanly.
 - **What to do:**
   - New `backend/toolcore/core.py`: `MCPServer.list_tools() -> list[ToolSpec]`, `MCPServer.call_tool(name, args: dict, principal: Principal | None) -> ToolResult`. Contracts live beside it in `contracts.py`.
-  - Move the 3 handlers here; they call the **unchanged** `get_medical_supporter` ([`medical_supporter.py:71`](../services/chatbot/tools/medical_supporter.py#L71)) / `get_user_document_supporter` ([`user_document_supporter.py:84`](../services/chatbot/tools/user_document_supporter.py#L84)). Preserve the `user_id`-empty short-circuit ([`user_document_supporter.py:45-47`](../services/chatbot/tools/user_document_supporter.py#L45-L47)) by enforcing it in Core as `requires_principal` so *both* surfaces get isolation for free.
+  - Move the 3 handlers here; they call the **unchanged** `get_medical_supporter` ([`medical_supporter.py:71`](../../backend/services/chatbot/tools/medical_supporter.py#L71)) / `get_user_document_supporter` ([`user_document_supporter.py:84`](../../backend/services/chatbot/tools/user_document_supporter.py#L84)). Preserve the `user_id`-empty short-circuit ([`user_document_supporter.py:45-47`](../../backend/services/chatbot/tools/user_document_supporter.py#L45-L47)) by enforcing it in Core as `requires_principal` so *both* surfaces get isolation for free.
   - `ToolResult` carries structured content (text block(s) today; room for richer MCP content types) + timing metadata for Phase 4.
 - **Criteria:** `call_tool("search_user_documents", {...}, principal=None)` refuses (no leak); with a principal it returns the same string the old path did; byte-identical to pre-refactor for the same inputs.
 - **Tech:** existing supporter singletons + Qdrant/RAG clients untouched; Core is a thin typed façade. `Principal = {user_id, source: "internal" | "mcp"}`.
@@ -81,11 +81,11 @@ Both adapters call the **same** `ToolCore.call_tool`. That single fact is the en
 ### Issue 1.3 — Rewire the internal agent onto the Core (behavior-preserving)
 - **Problem:** prove the fast path is unchanged and the Core is the single execution point.
 - **What to do:**
-  - `mcp.py` becomes a **thin internal adapter** over `ToolCore`: `format_registry()` renders the catalog from `ToolCore.list_tools()`; `has_tool`/`execute_tool_call` delegate to Core. Keep `get_mcp_client` signature so [`nodes.py:233-240`](../services/chatbot/nodes.py#L233-L240) is untouched (or a one-line import swap).
-  - The planner still emits `{tool, message}` (`AGENT_PLANNER_PROMPT`, [`prompts.py:92-111`](../services/chatbot/constants/prompts.py#L92-L111)); the adapter maps `message` → the tool's `{query}` arg before calling Core.
+  - `mcp.py` becomes a **thin internal adapter** over `ToolCore`: `format_registry()` renders the catalog from `ToolCore.list_tools()`; `has_tool`/`execute_tool_call` delegate to Core. Keep `get_mcp_client` signature so [`nodes.py:233-240`](../../backend/services/chatbot/nodes.py#L233-L240) is untouched (or a one-line import swap).
+  - The planner still emits `{tool, message}` (`AGENT_PLANNER_PROMPT`, [`prompts.py:92-111`](../../backend/services/chatbot/constants/prompts.py#L92-L111)); the adapter maps `message` → the tool's `{query}` arg before calling Core.
   - Internal calls pass `Principal(user_id=state.user_info.user_id, source="internal")` — **no network, no JWT re-check**.
 - **Criteria:** existing chat flow returns identical answers; `run_chatbot.py` harness still works; no new latency on the internal path (asserted in Phase 4).
-- **Tech:** adapter pattern; zero change to CrewAI (it consumes pre-fetched `evidence` text, [`nodes.py:362-397`](../services/chatbot/nodes.py#L362-L397)).
+- **Tech:** adapter pattern; zero change to CrewAI (it consumes pre-fetched `evidence` text, [`nodes.py:362-397`](../../backend/services/chatbot/nodes.py#L362-L397)).
 
 ---
 
@@ -107,12 +107,12 @@ Both adapters call the **same** `ToolCore.call_tool`. That single fact is the en
 ### Issue 2.2 — JWT enforcement for external MCP clients
 - **Problem:** external clients are untrusted; internal callers are already authenticated. The two must not share a trust assumption.
 - **What to do:**
-  - Reuse the **existing** verifier `decode_bearer_any` ([`auth_deps.py:72-116`](../services/app/auth_deps.py#L72-L116)) — do not fork JWT logic. It already handles local HS256 (`type=local`, `id`) and Supabase tokens (`stable_supabase_user_id`).
+  - Reuse the **existing** verifier `decode_bearer_any` ([`auth_deps.py:72-116`](../../backend/services/app/auth_deps.py#L72-L116)) — do not fork JWT logic. It already handles local HS256 (`type=local`, `id`) and Supabase tokens (`stable_supabase_user_id`).
   - streamable-HTTP: read `Authorization: Bearer`, verify, build `Principal(user_id=claims["id"], source="mcp")`, attach to the MCP session; reject `tools/call` on principal-requiring tools (`search_user_documents`) without valid claims → JSON-RPC error / 401.
   - stdio: accept the token via env var / init option (stdio has no HTTP headers), verified through the same function.
   - **Enforcement lives in the MCP adapter only** — internal `source="internal"` calls bypass it entirely.
 - **Criteria:** unauthenticated external `search_user_documents` is refused; a valid user's token returns only that user's chunks; a second user's token cannot read the first's docs; `identity` works with no token.
-- **Tech:** shared `auth_deps.decode_bearer_any`; per-session principal binding; the three existing isolation layers (Core `requires_principal`, Qdrant `user_id` filter [`qdrant_client.py:205`](../vector_database_tests/utils/qdrant_client.py#L205), empty-user short-circuit) all still fire.
+- **Tech:** shared `auth_deps.decode_bearer_any`; per-session principal binding; the three existing isolation layers (Core `requires_principal`, Qdrant `user_id` filter [`qdrant_client.py:205`](../../backend/vector_database_tests/utils/qdrant_client.py#L205), empty-user short-circuit) all still fire.
 
 ### Issue 2.3 — Package the MCP server as a compose service
 - **Problem:** must run and be demoable without polluting the app runtime.
@@ -162,21 +162,21 @@ Both adapters call the **same** `ToolCore.call_tool`. That single fact is the en
 
 ### Issue 4.1 — Per-call instrumentation in the Tool Core
 - **Problem:** no app-level latency measurement exists anywhere (only the Go proxy has metrics, and nothing scrapes it).
-- **Approach:** a dedicated [`toolcore/observability.py`](observability.py) owns the metric objects and the log line so `call_tool` stays a plain control-flow read. `call_tool` is wrapped in one `time.perf_counter()` **whole-call span** (not per-stage — the handler's RAG/LLM work dominates, so sub-µs stage timing is noise); on every exit, success or exception, it records via `record_tool_call(tool, surface, outcome, duration_s)`. `surface` is **derived** from the principal (`principal.source if principal else "internal"`), not a new arg — so the internal shim and the MCP path are both tagged for free. `ToolResult.duration_ms` is now the whole-call span (was handler-only). Each record emits **both** Prometheus (`toolcore_tool_calls_total` counter + `toolcore_tool_call_duration_seconds` histogram, buckets tuned for tool calls, `toolcore_` prefix mirroring LLMGuard's `llmguard_`) **and** a one-line orjson JSON log through the existing `get_logger` (payload is JSON; the shared plain-text formatter is untouched). Metrics register on the **default registry**; exposition is Issue 4.2.
+- **Approach:** a dedicated [`toolcore/observability.py`](../../backend/toolcore/observability.py) owns the metric objects and the log line so `call_tool` stays a plain control-flow read. `call_tool` is wrapped in one `time.perf_counter()` **whole-call span** (not per-stage — the handler's RAG/LLM work dominates, so sub-µs stage timing is noise); on every exit, success or exception, it records via `record_tool_call(tool, surface, outcome, duration_s)`. `surface` is **derived** from the principal (`principal.source if principal else "internal"`), not a new arg — so the internal shim and the MCP path are both tagged for free. `ToolResult.duration_ms` is now the whole-call span (was handler-only). Each record emits **both** Prometheus (`toolcore_tool_calls_total` counter + `toolcore_tool_call_duration_seconds` histogram, buckets tuned for tool calls, `toolcore_` prefix mirroring LLMGuard's `llmguard_`) **and** a one-line orjson JSON log through the existing `get_logger` (payload is JSON; the shared plain-text formatter is untouched). Metrics register on the **default registry**; exposition is Issue 4.2.
 - **Criteria:** every call produces a timed record tagged by tool + surface + outcome.
 
 ### Issue 4.2 — MCP protocol metrics + overhead comparison
 - **Problem:** the standout, non-obvious metric — *what does the protocol cost vs calling the core directly?*
 - **Approach:**
   - **Per-tool P50/P95/P99** reuse 4.1's `toolcore_tool_call_duration_seconds` (already tagged `surface="mcp"` on the MCP path) — Grafana derives percentiles via `histogram_quantile`; no second histogram.
-  - **`mcp_requests_total{method,outcome}`** ([`mcp_server/metrics.py`](../mcp_server/metrics.py)) counts JSON-RPC methods. `initialize` has no user-level handler (the low-level SDK owns the lifecycle), so an **ASGI wrapper** in [`mcp_server/__main__.py`](../mcp_server/__main__.py) buffers the request body once, reads the JSON-RPC `method`, replays the body downstream, and records the outcome from the transport (401 → `auth_error`, 5xx → `upstream_error`, else `success`). This covers `initialize` / `tools/list` / `tools/call`. Tool-level errors ride inside a 200 `isError` result and are counted precisely by `toolcore_tool_calls_total`, so the two families don't double-count.
+  - **`mcp_requests_total{method,outcome}`** ([`mcp_server/metrics.py`](../../backend/mcp_server/metrics.py)) counts JSON-RPC methods. `initialize` has no user-level handler (the low-level SDK owns the lifecycle), so an **ASGI wrapper** in [`mcp_server/__main__.py`](../../backend/mcp_server/__main__.py) buffers the request body once, reads the JSON-RPC `method`, replays the body downstream, and records the outcome from the transport (401 → `auth_error`, 5xx → `upstream_error`, else `success`). This covers `initialize` / `tools/list` / `tools/call`. Tool-level errors ride inside a 200 `isError` result and are counted precisely by `toolcore_tool_calls_total`, so the two families don't double-count.
   - **Error taxonomy** unified across both surfaces: `classify_outcome` (4.1) refined to `success | not_found | input_error | auth_error | upstream_error`, with a new `ToolNotFoundError(ToolInputError)` so `not_found` separates from validation while `except ToolInputError` / the MCP `INVALID_PARAMS` mapping stay intact.
-  - **Overhead report:** [`mcp_server/benchmark_mcp.py`](../mcp_server/benchmark_mcp.py) times the same tool+args (a) in-process `call_tool` and (b) MCP `tools/call` over streamable-HTTP (SDK `ClientSession`), reporting per-tool P50/P95/P99 per arm + delta (ms + %) as JSON. Open-loop pacing, latency from ideal send time (coordinated-omission discipline echoed from the vector lab, **not** imported).
+  - **Overhead report:** [`mcp_server/benchmark_mcp.py`](../../backend/mcp_server/benchmark_mcp.py) times the same tool+args (a) in-process `call_tool` and (b) MCP `tools/call` over streamable-HTTP (SDK `ClientSession`), reporting per-tool P50/P95/P99 per arm + delta (ms + %) as JSON. Open-loop pacing, latency from ideal send time (coordinated-omission discipline echoed from the vector lab, **not** imported).
 - **Criteria:** `/metrics` on the MCP server (`make_asgi_app()` mounted alongside `/mcp`, serving the default registry) exposes all of the above; `benchmark_mcp.py` produces a reproducible overhead JSON on one command.
 
 ### Issue 4.3 — Dashboard + repro runbook
 - **Problem:** metrics are exposed but nothing visualizes them (no Prometheus/Grafana config in the repo today).
-- **Approach:** [`mcp_server/prometheus.yml`](../mcp_server/prometheus.yml) scrapes `la-mcp-server:8090` + `la-llmguard:8081`; [`mcp_server/grafana_dashboard.json`](../mcp_server/grafana_dashboard.json) (auto-provisioned with a Prometheus datasource) panels per-tool P50/P95/P99, MCP success rate by method, **internal-vs-MCP overhead** (same histogram split by `surface`), and error taxonomy. `la-prometheus` + `la-grafana` are wired as `profiles: ["observability"]` (mirrors `vectordb-lab`), with a `grafana_data` volume. Runbook lives in [`mcp_server/README.md`](../mcp_server/README.md) (the real dir — the earlier `backend/mcp/` path never existed).
+- **Approach:** [`mcp_server/prometheus.yml`](../../backend/mcp_server/prometheus.yml) scrapes `la-mcp-server:8090` + `la-llmguard:8081`; [`mcp_server/grafana_dashboard.json`](../../backend/mcp_server/grafana_dashboard.json) (auto-provisioned with a Prometheus datasource) panels per-tool P50/P95/P99, MCP success rate by method, **internal-vs-MCP overhead** (same histogram split by `surface`), and error taxonomy. `la-prometheus` + `la-grafana` are wired as `profiles: ["observability"]` (mirrors `vectordb-lab`), with a `grafana_data` volume. Runbook lives in [`mcp_server/README.md`](../../backend/mcp_server/README.md) (the real dir — the earlier `backend/mcp/` path never existed).
 - **Criteria:** `docker compose --profile observability up` shows live panels; the overhead panel reads real numbers once traffic flows (e.g. a `benchmark_mcp.py` run); one command regenerates the JSON report.
 
 ---
@@ -207,16 +207,16 @@ Collected in Phase 3 (correctness) + Phase 4 (performance). Fill `<>` from real 
 
 | Action | Path | Note |
 |---|---|---|
-| **New** | [`backend/toolcore/core.py`](core.py), [`contracts.py`](contracts.py) | Tool Core: `list_tools` / `call_tool` / `ToolSpec` / `Principal` / `ToolResult` |
-| Modify | [`backend/services/chatbot/constants/schemas.py:52-67`](../services/chatbot/constants/schemas.py#L52-L67) | replace `McpToolDefinition`/`ToolParameter` with typed `ToolSpec` + per-tool arg models |
-| Removed | `backend/services/chatbot/mcp.py` | the adapter did not survive as a file — `execute_tool_call` in [`core.py`](core.py) is the string-in/string-out shim the planner still calls, and `get_mcp_client` returns the cached core |
-| Reuse (unchanged) | [`medical_supporter.py:71`](../services/chatbot/tools/medical_supporter.py#L71), [`user_document_supporter.py:84`](../services/chatbot/tools/user_document_supporter.py#L84), [`rag.py`](../services/chatbot/tools/rag.py), [`qdrant_client.py`](../vector_database_tests/utils/qdrant_client.py) | Core wraps these; do not touch execution/isolation |
-| Touch (import only) | [`backend/services/chatbot/nodes.py:233-277`](../services/chatbot/nodes.py#L233-L277) | still calls the adapter; behavior identical |
-| **New** | [`backend/mcp_server/server.py`](../mcp_server/server.py), [`__main__.py`](../mcp_server/__main__.py), [`auth.py`](../mcp_server/auth.py), [`README.md`](../mcp_server/README.md) | MCP `Server` + handlers, ASGI app, bearer auth, runbook |
-| Reuse | [`backend/services/app/auth_deps.py:72-116`](../services/app/auth_deps.py#L72-L116) | `decode_bearer_any` for external MCP JWT — do not fork |
+| **New** | [`backend/toolcore/core.py`](../../backend/toolcore/core.py), [`contracts.py`](../../backend/toolcore/contracts.py) | Tool Core: `list_tools` / `call_tool` / `ToolSpec` / `Principal` / `ToolResult` |
+| Modify | [`backend/services/chatbot/constants/schemas.py:52-67`](../../backend/services/chatbot/constants/schemas.py#L52-L67) | replace `McpToolDefinition`/`ToolParameter` with typed `ToolSpec` + per-tool arg models |
+| Removed | `backend/services/chatbot/mcp.py` | the adapter did not survive as a file — `execute_tool_call` in [`core.py`](../../backend/toolcore/core.py) is the string-in/string-out shim the planner still calls, and `get_mcp_client` returns the cached core |
+| Reuse (unchanged) | [`medical_supporter.py:71`](../../backend/services/chatbot/tools/medical_supporter.py#L71), [`user_document_supporter.py:84`](../../backend/services/chatbot/tools/user_document_supporter.py#L84), [`rag.py`](../../backend/services/chatbot/tools/rag.py), [`qdrant_client.py`](../../backend/vector_database_tests/utils/qdrant_client.py) | Core wraps these; do not touch execution/isolation |
+| Touch (import only) | [`backend/services/chatbot/nodes.py:233-277`](../../backend/services/chatbot/nodes.py#L233-L277) | still calls the adapter; behavior identical |
+| **New** | [`backend/mcp_server/server.py`](../../backend/mcp_server/server.py), [`__main__.py`](../../backend/mcp_server/__main__.py), [`auth.py`](../../backend/mcp_server/auth.py), [`README.md`](../../backend/mcp_server/README.md) | MCP `Server` + handlers, ASGI app, bearer auth, runbook |
+| Reuse | [`backend/services/app/auth_deps.py:72-116`](../../backend/services/app/auth_deps.py#L72-L116) | `decode_bearer_any` for external MCP JWT — do not fork |
 | **New** | `ci_tests/integration/tool_core/`, `ci_tests/integration/mcp/` | contract + conformance + equivalence tests |
 | Modify | [`pytest.ini`](../../pytest.ini), [`.github/workflows/python-ci.yml`](../../.github/workflows/python-ci.yml) | add `mcp` marker; wire new suites + `la-mcp-server` |
-| **New** | [`docker-compose.yml`](../../docker-compose.yml) (`la-mcp-server`), [`mcp_server/prometheus.yml`](../mcp_server/prometheus.yml), [`mcp_server/grafana_dashboard.json`](../mcp_server/grafana_dashboard.json) | serving + observability, optional profiles |
+| **New** | [`docker-compose.yml`](../../docker-compose.yml) (`la-mcp-server`), [`mcp_server/prometheus.yml`](../../backend/mcp_server/prometheus.yml), [`mcp_server/grafana_dashboard.json`](../../backend/mcp_server/grafana_dashboard.json) | serving + observability, optional profiles |
 
 ---
 

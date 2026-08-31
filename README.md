@@ -74,7 +74,7 @@ Benchmarked on the same open-loop discipline as the vector DB lab - latency char
 | Sustained throughput | **150 rps @ 13 ms** p50 (2 VMs, 4 vCPU server and 8 vCPU client) |
 | Under 4× overload (800 qps) | throughput holds ~162 rps, **100% success, zero transport errors** |
 
-Degrades by queueing, never by failing. Full tables, honest caveats, and the load-generator calibration that made the tail numbers trustworthy: [`backend/mcp_server/README.md`](backend/mcp_server/README.md#performance) · two-VM setup: [`docs/mcp-loadtest-runbook.md`](docs/mcp-loadtest-runbook.md).
+Degrades by queueing, never by failing. Full tables, honest caveats, and the load-generator calibration that made the tail numbers trustworthy: [`backend/mcp_server/README.md`](backend/mcp_server/README.md#performance) · two-VM setup: [`docs/benchmarks/mcp-procedure.md`](docs/benchmarks/mcp-procedure.md).
 
 ## Run
 

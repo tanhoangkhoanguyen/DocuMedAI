@@ -341,7 +341,14 @@ MCP endpoint: `http://localhost:8090/mcp/` · metrics: `http://localhost:8090/me
 | `backend/toolcore/core.py` | Tool registry + `call_tool` — the single isolation enforcement point for both surfaces |
 | `backend/mcp_server/__main__.py` | MCP ASGI app: per-request bearer auth → `StreamableHTTPSessionManager`, `/mcp` + `/metrics` |
 | `backend/mcp_server/README.md` | MCP runbook + measured overhead/capacity benchmarks |
-| `docs/mcp-loadtest-runbook.md` | Two-VM GCP setup for the serving-capacity load test |
+| `docs/benchmarks/mcp-procedure.md` | Two-VM GCP setup for the serving-capacity load test |
+
+## Docs
+
+`docs/` holds what spans packages — `deployment.md`, `benchmarks/` (results plus
+the runbooks that reproduce them), `roadmap/` (per-subsystem plans, kept as
+plans). A doc describing one package stays beside that package's code instead,
+so it is edited in the same diff. See `docs/README.md`.
 
 ## Graph Config (run_app.py)
 

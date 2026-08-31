@@ -1,7 +1,7 @@
 # MCP Load Test Runbook (two-VM, GCP)
 
 Standing up the serving-capacity benchmark for `backend/mcp_server/loadtest_mcp.py`.
-Results and interpretation live in [`backend/mcp_server/README.md`](../backend/mcp_server/README.md#2-serving-capacity--loadtest_mcppy-two-vms).
+Results and interpretation live in [`backend/mcp_server/README.md`](../../backend/mcp_server/README.md#2-serving-capacity--loadtest_mcppy-two-vms).
 
 The load test drives `identity` only — a constant string, no RAG, no LLM — so it measures the
 **protocol/serving layer**, not retrieval. No documents or LLM keys needed on either machine.
@@ -53,7 +53,7 @@ gcloud compute instances list --format="table(name,networkInterfaces[0].networkI
 
 ## 2. Docker on the server
 
-Follow [DEPLOYMENT.md](../DEPLOYMENT.md) §2, then re-login so the `docker` group applies.
+Follow [DEPLOYMENT.md](../deployment.md) §2, then re-login so the `docker` group applies.
 
 ```bash
 docker --version && docker compose version
@@ -183,7 +183,7 @@ mv capacity.json ~/DocuMedAI/backend/mcp_server/benchmark/
   from ideal send time, exactly what a real client blocked on a slow server experiences.
 - **Outcomes:** `transport_error` spiking = resets/timeouts; `tool_error` = the tool returned
   `isError`; all-`transport_error` from the start = secret mismatch.
-- Compare against [`throughput_results/qdrant.json`](../backend/vector_database_tests/throughput_results/qdrant.json),
+- Compare against [`throughput_results/qdrant.json`](../../backend/vector_database_tests/throughput_results/qdrant.json),
   the same open-loop method on a different component, for the shape of a healthy cliff.
 
 Optional live view, on the server:

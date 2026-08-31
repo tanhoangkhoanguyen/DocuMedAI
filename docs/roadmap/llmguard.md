@@ -26,7 +26,7 @@ This is the single roadmap for `llmguard`. It has two parts:
 > "Reliability-first LLM gateway (Go): OpenAI-compatible multi-provider API with circuit breaking,
 > provider-aware retries, and cross-replica breaker state. Open-loop, coordinated-omission-aware benchmark
 > proves < N ms p99 overhead and 99%+ client success under 20% upstream fault injection (vs ~80%
-> direct), validated head-to-head against LiteLLM."
+> direct), validated against a direct-to-upstream baseline."
 
 ---
 
@@ -370,7 +370,7 @@ is why they are written down rather than assumed.
 
 | File:Line | What I observed | Expected? | Note / follow-up |
 |-----------|-----------------|-----------|------------------|
-| `mockupstream/chaos.go:76-78` | `Jitter` changes the **failure verdict**, even though it is correctly excluded from `fingerprint()`. `decide()` draws jitter *conditionally* on `Jitter > 0`, consuming one number from the per-request stream and shifting the failure roll that follows. Measured: **21 of 40 nonces flip** at an unchanged `error_rate=0.5`. | No — the comment at `chaos.go:74-75` claims the fixed draw order prevents exactly this. It only holds for knobs that *always* draw; the error-rate roll already does this correctly (`chaos.go:84`). | **Open with a documented constraint, not an unowned bug.** Determinism still holds *within* a config; what breaks is comparability *across* configs differing only in jitter. **The rule — hold `Jitter` fixed across arms of a comparison** — is now stated in [`mockupstream/README.md`](mockupstream/README.md) → *Jitter shifts the failure verdict* and as a precondition on **Issue 6.3**, its consumer. Not fixed here because drawing jitter unconditionally changes every existing seeded value and invalidates any captured baseline — a Phase 6 decision about baselines. Pinned by `TestJitterShiftsFailureVerdictQuirk`. |
+| `mockupstream/chaos.go:76-78` | `Jitter` changes the **failure verdict**, even though it is correctly excluded from `fingerprint()`. `decide()` draws jitter *conditionally* on `Jitter > 0`, consuming one number from the per-request stream and shifting the failure roll that follows. Measured: **21 of 40 nonces flip** at an unchanged `error_rate=0.5`. | No — the comment at `chaos.go:74-75` claims the fixed draw order prevents exactly this. It only holds for knobs that *always* draw; the error-rate roll already does this correctly (`chaos.go:84`). | **Open with a documented constraint, not an unowned bug.** Determinism still holds *within* a config; what breaks is comparability *across* configs differing only in jitter. **The rule — hold `Jitter` fixed across arms of a comparison** — is now stated in [`mockupstream/README.md`](../../backend/llmguard/mockupstream/README.md) → *Jitter shifts the failure verdict* and as a precondition on **Issue 6.3**, its consumer. Not fixed here because drawing jitter unconditionally changes every existing seeded value and invalidates any captured baseline — a Phase 6 decision about baselines. Pinned by `TestJitterShiftsFailureVerdictQuirk`. |
 | `proxy.go` `serveBuffered` | **Moot — dedup removed** (see Issue C.3). `dedupHits` counted **every** flight participant, because `singleflight` reports `shared=true` to the leader that did the work too. 8 concurrent identical requests → 8 hits, though only 7 upstream calls were avoided. | Off by one per flight *as a cost meter*. | **Accepted, not merely tolerated.** LLMGuard's concern is reliability, not spend, and the counter is a **coalescing signal** — "did a thundering herd collapse into one upstream call" — which the current count answers. An exact callers-saved figure buys precision nobody reads. If **Phase 6.3 scenario C** charts this as "cost saved", either subtract one per flight at chart time or rename the metric. Pinned in `dedup_test.go`. |
 | `provider/vertex/vertex.go` | Buffered completions ship with `id: ""` and `created: 0`; the Vertex adapter never populates them. | No — OpenAI clients that key off response id see an empty string. | Cosmetic but contract-visible. **Phase 2 Issues 2.1-2.3** rebuild this layer with golden-file tests; fix there. Pinned in `proxy_buffered_test.go`. |
 
@@ -725,19 +725,24 @@ fixed-QPS, coordinated-omission-aware latency measured from scheduled send time.
 - **Goal:** a fixed-QPS driver that measures latency from *scheduled* send time (no coordinated omission).
 - **What to do:**
   - Add `bench/` with k6 scripts using constant-arrival-rate executor; support buffered + SSE.
-  - Parameterize target arm (direct / gateway / LiteLLM), QPS, duration, payload.
+  - Parameterize target arm (direct / gateway), QPS, duration, payload.
 - **AC:**
   - k6 run against the mock upstream produces p50/p95/p99 + success rate + throughput.
   - Latency is measured from scheduled time, not send time (documented + verified in the script).
 
-### Issue 6.2 — Three-arm comparative rig
-- **Goal:** apples-to-apples: direct-to-mock, this-gateway→mock, LiteLLM→mock.
+### Issue 6.2 — Comparative rig
+> **LiteLLM arm: WON'T DO.** LiteLLM is a routing and multi-provider layer; LLMGuard is a
+> reliability gateway. Benchmarking them against each other compares the wrong axis — the
+> overhead number would be real and the conclusion drawn from it would not, because neither
+> tool is trying to do what the other does. The direct-vs-gateway arms answer the question
+> that is actually being asked ("what does this hop cost"), and the resilience scenarios in
+> 6.3 answer the one only this gateway can.
+- **Goal:** apples-to-apples: direct-to-mock vs this-gateway→mock.
 - **What to do:**
-  - Add a LiteLLM proxy service (compose) pointed at the same mock upstream.
-  - A runner script that executes all three arms with identical load + fault config, writes per-run JSON
-    (config + results), like the vector lab.
+  - A runner script that executes both arms with identical load + fault config, writes per-run
+    JSON (config + results), like the vector lab. `bench/sweep.sh` does this per QPS step.
 - **AC:**
-  - One command produces comparable JSON for all three arms under the same conditions.
+  - One command produces comparable JSON for both arms under the same conditions.
   - Results record the exact config that produced them (reproducible).
 
 ### Issue 6.3 — Fault-injection scenarios + headline charts
@@ -747,10 +752,10 @@ fixed-QPS, coordinated-omission-aware latency measured from scheduled send time.
   `error_rate=0.5`). Two arms differing in jitter run against **different failure sets**, and the
   latency delta between them is partly a different mix of retried requests rather than the effect
   being measured. Vary the nonce set instead if you need a distribution. See
-  [`mockupstream/README.md`](mockupstream/README.md) → *Jitter shifts the failure verdict* and the
+  [`mockupstream/README.md`](../../backend/llmguard/mockupstream/README.md) → *Jitter shifts the failure verdict* and the
   Findings row below.
 - **What to do:** run and chart:
-  - **A. Overhead:** added p50/p95/p99 = gateway − direct at matched QPS; throughput ceiling vs LiteLLM.
+  - **A. Overhead:** added p50/p95/p99 = gateway − direct at matched QPS, plus the throughput ceiling.
   - **B. Resilience:** 20% injected 503s → client success rate (direct vs gateway); latency-through-an-
     outage-window showing breaker trip → fail-fast → recovery.
   - **C. Retry effectiveness:** injected transient failures → requests rescued by retry vs
@@ -784,7 +789,7 @@ fixed-QPS, coordinated-omission-aware latency measured from scheduled send time.
     the differences these arms are measuring.
 - **AC:**
   - Each scenario yields a reproducible number/chart.
-  - README top shows: overhead-vs-direct/LiteLLM, success-under-fault, latency-through-outage, throughput.
+  - README top shows: overhead-vs-direct, success-under-fault, latency-through-outage, throughput.
   - The north-star story sentence is filled in with real measured numbers.
   - Every nginx value in **F** is either changed with a measurement behind it or left alone with
     a comment saying which measurement says it is fine. A default that survives on purpose is a
