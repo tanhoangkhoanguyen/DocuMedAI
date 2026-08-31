@@ -67,10 +67,21 @@ type Config struct {
 	// maxUpstreamBody, and an upstream connection. Arrival rate says nothing about
 	// how many are running when upstream slows down.
 	//
-	// Tune it as: (RateLimitRPM / 60) × p95_upstream_seconds × 1.5. The default
-	// 256 is that formula at 480 RPM and a 20s p95, so a bucket-legal burst is
-	// never shed — it only engages when requests pile up faster than they drain,
-	// or when Redis is down and the limiter is failing open.
+	// Tune it as: (RateLimitRPM / 60) × p95_upstream_seconds × 1.5, which is a
+	// FLOOR: it guarantees a bucket-legal burst is never shed, so the ceiling
+	// only engages when requests pile up faster than they drain, or when Redis
+	// is down and the limiter is failing open.
+	//
+	// The default 256 is above that floor, not on it. Measured against Vertex
+	// (gemini-2.5-flash, us-central1, n=56) the real p95 is 11.0s rather than the
+	// 20s originally assumed — 20s turned out to be near the MAX — and the route
+	// serving that model is budgeted at rpm 200 in config.yaml, not the 480
+	// global default, so the formula on real inputs gives 55. Kept at 256 anyway:
+	// exceeding the floor costs idle memory, falling short sheds requests that
+	// could have been served, and a measured 19.6s max means a ceiling sized to
+	// p95 would shed hardest exactly when the model is slowest. What the headroom
+	// costs was measured separately — latency, not collapse. See
+	// docs/benchmarks/llmguard-results.md.
 	//
 	// 0 or less disables admission control, restoring the unbounded behavior for
 	// an operator who wants it.

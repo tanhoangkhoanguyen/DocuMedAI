@@ -19,7 +19,7 @@ that depends on absolute capacity was re-measured on GCP and says so.
 Steps and commands: [llmguard-procedure.md](llmguard-procedure.md) · GCP setup:
 [llmguard-gcp.md](llmguard-gcp.md).
 
-## Capacity — where shedding starts (A)
+## Capacity — where shedding starts
 
 `RATE_LIMIT_RPM` raised out of the way, so the ceiling under test is admission
 control, not the token bucket. `MAX_IN_FLIGHT` lowered from its 256 default to
@@ -58,7 +58,7 @@ ceiling is a latency-for-goodput trade (256 slots ÷ 2s admits more than the
 upstream serves, so the queue shows up as latency instead of as a 429), which is
 why it is a per-deployment number rather than one worth publishing as a default.
 
-## Gateway overhead vs direct (B)
+## Gateway overhead vs direct
 
 Same upstream both arms, 20 QPS × 60s, 1200 samples each. Measured
 locally: both arms share a host, so the difference is the gateway's.
@@ -72,7 +72,82 @@ locally: both arms share a host, so the difference is the gateway's.
 nginx + admission + rate limiter + breaker + provider translation cost ~3ms at
 p50, 7ms at p99 — **0.13% of a 2s call**.
 
-## Vertex as a baseline — why it cannot be one (C)
+## Resilience through an outage
+
+20 QPS x 90s against the multi-replica stack, with an **8s total outage** opened
+on the mock 30s in. At 20 QPS the window covers ~160 requests, 8.9% of the run.
+
+| | client error rate | p50 | p99 | attempts/request |
+|---|---|---|---|---|
+| through the gateway | **6.22%** | 2003.5ms | **4283.6ms** | 1.25 |
+
+Retry rescued roughly **a third** of the requests that would otherwise have
+failed, and the price is visible only in the tail: p50 is unchanged while p99
+doubles to 4.28s. Those are the rescued requests, each carrying one extra
+backoff. Retry trades errors for latency, and only at the tail.
+
+The breaker stayed **closed** throughout — no `circuit_state` series on either
+replica. Correct: 8s of failures cannot reach `CircuitFailRatio=0.6` inside a
+60s window, and a short outage is what retry is for. Tripping here would have
+converted a recoverable blip into a self-inflicted one.
+
+### The 20%-error-rate arm measures nothing — do not run it
+
+The obvious way to run this scenario is `MOCK_ERROR_RATE=0.2`, and it produces a
+flat contradiction:
+
+| | client error rate | attempts/request |
+|---|---|---|
+| direct to mock | 20.98% | 1.0 |
+| through the gateway | **21.75%** | **1.65** |
+
+The gateway did 783 extra upstream calls and rescued **nothing**. That is not a
+retry bug: `mockupstream` derives its failure verdict from
+`FNV-1a(method, path, body, config, nonce)`, and a retry replays the body
+byte-for-byte — as it must, since a retry that alters the request is not a retry.
+Same bytes, same verdict, four times. The mock cannot express a *transient*
+failure this way, and transient is the only kind retry can address.
+
+Read the attempt count before believing any resilience number. An arm where
+`attempts/request > 1` and the error rate did not move is measuring the harness,
+not the gateway. Use the wall-clock outage window instead, which is independent
+of request content.
+
+## The MAX_IN_FLIGHT formula, against real inputs
+
+`config.go` derives the ceiling as `(RateLimitRPM / 60) x p95_upstream_seconds x
+1.5`, and calls 256 "that formula at 480 RPM and a 20s p95". Both inputs were
+assumptions. Measured from the stack VM, calling Vertex directly over ADC
+(`gemini-2.5-flash`, us-central1, one request per second, n=56 successes):
+
+| | p50 | p90 | p95 | max | refused |
+|---|---|---|---|---|---|
+| Vertex `generateContent` | 4.72s | 8.30s | **11.03s** | 19.63s | 4/60 (DSQ 429s) |
+
+So the assumed **20s p95 is closer to the measured max** than to the p95 — the
+worst case had been used as the typical one. And the RPM input is wrong in the
+other direction: the formula uses the global `RATE_LIMIT_RPM=480` default, but
+the route that actually serves this model is budgeted at `rpm: 200` in
+`config.yaml`. On real inputs the formula gives
+
+    (200 / 60) x 11.0 x 1.5 = 55
+
+against the 256 that ships — 4.6x lower, both inputs having erred the same way.
+
+**256 stays.** Not because the formula is wrong but because it is a floor, not a
+target: the formula's job is to guarantee a bucket-legal burst is never shed, and
+exceeding it costs idle memory, while falling short sheds requests the gateway
+could have served. What a high ceiling actually costs was measured directly —
+latency, not collapse (see Capacity) — and the tail here is the reason to keep the
+headroom: a 19.6s max against an 11s p95 means slow generations are real, and a
+ceiling sized to p95 would shed exactly when the model is slowest, which is when
+shedding is least defensible.
+
+Caveats that keep this from being the last word: n=56 supports a p50 but not a
+p95 (the quantile rule wants 200+), and 6.7% of requests were refused by dynamic
+shared quota, so the surviving latencies are the ones DSQ let through.
+
+## Vertex as a baseline — why it cannot be one
 
 Abandoned as a baseline. Pay-as-you-go uses dynamic shared quota, and at **1 QPS**
 Vertex refused 66% of requests on one run and 19% on another, both
@@ -80,7 +155,7 @@ Vertex refused 66% of requests on one run and 19% on another, both
 compare against; every number would describe Google's global load at that
 minute. The mock is the upstream for anything measured.
 
-## Circuit breaker trip threshold (D)
+## Circuit breaker trip threshold
 
 | mock error rate | vs `CircuitFailRatio=0.6` | `circuit_state` |
 |---|---|---|
@@ -89,7 +164,7 @@ minute. The mock is the upstream for anything measured.
 
 The second row only passes since the `Interval` fix below.
 
-## Tracing cost on the request path (E)
+## Tracing cost on the request path
 
 Same rung both arms: 40 QPS x 60s (2400 samples, shed 0%), one with
 `OTEL_EXPORTER_OTLP_ENDPOINT` unset, one with the collector up. Off is a genuine
@@ -114,7 +189,7 @@ pays is span creation, measured elsewhere at ~34ns against a 2s upstream. This i
 the measurement behind sampling 100% of traces instead of a ratio — there is
 nothing here to sample away.
 
-## nginx calibration — four defaults (F)
+## nginx calibration — four defaults
 
 Four numbers the template took as defaults. All four were measured on the GCP
 stack and **all four were kept** — but three of them are now kept for a reason,
@@ -183,13 +258,60 @@ replica never changes state — it refuses the first request it receives and
 that is the whole mechanism. Publishing was observed ~9.5s into a 20 QPS run at
 an 80% error rate, TTL 20s (`CIRCUIT_OPEN_FOR`).
 
-## Retry amplification (C)
+## Retry amplification
 
 From ClickHouse spans, under injected failures: **3.38 `upstream.attempt` spans
 per trace**, and a request that exhausts all four attempts takes **~10.3s** —
 `RETRY_BASE_DELAY=300ms` doubling to `RETRY_MAX_DELAY=8s`. Worth knowing before
 tuning `CIRCUIT_MIN_REQUESTS`: at that pace a breaker needs ~100s of failures to
 collect ten observations at low traffic.
+
+## Collector queue sizes, against real span volume
+
+`otel-collector.yaml`'s batch and queue settings were "left at their defaults
+until a real benchmark says what the load is". The load, measured at 320 QPS with
+80% shedding for 60s:
+
+| | |
+|---|---|
+| traces offered / stored | **19,201 / 19,201** — nothing dropped |
+| spans stored | 26,881 (**448 spans/s**) |
+| spans per trace | 1.40 |
+
+3.7x the span rate of the tracing arm, still lossless, so `send_batch_size: 1024`
+and the default sending queue stay. At 448 spans/s the batch fills in ~2.3s, so
+the size cap binds before `timeout: 5s` and inserts land roughly every two
+seconds.
+
+The 1.40 spans/trace is a useful cross-check on something else: a shed request
+produces one span (refused before dispatch) and a served one produces three, so
+`0.2 x 3 + 0.8 x 1 = 1.4` exactly. Admission control is refusing before the
+upstream call, confirmed from the trace store rather than inferred from latency.
+
+The collector publishes no telemetry of its own here — no `service.telemetry`
+block, and ports 8888/8889/13133 are closed — so batch and queue occupancy cannot
+be read directly. The trace-count identity is the only available check.
+
+## Alert thresholds, against the measurements
+
+`alerts.yml` said its six thresholds were "STARTING POINTS, not measurements".
+Checked against everything above, three were wrong and three hold.
+
+| rule | was | now | why |
+|---|---|---|---|
+| `CircuitOpen` | `== 2` for **1m** | no `for` | the breaker half-opens after `CIRCUIT_OPEN_FOR=20s`, so the gauge cannot hold 2 for a minute — the alert could not fire on a single outage |
+| `ErrorRateHigh` | > **10%** | > **5%** | a measured 8s total outage left clients at 6.2% after retry, under the old threshold |
+| `InFlightHigh` | > 179, unexplained | > 179, explained | 179 is 70% of 256, and 256 is headroom over a formula that gives ~55 on measured inputs; the rule now says so |
+| `Shedding` | `> 0` for 2m | unchanged | shedding is never normal, and served latency stays flat through it, so there is no rate worth tolerating |
+| `RateLimitingSustained` | `> 0` for 10m | unchanged | still a starting point — nothing here measured caller behaviour |
+| `StreamAbsoluteMaxHit` | `> 0` | unchanged | fired zero times across the streaming runs, which is the intended reading: non-zero means the inactivity bounds broke |
+
+The `CircuitOpen` one is the one that mattered. A `for` longer than the state's
+own lifetime is a silent no-op: the rule evaluates, never triggers, and looks
+healthy on a dashboard. It would have missed an upstream that died for half a
+minute and recovered — the exact event the gauge exists to report.
+
+Validated with `promtool check rules` (6 rules, PromQL parsed).
 
 ## Findings
 
@@ -218,11 +340,28 @@ recorded `res.timings.waiting` — time to the response *header*, which a proxy
 forwards before deciding anything about the body. Renamed `ttfb_header`; real
 TTFT needs `curl -N` or `time_starttransfer`.
 
+**5. A deterministic mock cannot measure retry.** The natural resilience arm —
+`MOCK_ERROR_RATE=0.2`, direct vs gateway — reported the gateway as *worse* than
+direct (21.75% vs 20.98% client errors) while doing 783 extra upstream calls. The
+mock hashes the request body into its failure verdict and a retry replays that
+body unchanged, so every attempt draws the same verdict. Nothing was wrong with
+the gateway; the harness could not express a transient failure. The wall-clock
+outage window can, and the same gateway then rescued a third of the failures.
+Attempts-per-trace is the tell: above 1.0 with an unmoved error rate means the
+arm is measuring itself.
+
 ## Not measured
 
-- **Alert thresholds** in `observability/alerts.yml`, still starting points.
+- **Caller behaviour**, which is what `RateLimitingSustained`'s 10-minute
+  window assumes; nothing here measured how a real client retries.
 - **Capacity at the 256 default.** One `e2-standard-8` driver cannot offer the
   load; it needs several drivers or a slower upstream.
+- **A defensible upstream p95.** n=56 supports the p50 used above but not a p95;
+  the quantile rule wants 200+ samples, and dynamic shared quota refused 6.7% of
+  them, so the surviving latencies are a filtered set.
+- **Whether `rpm: 200` is the right route budget.** `config.yaml` calls it a
+  self-imposed ceiling pending a measurement of the throughput this project
+  needs; the benchmark measured the gateway's capacity, not the app's demand.
 - **nginx under a load that stresses it.** Scenario F's numbers all come from a
   gateway bound by `MAX_IN_FLIGHT`, so nginx never worked hard; `keepalive` would
   have to be re-read against a fast upstream, where a handshake is a visible

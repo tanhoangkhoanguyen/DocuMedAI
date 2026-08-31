@@ -90,7 +90,7 @@ docker inspect la-mockupstream-service --format '{{range .Config.Env}}{{println 
 Then confirm a round trip takes ~2s. Ignore the first `curl` from Windows; cold
 start there costs seconds and is not the gateway.
 
-## 2. Capacity ladder — where shedding starts (A)
+## 2. Capacity ladder — where shedding starts
 
 Ceiling is `2 replicas x MAX_IN_FLIGHT / 2s`. The ladder must bracket it and
 overshoot one rung, or shedding never starts and there is nothing to read.
@@ -154,7 +154,7 @@ about the gateway:
 docker logs la-nginx-service 2>&1 | tail -20
 ```
 
-## 3. Gateway overhead vs direct (B)
+## 3. Gateway overhead vs direct
 
 20 QPS is far below A's knee, so nothing queues; 60s gives 1200 samples, enough
 for p99. Same body, same upstream, one hop apart.
@@ -174,7 +174,7 @@ docker run --rm -i --network documedai_documedai-net \
 The difference in `served_duration` is the overhead. Report it against the
 upstream's own latency, or the millisecond means nothing on its own.
 
-## 3b. Vertex as a baseline — why it cannot be one (C)
+## 3b. Vertex as a baseline — why it cannot be one
 
 Kept because the negative result is the finding: pay-as-you-go Vertex has no
 fixed QPS to measure against. Needs a real GCP project with ADC, so it runs
@@ -199,7 +199,44 @@ quota means each number describes Google's global load at that minute.
 Run it twice before concluding anything. One run showing a clean 1 QPS proves
 nothing about the next.
 
-## 4. Circuit breaker trip threshold (D)
+## 3c. Resilience through an outage
+
+**Use the outage window, not `MOCK_ERROR_RATE`.** The mock's failure verdict is a
+hash of the request body, and a retry replays that body unchanged, so an
+error-rate arm gives every attempt the same verdict and retry rescues nothing.
+The outage window is wall-clock and therefore content-independent.
+
+Both arms run stack-side: `la-mockupstream` publishes no host port, so a driver
+on another VM cannot reach it for the direct arm.
+
+```bash
+# open an 8s outage 30s into a 90s run
+(sleep 30; sudo docker run --rm --network documedai_documedai-net alpine:3 \
+   wget -qO- --post-data='' 'http://la-mockupstream:8090/_mock/outage?duration=8s') &
+sudo docker run --rm -i --network documedai_documedai-net \
+  -e BASE_URL=http://la-nginx:80 -e PROVIDER=mock -e QPS=20 -e DURATION=90s \
+  grafana/k6:latest run - < bench/load.js
+```
+
+Size the window against the retry budget: four attempts with
+`RETRY_BASE_DELAY=300ms` doubling to `RETRY_MAX_DELAY=8s` spans ~10.3s, so an 8s
+outage is survivable and a 30s one is not. Both are worth running — the first
+shows retry working, the second shows the breaker taking over.
+
+**Then check the attempt count**, or a broken arm reads as a working one:
+
+```bash
+sudo docker exec la-clickhouse-service clickhouse-client -d otel -q "
+SELECT SpanName, count() AS spans, uniqExact(TraceId) AS traces,
+       round(count()/uniqExact(TraceId),2) AS per_trace
+FROM otel_traces WHERE Timestamp > now() - INTERVAL 5 MINUTE
+GROUP BY SpanName ORDER BY spans DESC"
+```
+
+`upstream.attempt` above 1.0 with an unmoved error rate means retry ran and
+rescued nothing — the harness is wrong, not the gateway.
+
+## 4. Circuit breaker trip threshold
 
 Both sides of `CircuitFailRatio=0.6`. Restart the replicas between rows: the
 breaker's window is 60s, and a run that just finished still counts.
@@ -233,7 +270,7 @@ to make the breaker un-trippable.
 `DEBUG_ERRORS=1` prints response bodies, which is the only way to tell whose 429
 or 503 you are looking at.
 
-## 4b. Cross-replica breaker flag — a peer's outage (D)
+## 4b. Cross-replica breaker flag — a peer's outage
 
 Drive ONE replica by its IP (not through nginx) so the other stays untouched,
 then send the untouched one a handful of requests. It refuses them without
@@ -279,7 +316,7 @@ chunk delay must stay fixed, or the two runs are not comparable.
 Restore the template with `git checkout --` rather than a second `sed`: `sed -i`
 rewrites the file to LF and the repo keeps it CRLF.
 
-## 5a. Tracing cost on the request path (E)
+## 5a. Tracing cost on the request path
 
 Both arms at the same rung below the shed point, so latency is clean. Start with
 tracing off (the default: `OTEL_EXPORTER_OTLP_ENDPOINT` unset) and run the driver
@@ -311,7 +348,7 @@ sudo docker exec la-clickhouse-service clickhouse-client -d otel \
 means spans were dropped and the comparison is between tracing-off and
 tracing-partly-off.
 
-## 5b. nginx calibration — four defaults (F)
+## 5b. nginx calibration — four defaults
 
 Four numbers, four different measurements. Run these on the **stack** VM; only
 the k6 line runs on the driver.
@@ -360,7 +397,7 @@ sudo docker start documedai-la-llmguard-replica-2
 200s mean `max_fails` ejects one peer, not the pool. Recreate `la-nginx`
 afterwards — it holds the restarted replica's old IP otherwise.
 
-## 6. Retry amplification, from traces (C)
+## 6. Retry amplification, from traces
 
 ```bash
 docker exec la-clickhouse-service clickhouse-client -d otel -q "
