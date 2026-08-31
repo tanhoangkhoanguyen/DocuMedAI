@@ -36,9 +36,9 @@ type Metrics struct {
 	// provider + model. Shedding happens AFTER the provider is resolved, so this
 	// one always carries a real provider name.
 	rateLimited *prometheus.CounterVec
-	// circuitState reflects each provider's breaker: 0=closed, 1=half-open,
-	// 2=open. Labelled because the breakers are per provider — a single series
-	// would let one upstream's outage overwrite every other upstream's reading.
+	// circuitState reflects each route's breaker: 0=closed, 1=half-open, 2=open.
+	// Labelled by provider AND model because the breakers are per route — a model
+	// that dies on one upstream must not read as that whole upstream being down.
 	circuitState *prometheus.GaugeVec
 	// streamAborts counts streams cut by a streaming deadline, by provider +
 	// model + reason.
@@ -98,8 +98,8 @@ func newMetricsWith(reg prometheus.Registerer) *Metrics {
 		}, []string{"provider", "model"}),
 		circuitState: auto.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "llmguard_circuit_state",
-			Help: "Circuit breaker state by provider: 0=closed, 1=half-open, 2=open.",
-		}, []string{"provider"}),
+			Help: "Circuit breaker state by route: 0=closed, 1=half-open, 2=open.",
+		}, []string{"provider", "model"}),
 		inFlight: auto.NewGauge(prometheus.GaugeOpts{
 			Name: "llmguard_in_flight",
 			Help: "Requests currently holding an admission slot (compare against MAX_IN_FLIGHT).",

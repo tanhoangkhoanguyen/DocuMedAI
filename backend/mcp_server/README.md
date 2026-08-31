@@ -203,7 +203,7 @@ Reading this honestly:
 Open-loop QPS ladder over N persistent sessions. Per rung: `achieved_rps` vs target (the
 saturation signal), P50/P95/P99 under load, success rate, and an outcome breakdown
 (`success` / `tool_error` / `transport_error`). Run client→server **across machines** — see
-[`docs/mcp-loadtest-runbook.md`](../../docs/mcp-loadtest-runbook.md) for the full two-VM setup.
+[`docs/benchmarks/mcp-procedure.md`](../../docs/benchmarks/mcp-procedure.md) for the full two-VM setup.
 
 ```bash
 python -m mcp_server.loadtest_mcp \

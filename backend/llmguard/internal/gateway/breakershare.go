@@ -29,6 +29,8 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+
+	"documedai/llmguard/provider"
 )
 
 // BreakerSharer publishes and reads the "provider is open" flag.
@@ -58,14 +60,14 @@ type BreakerSharer struct {
 	// So the round trip is paid while healthy (once per request, on a local Redis
 	// alongside the rate limiter's own call) and skipped while shedding, when
 	// there is no upstream call to amortize it against.
-	openUntil map[string]time.Time
+	openUntil map[provider.Route]time.Time
 }
 
 func newBreakerSharer(rdb *redis.Client, ttl time.Duration) *BreakerSharer {
 	if rdb == nil {
 		return nil
 	}
-	return &BreakerSharer{rdb: rdb, ttl: ttl, openUntil: map[string]time.Time{}}
+	return &BreakerSharer{rdb: rdb, ttl: ttl, openUntil: map[provider.Route]time.Time{}}
 }
 
 // trustOpenFor is how long a positive reading is believed without re-checking.
@@ -80,8 +82,11 @@ func (s *BreakerSharer) trustOpenFor() time.Duration {
 	return s.ttl / 4
 }
 
-func breakerKey(providerName string) string {
-	return "llmguard:breaker:open:" + providerName
+// The route, not the provider: a breaker is per route now, so a flag keyed on the
+// provider would let one bad model shed traffic for every healthy model on the
+// same upstream.
+func breakerKey(route provider.Route) string {
+	return "llmguard:breaker:open:" + route.Provider + ":" + route.Model
 }
 
 // publishOpen records that this replica found the provider unhealthy.
@@ -90,14 +95,14 @@ func breakerKey(providerName string) string {
 // flag is set must not leave every other replica shedding forever. Expiry makes
 // the failure mode "the flag lapses and replicas re-probe", which is the same
 // thing a closing breaker does anyway.
-func (s *BreakerSharer) publishOpen(ctx context.Context, providerName string) {
+func (s *BreakerSharer) publishOpen(ctx context.Context, route provider.Route) {
 	if s == nil {
 		return
 	}
 	// Errors are dropped deliberately: failing to publish costs the OTHER replicas
 	// an early warning, which is a degradation, not a reason to fail this request.
 	// The local breaker has already tripped regardless.
-	_ = s.rdb.Set(ctx, breakerKey(providerName), "1", s.ttl).Err()
+	_ = s.rdb.Set(ctx, breakerKey(route), "1", s.ttl).Err()
 }
 
 // isOpenElsewhere reports whether another replica has recently found this
@@ -108,19 +113,19 @@ func (s *BreakerSharer) publishOpen(ctx context.Context, providerName string) {
 // request is about to make an upstream LLM call taking seconds, and the rate
 // limiter has already contacted the same Redis, so the round trip is not a new
 // class of cost. Being late to an outage would be.
-func (s *BreakerSharer) isOpenElsewhere(ctx context.Context, providerName string) bool {
+func (s *BreakerSharer) isOpenElsewhere(ctx context.Context, route provider.Route) bool {
 	if s == nil {
 		return false
 	}
 
 	s.mu.Lock()
-	trustedUntil, cached := s.openUntil[providerName]
+	trustedUntil, cached := s.openUntil[route]
 	s.mu.Unlock()
 	if cached && time.Now().Before(trustedUntil) {
 		return true
 	}
 
-	n, err := s.rdb.Exists(ctx, breakerKey(providerName)).Result()
+	n, err := s.rdb.Exists(ctx, breakerKey(route)).Result()
 	if err != nil {
 		// Fail OPEN, i.e. treat the provider as usable. A Redis outage must never
 		// be able to shed traffic on its own — that would let the component added
@@ -133,14 +138,14 @@ func (s *BreakerSharer) isOpenElsewhere(ctx context.Context, providerName string
 		// remainder of a trust window that Redis has already contradicted.
 		if cached {
 			s.mu.Lock()
-			delete(s.openUntil, providerName)
+			delete(s.openUntil, route)
 			s.mu.Unlock()
 		}
 		return false
 	}
 
 	s.mu.Lock()
-	s.openUntil[providerName] = time.Now().Add(s.trustOpenFor())
+	s.openUntil[route] = time.Now().Add(s.trustOpenFor())
 	s.mu.Unlock()
 	return true
 }

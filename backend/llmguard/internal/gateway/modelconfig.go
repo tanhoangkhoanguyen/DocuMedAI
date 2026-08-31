@@ -82,6 +82,29 @@ type ModelEntry struct {
 	// reliability gateway and does nothing with these numbers itself — no
 	// budgets, no cost metrics, no enforcement.
 	Pricing *Pricing `yaml:"pricing"`
+
+	// RateLimit is this route's share of the upstream's published quota. Absent
+	// means "fall back to RATE_LIMIT_RPM / RATE_LIMIT_BURST".
+	//
+	// Declared per route because a quota IS per route: Vertex publishes different
+	// limits for flash and pro, and the same model reached through a second
+	// upstream draws on that upstream's quota instead. One process-wide number
+	// therefore throttles every route to the tightest one's budget while still
+	// exceeding the loosest — and exceeding it means the provider answers 429,
+	// which retry treats as transient and amplifies.
+	RateLimit *RouteLimit `yaml:"rate_limit"`
+}
+
+// RouteLimit is one route's token-bucket budget, as published by the vendor.
+//
+// Both fields are required together when the block is present: an RPM with no
+// burst would silently take RATE_LIMIT_BURST, mixing this route's sustained rate
+// with a global burst that was sized for a different one.
+type RouteLimit struct {
+	// RPM is the sustained requests/min that refill the bucket.
+	RPM int `yaml:"rpm"`
+	// Burst is the bucket's capacity, i.e. how far above RPM a short spike may go.
+	Burst int `yaml:"burst"`
 }
 
 // Pricing is per-1k-token rates as published by the vendor. Stored data only.
@@ -96,6 +119,21 @@ func (m ModelEntry) Upstream() string {
 		return m.UpstreamModel
 	}
 	return m.ModelName
+}
+
+// Limits returns every route that declares its own rate limit.
+//
+// Routes without one are absent rather than filled in with the env-var default:
+// the limiter owns that fallback, so materializing it here would put the same
+// decision in two places.
+func (c *ModelConfig) Limits() map[provider.Route]RouteLimit {
+	out := map[provider.Route]RouteLimit{}
+	for _, m := range c.ModelList {
+		if m.RateLimit != nil {
+			out[m.Route()] = *m.RateLimit
+		}
+	}
+	return out
 }
 
 // Route is the allowlist key this entry grants.
@@ -209,6 +247,21 @@ func (c *ModelConfig) validate() error {
 		if m.Pricing != nil {
 			if m.Pricing.InputPer1k < 0 || m.Pricing.OutputPer1k < 0 {
 				problems = append(problems, fmt.Errorf("%s: pricing must not be negative", where))
+			}
+		}
+
+		// A rate limit, unlike a price, is enforced — so a nonsensical one is
+		// refused at startup rather than accepted and applied. Zero or negative
+		// would make the bucket unfillable and 429 every request for this route,
+		// which is an outage that looks like a config typo.
+		if m.RateLimit != nil {
+			if m.RateLimit.RPM <= 0 {
+				problems = append(problems,
+					fmt.Errorf("%s: rate_limit.rpm must be > 0", where))
+			}
+			if m.RateLimit.Burst <= 0 {
+				problems = append(problems,
+					fmt.Errorf("%s: rate_limit.burst must be > 0", where))
 			}
 		}
 	}

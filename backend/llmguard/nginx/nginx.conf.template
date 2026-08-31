@@ -1,0 +1,112 @@
+# nginx in front of N LLMGuard replicas — the `multi-replica` compose profile.
+# Proves the gateway is stateless: shared state (rate-limit bucket, breaker
+# flag) lives in Redis, not here.
+#
+# A .template, not a .conf: the nginx image runs envsubst over /etc/nginx/templates
+# at startup, so the tuning knobs below come from the environment like every other
+# service's do. Defaults live in docker-compose.yml, overridable from .env.
+#
+# All four tuning values below were measured on the two-VM GCP stack and kept.
+# `keepalive` and `worker_connections` are per WORKER, so they only mean what they
+# say because worker_processes is pinned. Numbers:
+# docs/benchmarks/llmguard-results.md -> nginx calibration.
+#
+# One worker, measured: 17.4% of one core at 320 QPS against a 2s upstream, so
+# nginx is ~6x from its own ceiling and the pinning costs nothing. Raise this only
+# with a CPU measurement, since it multiplies both numbers below.
+worker_processes ${NGINX_WORKER_PROCESSES};
+
+events {
+    # Each SSE stream holds two connections here (client + upstream), so this is
+    # ~half as many concurrent streams. Measured peak was 128 established upstream
+    # connections (2 replicas x MAX_IN_FLIGHT=64) -- 12% of this -- so the headroom
+    # is real. The bound that binds first is MAX_IN_FLIGHT x replicas, not this.
+    worker_connections ${NGINX_WORKER_CONNECTIONS};
+}
+
+http {
+    # Compose DNS resolves a scaled service name to every task IP, so this one
+    # entry is the whole replica list.
+    upstream llmguard {
+        # least_conn, not the round-robin default. An LLM request runs for
+        # seconds and its duration depends on the answer length, so counting
+        # requests distributes them evenly while leaving one replica holding the
+        # long ones. MAX_IN_FLIGHT is per process, so that replica sheds with a
+        # 429 while its peers sit idle. Least-conn tracks the quantity the
+        # semaphore actually bounds.
+        #
+        # Not sticky, deliberately: pinning a caller to a replica would hide the
+        # statelessness this profile exists to demonstrate.
+        least_conn;
+
+        # One entry, many peers: nginx resolves the Compose service name at startup
+        # and treats each task IP as its own upstream server, so max_fails marks a
+        # single replica down rather than the whole pool. Measured by stopping one
+        # replica: 10/10 requests still returned 200 through the survivor.
+        #
+        # fail_timeout stays at nginx's 10s default even though CIRCUIT_OPEN_FOR is
+        # 20s. The two windows look like they should match and do not need to: a
+        # locally-open breaker answers 503, and 503 is not in the default
+        # proxy_next_upstream set (error timeout), so nginx never counts it as a
+        # failure and never ejects a replica for having tripped. The windows govern
+        # different events -- nginx watches for a dead process, the breaker for a
+        # sick upstream.
+        server la-llmguard-replica:8081
+            max_fails=${NGINX_MAX_FAILS} fail_timeout=${NGINX_FAIL_TIMEOUT};
+
+        # Kept at 32 despite a measured steady state of 64 upstream connections per
+        # replica, because raising it changed nothing observable: at 128 (the full
+        # concurrency) p99 moved 2006.0ms -> 2006.3ms and TIME-WAIT over a 30s run
+        # went 593 -> 584. The churn this number looks responsible for is not its
+        # doing -- TIME-WAIT tracks REFUSALS, climbing ~20/s at a 60% shed rate and
+        # sitting flat at 0% shed, because a 429 costs a connection rather than
+        # returning one to the pool.
+        #
+        # Must stay under the gateway's SERVER_IDLE_TIMEOUT (120s), or the
+        # server closes a pooled connection first and nginx sends a request
+        # into a dying socket — a rare, confusing 502.
+        keepalive ${NGINX_KEEPALIVE};
+        keepalive_timeout 60s;
+    }
+
+    # Matches STREAM_ABSOLUTE_MAX. nginx's 60s default would truncate healthy
+    # long streams and reintroduce the bug f055bd4 fixed inside the gateway.
+    proxy_read_timeout 30m;
+    proxy_send_timeout 30m;
+
+    # 1.0 has no chunked encoding (no SSE) and no keepalive (inert pool).
+    proxy_http_version 1.1;
+    # Don't forward a hop-by-hop "close", which would defeat the pool.
+    proxy_set_header Connection "";
+
+    # Kept as insurance, not as a fix for something observed. LLMGuard sends no
+    # X-Accel-Buffering: no, so this is the only thing telling nginx not to hold
+    # SSE frames — but measured against the mock at 24 frames x 120ms, `on` and
+    # `off` were indistinguishable (ttfb 2.003s vs 2.006s, total 4.894s vs
+    # 4.898s): nginx forwards a chunked text/event-stream body that the upstream
+    # flushes per frame. The failure it guards against needs conditions this
+    # stack does not reproduce, and time-to-first-token is worth more than the
+    # buffer. At http level, not per-location, because streaming is a body flag
+    # ({"stream": true}), not a route.
+    proxy_buffering off;
+    proxy_request_buffering off;
+
+    server {
+        listen 80;
+
+        # One location: /v1/chat/completions, /healthz and /metrics proxy
+        # identically. NOTE /metrics — each replica has its own registry, so
+        # scraping through here round-robins and yields nonsense; Prometheus
+        # must scrape replicas directly.
+        location / {
+            proxy_pass http://llmguard;
+
+            # traceparent is not listed on purpose: nginx forwards unknown
+            # headers as-is, and otelhttp adopts the inbound trace context.
+            proxy_set_header Host              $host;
+            proxy_set_header X-Real-IP         $remote_addr;
+            proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+        }
+    }
+}

@@ -1,0 +1,117 @@
+# Alert rules for LLMGuard.
+#
+# One rule per signal that nothing else can report. The six kept metrics exist
+# because a trace cannot hold them or cannot be trusted to arrive (spans are
+# exported asynchronously and can be dropped silently); these turn them from
+# numbers on a dashboard into something that pages.
+#
+# Thresholds carry the measurement that set them; see
+# docs/benchmarks/llmguard-results.md. Where a number is still a starting
+# point the rule says so.
+
+groups:
+  - name: llmguard
+    rules:
+      # An upstream is down. The gauge is the only view of a state that is the
+      # ABSENCE of requests: an open breaker means traffic stopped being sent, so
+      # no counter moves while it is open.
+      #
+      # No `for`, deliberately. It was 1m, which could never fire: the breaker
+      # half-opens after CIRCUIT_OPEN_FOR=20s, so the gauge cannot hold 2 for a
+      # minute unless it re-trips three times over. The alert missed exactly the
+      # event it exists for — an upstream that dies for half a minute and then
+      # recovers. At a 5s evaluation interval the gauge is durable enough to
+      # page on directly.
+      - alert: LLMGuardCircuitOpen
+        expr: llmguard_circuit_state == 2
+        labels:
+          severity: critical
+        annotations:
+          summary: "Circuit open for {{ $labels.provider }}/{{ $labels.model }}"
+          description: >-
+            This route is failing fast with 503 instead of dispatching. Keyed per
+            route: other models on the same upstream are unaffected. Expect it to
+            clear within ~20s (CIRCUIT_OPEN_FOR) if the upstream recovered.
+
+      # The gateway is out of capacity. Distinct from the quota alert below even
+      # though both surface as 429 — this one is an operator problem (every caller
+      # is affected), and only shed_total separates them.
+      - alert: LLMGuardShedding
+        expr: sum(rate(llmguard_shed_total[5m])) > 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "LLMGuard is shedding requests at capacity"
+          description: >-
+            MAX_IN_FLIGHT is saturated. Compare llmguard_in_flight against the
+            ceiling: concurrency climbing while arrival rate is flat means the
+            upstream slowed down, not that callers sent more.
+
+      # Approaching the ceiling. The only signal that predicts shedding BEFORE
+      # shed_total moves, which is why the gauge is kept in Prometheus.
+      - alert: LLMGuardInFlightHigh
+        expr: llmguard_in_flight > 179
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "In-flight requests above 70% of the ceiling"
+          description: >-
+            179 is 70% of the default MAX_IN_FLIGHT=256, hardcoded because the
+            ceiling is an env var, not a metric — re-derive it if the ceiling is
+            retuned. Note 256 is deliberate headroom over the sizing formula,
+            which gives ~55 on measured inputs, so on a route serving its declared
+            rpm this should not fire; if it does, concurrency is climbing for a
+            reason arrival rate does not explain.
+
+      # A caller is over quota. Normal in small doses; sustained means a client is
+      # mis-configured or the route's rate_limit does not match the vendor's.
+      - alert: LLMGuardRateLimitingSustained
+        expr: sum by (provider, model) (rate(llmguard_rate_limited_total[5m])) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Sustained rate limiting on {{ $labels.provider }}/{{ $labels.model }}"
+          description: >-
+            Ten minutes of refusals against this route's budget in config.yaml.
+            Either a caller is looping or the declared rpm is below what the
+            vendor actually allows.
+
+      # LLMGuard's own stream protections failed.
+      #
+      # absolute_max fires ONLY after both inactivity bounds have failed to, so a
+      # non-zero value means the protection is broken — not that traffic is
+      # unusual. Treated as a bug report, hence critical while the other two
+      # reasons are ordinary traffic and have no alert.
+      - alert: LLMGuardStreamAbsoluteMaxHit
+        expr: increase(llmguard_stream_aborts_total{reason="absolute_max"}[15m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "Stream hit STREAM_ABSOLUTE_MAX — the inactivity bounds failed"
+          description: >-
+            A stream ran to the 30m backstop, which only happens once
+            STREAM_IDLE_TIMEOUT and STREAM_WRITE_IDLE have both failed to cut it.
+            Likely a ResponseWriter wrapper without Unwrap() disarming
+            SetWriteDeadline, or an upstream dripping frames just fast enough to
+            keep resetting the watchdog.
+
+      # Server-side errors as a share of traffic. clamp_min keeps the ratio
+      # defined when a route is idle.
+      - alert: LLMGuardErrorRateHigh
+        expr: >-
+          sum by (provider, model) (rate(llmguard_requests_total{status="5xx"}[5m]))
+          / clamp_min(sum by (provider, model) (rate(llmguard_requests_total[5m])), 0.001)
+          > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Over 5% 5xx on {{ $labels.provider }}/{{ $labels.model }}"
+          description: >-
+            Includes both upstream 5xx and the breaker's own 503s, which share the
+            status label. Check llmguard_circuit_state to tell them apart.
+            Lowered from 10%: a measured 8s total upstream outage left clients at
+            6.2% errors after retry, which 10% would have passed over in silence.

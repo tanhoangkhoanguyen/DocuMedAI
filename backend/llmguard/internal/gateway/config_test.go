@@ -44,6 +44,7 @@ var resilienceFields = []string{
 	"CircuitMinReqs",
 	"CircuitFailRatio",
 	"CircuitOpenFor",
+	"CircuitInterval",
 	"UpstreamTimeout",
 	"MaxIdleConns",
 	"StreamWriteIdle",

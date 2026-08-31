@@ -16,6 +16,14 @@ import (
 	"time"
 
 	"documedai/llmguard/internal/testutil"
+	"documedai/llmguard/provider"
+)
+
+// The sharer keys on the route, so these stand in for the provider names the
+// tests used before.
+var (
+	rtVertex = provider.Route{Provider: "vertex", Model: "m"}
+	rtOther  = provider.Route{Provider: "openrouter", Model: "m"}
 )
 
 func TestBreakerSharerPropagatesOpenToAnotherReplica(t *testing.T) {
@@ -25,20 +33,20 @@ func TestBreakerSharerPropagatesOpenToAnotherReplica(t *testing.T) {
 	replicaA := newBreakerSharer(rdb, 20*time.Second)
 	replicaB := newBreakerSharer(rdb, 20*time.Second)
 
-	if replicaB.isOpenElsewhere(ctx, "vertex") {
+	if replicaB.isOpenElsewhere(ctx, rtVertex) {
 		t.Fatal("no trip published yet, but replica B reports the provider open")
 	}
 
-	replicaA.publishOpen(ctx, "vertex")
+	replicaA.publishOpen(ctx, rtVertex)
 
-	if !replicaB.isOpenElsewhere(ctx, "vertex") {
+	if !replicaB.isOpenElsewhere(ctx, rtVertex) {
 		t.Error("replica A tripped but replica B did not see it — each replica would " +
 			"have to collect its own CircuitMinReqs failures against a dead upstream")
 	}
 	// Isolation still holds across providers: one sick upstream must not shed
 	// traffic bound for a healthy one, which is the same property the per-provider
 	// local breakers exist for.
-	if replicaB.isOpenElsewhere(ctx, "openrouter") {
+	if replicaB.isOpenElsewhere(ctx, rtOther) {
 		t.Error("a trip on vertex must not report openrouter as open")
 	}
 }
@@ -52,16 +60,16 @@ func TestBreakerSharerFlagExpires(t *testing.T) {
 	// A short TTL so the test does not wait out a production CircuitOpenFor. TTL
 	// is what expiry is derived from, so shortening it tests the same mechanism.
 	publisher := newBreakerSharer(rdb, 150*time.Millisecond)
-	publisher.publishOpen(ctx, "vertex")
+	publisher.publishOpen(ctx, rtVertex)
 
 	// A fresh reader per observation: the cache is per-sharer and would otherwise
 	// answer from memory rather than from Redis, which is the thing under test.
-	if !newBreakerSharer(rdb, 150*time.Millisecond).isOpenElsewhere(ctx, "vertex") {
+	if !newBreakerSharer(rdb, 150*time.Millisecond).isOpenElsewhere(ctx, rtVertex) {
 		t.Fatal("flag should be set immediately after publish")
 	}
 
 	testutil.RequireEventually(t, 2*time.Second, 20*time.Millisecond, func() bool {
-		return !newBreakerSharer(rdb, 150*time.Millisecond).isOpenElsewhere(ctx, "vertex")
+		return !newBreakerSharer(rdb, 150*time.Millisecond).isOpenElsewhere(ctx, rtVertex)
 	}, "the open flag must expire so a crashed replica cannot shed traffic forever")
 }
 
@@ -80,13 +88,13 @@ func TestBreakerSharerDoesNotCacheHealthyReadings(t *testing.T) {
 	// one — would certainly still be in effect for the second read.
 	sharer := newBreakerSharer(rdb, time.Minute)
 
-	if sharer.isOpenElsewhere(ctx, "vertex") {
+	if sharer.isOpenElsewhere(ctx, rtVertex) {
 		t.Fatal("nothing published yet, want not-open")
 	}
 
-	sharer.publishOpen(ctx, "vertex")
+	sharer.publishOpen(ctx, rtVertex)
 
-	if !sharer.isOpenElsewhere(ctx, "vertex") {
+	if !sharer.isOpenElsewhere(ctx, rtVertex) {
 		t.Error("a healthy reading was cached: this replica would keep sending to a " +
 			"provider already known to be down, for a whole trust window")
 	}
@@ -103,17 +111,17 @@ func TestBreakerSharerCachesOpenReadings(t *testing.T) {
 	ctx := context.Background()
 
 	sharer := newBreakerSharer(rdb, time.Minute)
-	sharer.publishOpen(ctx, "vertex")
+	sharer.publishOpen(ctx, rtVertex)
 
-	if !sharer.isOpenElsewhere(ctx, "vertex") {
+	if !sharer.isOpenElsewhere(ctx, rtVertex) {
 		t.Fatal("first read should see the published flag")
 	}
 
-	if err := rdb.Del(ctx, breakerKey("vertex")).Err(); err != nil {
+	if err := rdb.Del(ctx, breakerKey(rtVertex)).Err(); err != nil {
 		t.Fatalf("deleting the key: %v", err)
 	}
 
-	if !sharer.isOpenElsewhere(ctx, "vertex") {
+	if !sharer.isOpenElsewhere(ctx, rtVertex) {
 		t.Error("the open reading was not cached, so every shed request would pay a " +
 			"Redis round trip while the gateway is already degraded")
 	}
@@ -129,18 +137,18 @@ func TestBreakerSharerForgetsOpenAfterTrustWindow(t *testing.T) {
 	ctx := context.Background()
 
 	sharer := newBreakerSharer(rdb, 200*time.Millisecond) // trust window 50ms
-	sharer.publishOpen(ctx, "vertex")
-	if !sharer.isOpenElsewhere(ctx, "vertex") {
+	sharer.publishOpen(ctx, rtVertex)
+	if !sharer.isOpenElsewhere(ctx, rtVertex) {
 		t.Fatal("first read should see the published flag")
 	}
 
 	// Remove the flag as an expiry would, then wait out the trust window.
-	if err := rdb.Del(ctx, breakerKey("vertex")).Err(); err != nil {
+	if err := rdb.Del(ctx, breakerKey(rtVertex)).Err(); err != nil {
 		t.Fatalf("deleting the key: %v", err)
 	}
 
 	testutil.RequireEventually(t, 2*time.Second, 10*time.Millisecond, func() bool {
-		return !sharer.isOpenElsewhere(ctx, "vertex")
+		return !sharer.isOpenElsewhere(ctx, rtVertex)
 	}, "a cached open must lapse once the trust window passes and Redis no longer agrees")
 }
 
@@ -154,13 +162,13 @@ func TestBreakerSharerFailsOpenWhenRedisIsDown(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	if sharer.isOpenElsewhere(ctx, "vertex") {
+	if sharer.isOpenElsewhere(ctx, rtVertex) {
 		t.Error("Redis is unreachable and the sharer reported the provider open — " +
 			"a Redis outage would then shed every request on its own")
 	}
 	// Publishing must not panic or block either; the local breaker has already
 	// tripped and this is best-effort notification.
-	sharer.publishOpen(ctx, "vertex")
+	sharer.publishOpen(ctx, rtVertex)
 }
 
 // A nil sharer is the single-replica configuration: fully usable, does nothing.
@@ -169,10 +177,10 @@ func TestNilBreakerSharerIsANoOp(t *testing.T) {
 	var sharer *BreakerSharer
 	ctx := context.Background()
 
-	if sharer.isOpenElsewhere(ctx, "vertex") {
+	if sharer.isOpenElsewhere(ctx, rtVertex) {
 		t.Error("a nil sharer must never report a provider open")
 	}
-	sharer.publishOpen(ctx, "vertex") // must not panic
+	sharer.publishOpen(ctx, rtVertex) // must not panic
 
 	// And newBreakerSharer yields nil for a nil client, so main can wire it
 	// unconditionally.

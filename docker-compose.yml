@@ -54,7 +54,7 @@ services:
 
   la-llmguard:
     # LLMGuard — OpenAI-compatible gateway with an internal provider adapter:
-    # rate limit, retry/backoff, circuit breaker, in-flight dedup, Prometheus
+    # rate limit, retry/backoff, circuit breaker, admission control, Prometheus
     # metrics. Clients speak the OpenAI wire format; the Vertex adapter
     # translates to Google's native generateContent API. See backend/llmguard/.
     build:
@@ -101,6 +101,130 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+
+  # Proves the gateway is stateless: nginx round-robins across N replicas sharing
+  # one Redis, and the rate limit still holds in aggregate.
+  # Additive: every service below is profile-gated, so a plain `docker compose up`
+  # renders the single-replica stack byte-identically. nginx takes 8082, not 8081.
+  la-llmguard-replica:
+    profiles: ["multi-replica"]
+    # Same build context as la-llmguard: one image, scaled — not a copy-paste.
+    build:
+      context: ./backend/llmguard
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    # No container_name and no host ports, deliberately: those two keys are
+    # exactly what makes la-llmguard unscalable. The public door is nginx.
+    deploy:
+      # Honored by Compose v2+ (not Swarm-only). Override with
+      # `--scale la-llmguard-replica=3`.
+      replicas: ${LLMGUARD_REPLICAS:-2}
+    # Same as la-llmguard: the replicas read the same .env, so a var set for one
+    # applies to both rather than only to whichever service remembered to load it.
+    env_file:
+      - path: .env
+    environment:
+      # Mock-backed allowlist, mounted below — not config.yaml, which needs ADC.
+      LLMGUARD_CONFIG: /config.yaml
+      PROXY_PORT: "8081"
+      # DB 1 — the SAME database la-llmguard uses, which is the entire point: one
+      # rate-limit bucket and one breaker flag shared by every replica.
+      REDIS_URL: redis://la-redis:6379/1
+      # Named by config.multi-replica.yaml. The mock ignores it, but it must be
+      # non-empty: LLMGuard refuses to start on a declared-but-empty key.
+      MOCK_API_KEY: ${MOCK_API_KEY:-dummy}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-llmguard}
+    depends_on:
+      la-redis:
+        condition: service_healthy
+      la-mockupstream:
+        condition: service_healthy
+    networks:
+      - documedai-net
+    volumes:
+      - ./backend/llmguard/config.multi-replica.yaml:/config.yaml:ro
+    healthcheck:
+      # distroless has no shell/curl; the binary probes itself on 127.0.0.1.
+      test: ["CMD", "/llmguard", "-healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  la-nginx:
+    profiles: ["multi-replica"]
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    container_name: la-nginx-service
+    ports:
+      # 8082, not 8081: la-llmguard owns 8081 and this runs alongside it.
+      - "8082:80"
+    # All four were measured on the two-VM GCP stack and kept as-is; the template
+    # carries the measurement behind each. They stay env vars rather than literals
+    # so tuning is a restart, not an edit — and so .env can hold whatever a given
+    # machine turned out to need.
+    environment:
+      # This template is a WHOLE config, not a server block, so it must render to
+      # nginx.conf itself. The default output dir is conf.d/, which is included from
+      # inside `http` — where worker_processes is illegal and nginx refuses to boot.
+      NGINX_ENVSUBST_OUTPUT_DIR: /etc/nginx
+      # Pinned at 1 because `keepalive` and `worker_connections` are PER WORKER and
+      # nginx's default is one worker per CPU: on an 8-core host the pool below
+      # would really be 8x. One worker makes both numbers mean what they say.
+      NGINX_WORKER_PROCESSES: ${NGINX_WORKER_PROCESSES:-1}
+      NGINX_WORKER_CONNECTIONS: ${NGINX_WORKER_CONNECTIONS:-1024}
+      NGINX_KEEPALIVE: ${NGINX_KEEPALIVE:-32}
+      NGINX_MAX_FAILS: ${NGINX_MAX_FAILS:-3}
+      # nginx's own default, and shorter than CIRCUIT_OPEN_FOR (20s) without
+      # conflict: a tripped breaker answers 503, and 503 is not in the default
+      # proxy_next_upstream set, so nginx never ejects a replica for it. Measured;
+      # see the template.
+      NGINX_FAIL_TIMEOUT: ${NGINX_FAIL_TIMEOUT:-10s}
+    networks:
+      - documedai-net
+    volumes:
+      # A template, not a conf: the image runs envsubst over /etc/nginx/templates at
+      # startup and writes the result to /etc/nginx/nginx.conf. Read-only — nginx
+      # renders to a different path and never writes here.
+      - ./backend/llmguard/nginx/nginx.conf.template:/etc/nginx/templates/nginx.conf.template:ro
+    depends_on:
+      la-llmguard-replica:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  la-mockupstream:
+    profiles: ["multi-replica"]
+    # Context is the module root, not mockupstream/: the package needs
+    # go.mod/go.sum. See mockupstream/Dockerfile.
+    build:
+      context: ./backend/llmguard
+      dockerfile: mockupstream/Dockerfile
+    restart: unless-stopped
+    container_name: la-mockupstream-service
+    environment:
+      # A visible pause between SSE frames. Without it, "streamed" and "buffered
+      # into one blob" look identical, making proxy_buffering unverifiable.
+      MOCK_CHUNK_DELAY: ${MOCK_CHUNK_DELAY:-120ms}
+      MOCK_COMPLETION_TOKENS: ${MOCK_COMPLETION_TOKENS:-24}
+      # Benchmark knobs, all defaulting to the mock's own defaults (unset ==
+      # absent). Scenario A needs MOCK_LATENCY to stand in for a real model's
+      # seconds-long reply: at the mock's native ~1ms, MAX_IN_FLIGHT is
+      # unreachable at any QPS a driver can offer. Scenario D uses the error
+      # knobs to drive the breaker from both sides of CircuitFailRatio.
+      MOCK_LATENCY: ${MOCK_LATENCY:-}
+      MOCK_JITTER: ${MOCK_JITTER:-}
+      MOCK_ERROR_RATE: ${MOCK_ERROR_RATE:-}
+      MOCK_ERROR_STATUS: ${MOCK_ERROR_STATUS:-}
+    # No host port: replicas reach it as la-mockupstream:8090 via compose DNS.
+    networks:
+      - documedai-net
+    # The image ships its own HEALTHCHECK (the binary self-probing).
 
   la-milvus:
     profiles: ["vectordb-lab"]
@@ -203,6 +327,12 @@ services:
       GOOGLE_CLOUD_LOCATION: ${GOOGLE_CLOUD_LOCATION:-us-central1}
       # ADC: service-account key mounted read-only below.
       # GOOGLE_APPLICATION_CREDENTIALS: /secrets/gcp-sa.json            # Vertex AI ADC. Comment out in deployment
+      # TopicChecker's summarisation goes through LLMGuard, which fronts Vertex
+      # with retry, circuit breaking and the rate limit. Both are REQUIRED and
+      # must be non-empty: absent or blank fails at startup rather than guessing
+      # an upstream path, and there is no runtime fallback to a direct client.
+      LLM_GATEWAY_URL: ${LLM_GATEWAY_URL:?set to LLMGuard base URL, e.g. http://la-llmguard:8081}
+      LLM_GATEWAY_PROVIDER: ${LLM_GATEWAY_PROVIDER:?names the upstream in LLMGuard config.yaml, e.g. vertex}
     depends_on:
       la-qdrant:
         condition: service_started
@@ -274,6 +404,9 @@ services:
       - "--config.file=/etc/prometheus/prometheus.yml"
     volumes:
       - ./backend/mcp_server/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      # Alert rules live with the service they describe, not with the scrape
+      # config, so editing LLMGuard's alerts does not touch the MCP server's.
+      - ./backend/llmguard/observability/alerts.yml:/etc/prometheus/alerts.yml:ro
     ports:
       - "9090:9090"
     networks:

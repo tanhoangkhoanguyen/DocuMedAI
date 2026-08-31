@@ -274,7 +274,7 @@ func TestRefusedByQuotaIsRecorded(t *testing.T) {
 
 	mcfg := mockupstream.DefaultConfig()
 	mcfg.CompletionTokens = 3
-	h := newHarness(t, cfg, mcfg, newRateLimiter(rdb, cfg.RateLimitRPM, cfg.RateLimitBurst))
+	h := newHarness(t, cfg, mcfg, newRateLimiter(rdb, cfg.RateLimitRPM, cfg.RateLimitBurst, nil))
 
 	headers := map[string]string{"Authorization": "Bearer sk-test-" + t.Name()}
 	body := chatBody("gemini-2.5-flash", "quota", false)
@@ -759,7 +759,7 @@ func TestRateLimitWaitIsSpanned(t *testing.T) {
 
 	mcfg := mockupstream.DefaultConfig()
 	mcfg.CompletionTokens = 3
-	h := newHarness(t, cfg, mcfg, newRateLimiter(rdb, cfg.RateLimitRPM, cfg.RateLimitBurst))
+	h := newHarness(t, cfg, mcfg, newRateLimiter(rdb, cfg.RateLimitRPM, cfg.RateLimitBurst, nil))
 
 	headers := map[string]string{"Authorization": "Bearer sk-test-" + t.Name()}
 	body := chatBody("gemini-2.5-flash", "wait for a token", false)

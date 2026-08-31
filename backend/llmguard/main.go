@@ -82,7 +82,11 @@ func main() {
 	rdb := redis.NewClient(opt)
 
 	metrics := gateway.NewMetrics()
-	limiter := gateway.NewRateLimiter(rdb, cfg.RateLimitRPM, cfg.RateLimitBurst)
+	// Per-route budgets come from the allowlist, since a quota belongs to a
+	// (provider, model) pair rather than to the process. RATE_LIMIT_RPM/BURST stay
+	// as the fallback for routes that declare none.
+	limiter := gateway.NewRateLimiter(
+		rdb, cfg.RateLimitRPM, cfg.RateLimitBurst, mc.Limits())
 	// Shares the trip signal across replicas, so an upstream outage costs one
 	// replica's worth of failed requests to detect rather than N. The flag's
 	// lifetime is CircuitOpenFor — the same window the local breaker stays open —

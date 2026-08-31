@@ -16,7 +16,6 @@ import (
 	"sync/atomic"
 	"time"
 
-
 	"documedai/llmguard/provider"
 )
 
@@ -248,6 +247,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// cfg.Provider. Once routing is config-driven those differ, and labelling with
 	// the configured default would silently attribute traffic to the wrong upstream.
 	provName := prov.Name()
+	// The pair is the unit the limiter budgets and the breaker keys on, so it is
+	// built once here rather than reassembled at each of those call sites.
+	route := provider.Route{Provider: provName, Model: model}
 
 	// --- Admission control (concurrency ceiling) ---
 	//
@@ -292,9 +294,12 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// otherwise unattributable: it lands in the root span with no child to explain
 	// it. The span closes on BOTH paths — a granted token and a 429 — since one
 	// left open is never exported.
-	rlKey := apiKeyHint(r) + ":" + model
+	// Keyed on the ROUTE, not the caller: the bucket exists to protect the
+	// upstream's published quota, which is the sum of every caller's traffic. A
+	// per-caller bucket would be fairness between tenants — a different job, and
+	// one this gateway has no authenticated tenant to do it for.
 	_, waitSpan := startRateLimitWait(r.Context(), provName, model)
-	granted := p.limiter.Acquire(r.Context(), rlKey, p.cfg.RateWaitMax)
+	granted := p.limiter.Acquire(r.Context(), route, p.cfg.RateWaitMax)
 	endRateLimitWait(waitSpan, granted)
 	if !granted {
 		p.metrics.rateLimited.WithLabelValues(provName, model).Inc()
@@ -318,7 +323,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// unavailable, which is a different claim from the 429s above. The local
 	// breaker remains the authority on recovery, so this never blocks a half-open
 	// probe from running once the flag lapses.
-	if p.breakers.openElsewhere(r.Context(), provName) {
+	if p.breakers.openElsewhere(r.Context(), route) {
 		// Separates "another replica found this provider down" from the local
 		// breaker's identical 503 below — the difference between acting on someone
 		// else's evidence and on our own.
@@ -347,9 +352,10 @@ func (p *Proxy) serveBuffered(
 	seed := requestSeed(rawBody)
 
 	// The breaker wraps the WHOLE retry loop: a tripped breaker should stop us
-	// before we even start retrying. It is this provider's breaker, so a failing
-	// upstream does not shed traffic bound for a healthy one.
-	v, err := p.breakers.get(provName).Execute(func() (interface{}, error) {
+	// before we even start retrying. It is this ROUTE's breaker, so one failing
+	// model does not shed traffic bound for a healthy one on the same upstream.
+	breaker := p.breakers.get(provider.Route{Provider: provName, Model: req.Model})
+	v, err := breaker.Execute(func() (interface{}, error) {
 		return doWithRetry(r.Context(), p.cfg, seed,
 			func(ctx context.Context, attempt int) (*upstreamResult, error) {
 				// One child span per attempt. The retry loop knows the attempt
@@ -503,7 +509,8 @@ func (p *Proxy) serveStreaming(
 	// and everything already flushed belongs to the client, so a failure can only
 	// be APPENDED to the stream — never rewritten as an error envelope.
 	var wroteHeader bool
-	_, err := p.breakers.get(provName).Execute(func() (interface{}, error) {
+	breaker := p.breakers.get(provider.Route{Provider: provName, Model: req.Model})
+	_, err := breaker.Execute(func() (interface{}, error) {
 		httpReq, berr := prov.BuildRequest(streamCtx, req)
 		if berr != nil {
 			return nil, berr
@@ -784,16 +791,13 @@ func (p *Proxy) writeError(
 
 // --- small helpers ---
 
-// apiKeyHint derives a short, non-secret bucket label from the caller's key so
-// rate-limit buckets are per-key without logging the key itself.
-func apiKeyHint(r *http.Request) string {
-	auth := r.Header.Get("Authorization")
-	auth = strings.TrimPrefix(auth, "Bearer ")
-	if len(auth) <= 8 {
-		return "anon"
-	}
-	return auth[len(auth)-6:] // last 6 chars — stable, low-collision, not the secret
-}
+// The rate-limit bucket used to carry a caller hint derived from the last six
+// characters of the bearer token. It is gone with the move to per-route budgets,
+// and deliberately not replaced: those six characters are caller-chosen, so they
+// identified nobody — a client could mint a fresh bucket, or spend another's, by
+// editing them. Fairness between callers needs an authenticated tenant, which
+// this gateway does not have. What the bucket protects instead is the upstream's
+// published quota, and that is a property of the route.
 
 func statusLabel(status int) string {
 	switch {

@@ -4,6 +4,12 @@ global:
   scrape_interval: 5s
   evaluation_interval: 5s
 
+# LLMGuard's alert rules. Evaluated on evaluation_interval above; there is no
+# Alertmanager in this stack, so a firing alert is visible in Prometheus's own
+# /alerts page rather than paging anyone.
+rule_files:
+  - /etc/prometheus/alerts.yml
+
 scrape_configs:
   - job_name: mcp-server
     # Tool Core metrics (toolcore_*, surface=mcp) + protocol metrics (mcp_requests_total).
@@ -11,6 +17,21 @@ scrape_configs:
       - targets: ["la-mcp-server:8090"]
 
   - job_name: llmguard
-    # Go gateway metrics (llmguard_*).
+    # Go gateway metrics (llmguard_*). Single-replica service.
     static_configs:
       - targets: ["la-llmguard:8081"]
+
+  - job_name: llmguard-replicas
+    # The multi-replica profile scales la-llmguard-replica, whose container names
+    # are generated — so targets come from Compose's DNS, which resolves the
+    # service name to every task IP. dns_sd re-resolves each scrape, so scaling
+    # up or down needs no edit here.
+    #
+    # Scraped DIRECTLY rather than through nginx: each replica keeps its own
+    # registry, so a proxied scrape round-robins and returns a different
+    # replica's counters every time. The `instance` label then separates them,
+    # which matters because in_flight is per process and must not be summed.
+    dns_sd_configs:
+      - names: ["la-llmguard-replica"]
+        type: A
+        port: 8081

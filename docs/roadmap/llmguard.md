@@ -10,7 +10,7 @@
 > **Phase 1 is now complete.** `make test` / `make lint` run in CI on every PR touching
 > `backend/llmguard/**`; `mockupstream/` exists with its own tests pinning the determinism
 > Phase 6 depends on; and the proxy pipeline has characterization tests sitting beside
-> the code they exercise (`retry_test.go`, `dedup_test.go`, `proxy_*_test.go`, …). See
+> the code they exercise (`retry_test.go`, `proxy_*_test.go`, …). See
 > **Findings** below for what those tests turned up.
 
 This is the single roadmap for `llmguard`. It has two parts:
@@ -24,9 +24,9 @@ This is the single roadmap for `llmguard`. It has two parts:
 
 **North-star story (what the finished project claims)**
 > "Reliability-first LLM gateway (Go): OpenAI-compatible multi-provider API with circuit breaking,
-> provider-aware retries, and cross-replica dedup. Open-loop, coordinated-omission-aware benchmark
+> provider-aware retries, and cross-replica breaker state. Open-loop, coordinated-omission-aware benchmark
 > proves < N ms p99 overhead and 99%+ client success under 20% upstream fault injection (vs ~80%
-> direct), validated head-to-head against LiteLLM."
+> direct), validated against a direct-to-upstream baseline."
 
 ---
 
@@ -247,6 +247,10 @@ If you can't build and run it, you can't verify anything. Do this first.
   from a hash instead of a random number.
 
 ### Issue C.6 — `proxy.go` buffered path: dedup → breaker → retry → forward
+> **PARTLY REMOVED.** The dedup layer is gone (see Issue C.3), so the real nesting is now
+> `breaker.Execute( doWithRetry( forwardBuffered ))` and there is no `shared` flag and no
+> `dedupHits` counter. Everything else in this issue still describes the tree — read the
+> dedup half as history.
 - **Goal:** see how C.2–C.5 compose into the real non-streaming request.
 - **What to check:**
   - `serveBuffered` (`proxy.go:96-130`) — the nesting: `deduper.Do( breaker.Execute( doWithRetry( forwardBuffered )))`.
@@ -366,7 +370,7 @@ is why they are written down rather than assumed.
 
 | File:Line | What I observed | Expected? | Note / follow-up |
 |-----------|-----------------|-----------|------------------|
-| `mockupstream/chaos.go:76-78` | `Jitter` changes the **failure verdict**, even though it is correctly excluded from `fingerprint()`. `decide()` draws jitter *conditionally* on `Jitter > 0`, consuming one number from the per-request stream and shifting the failure roll that follows. Measured: **21 of 40 nonces flip** at an unchanged `error_rate=0.5`. | No — the comment at `chaos.go:74-75` claims the fixed draw order prevents exactly this. It only holds for knobs that *always* draw; the error-rate roll already does this correctly (`chaos.go:84`). | **Open with a documented constraint, not an unowned bug.** Determinism still holds *within* a config; what breaks is comparability *across* configs differing only in jitter. **The rule — hold `Jitter` fixed across arms of a comparison** — is now stated in [`mockupstream/README.md`](mockupstream/README.md) → *Jitter shifts the failure verdict* and as a precondition on **Issue 6.3**, its consumer. Not fixed here because drawing jitter unconditionally changes every existing seeded value and invalidates any captured baseline — a Phase 6 decision about baselines. Pinned by `TestJitterShiftsFailureVerdictQuirk`. |
+| `mockupstream/chaos.go:76-78` | `Jitter` changes the **failure verdict**, even though it is correctly excluded from `fingerprint()`. `decide()` draws jitter *conditionally* on `Jitter > 0`, consuming one number from the per-request stream and shifting the failure roll that follows. Measured: **21 of 40 nonces flip** at an unchanged `error_rate=0.5`. | No — the comment at `chaos.go:74-75` claims the fixed draw order prevents exactly this. It only holds for knobs that *always* draw; the error-rate roll already does this correctly (`chaos.go:84`). | **Open with a documented constraint, not an unowned bug.** Determinism still holds *within* a config; what breaks is comparability *across* configs differing only in jitter. **The rule — hold `Jitter` fixed across arms of a comparison** — is now stated in [`mockupstream/README.md`](../../backend/llmguard/mockupstream/README.md) → *Jitter shifts the failure verdict* and as a precondition on **Issue 6.3**, its consumer. Not fixed here because drawing jitter unconditionally changes every existing seeded value and invalidates any captured baseline — a Phase 6 decision about baselines. Pinned by `TestJitterShiftsFailureVerdictQuirk`. |
 | `proxy.go` `serveBuffered` | **Moot — dedup removed** (see Issue C.3). `dedupHits` counted **every** flight participant, because `singleflight` reports `shared=true` to the leader that did the work too. 8 concurrent identical requests → 8 hits, though only 7 upstream calls were avoided. | Off by one per flight *as a cost meter*. | **Accepted, not merely tolerated.** LLMGuard's concern is reliability, not spend, and the counter is a **coalescing signal** — "did a thundering herd collapse into one upstream call" — which the current count answers. An exact callers-saved figure buys precision nobody reads. If **Phase 6.3 scenario C** charts this as "cost saved", either subtract one per flight at chart time or rename the metric. Pinned in `dedup_test.go`. |
 | `provider/vertex/vertex.go` | Buffered completions ship with `id: ""` and `created: 0`; the Vertex adapter never populates them. | No — OpenAI clients that key off response id see an empty string. | Cosmetic but contract-visible. **Phase 2 Issues 2.1-2.3** rebuild this layer with golden-file tests; fix there. Pinned in `proxy_buffered_test.go`. |
 
@@ -376,7 +380,7 @@ is why they are written down rather than assumed.
 
 Once every Phase-0 issue's "Done when" is checked, you can explain the whole proxy to someone else —
 that is the gate to building. Phases 1–6 below extend it (multi-provider, OpenTelemetry, ClickHouse,
-cross-replica dedup, benchmark). From here, each issue uses **Goal / What to do / AC**.
+cross-replica breaker state, benchmark). From here, each issue uses **Goal / What to do / AC**.
 
 ---
 
@@ -426,8 +430,7 @@ cannot *understand* whether a change broke behavior. This phase changes no runti
 - **What to do:**
   - Point the existing proxy at the mock upstream (via `OPENAI_UPSTREAM_BASE`).
   - Write table tests covering: happy-path buffered, happy-path stream, 429 rate-limit shedding,
-    retry-then-succeed, circuit-breaker trip under sustained 5xx, dedup coalescing of identical
-    concurrent requests, usage-token extraction.
+    retry-then-succeed, circuit-breaker trip under sustained 5xx, usage-token extraction.
 - **AC:**
   - All behaviors above have a passing test.
   - Tests run against the mock only (no network, no keys).
@@ -608,9 +611,9 @@ here computes money.
 
 **Why:** two separate gaps, both about the gateway holding up rather than the upstream.
 
-*Across replicas:* dedup is in-process `singleflight` (`dedup.go`) and the circuit breaker is
-per-process (`retry.go`) — both **wrong at N replicas**. Making the gateway stateless and correct at N
-is the production-readiness milestone. Issues 5.1 and 5.1b.
+*Across replicas:* the circuit breaker is per-process (`retry.go`), which is **wrong at N
+replicas**. Making the gateway stateless and correct at N is the production-readiness milestone.
+Issue 5.1b. (Issue 5.1, cross-replica dedup, is WON'T DO — in-process dedup was removed instead.)
 
 *Within one replica:* retry and the breaker protect the upstream **from** LLMGuard; nothing
 protects LLMGuard from its callers. Concurrency, not arrival rate, is what maps to memory, and
@@ -632,7 +635,7 @@ nothing bounds it — so the gateway is currently a candidate for being the outa
   - Redis down → both still succeed independently (fail-open), asserted by a test.
 
 ### Issue 5.1b — Cross-replica circuit-breaker state
-- **Why:** dedup is not the only per-process state. The breaker in `retry.go` is per replica, so at
+- **Why:** the breaker in `retry.go` is per-process state. It is per replica, so at
   N replicas an upstream absorbs **N × `CircuitMinReqs`** doomed requests before anything trips, and
   a replica restarted mid-outage begins from a clean slate and hammers a provider the others already
   know is down. Both defeat the point of having a breaker.
@@ -659,7 +662,7 @@ nothing bounds it — so the gateway is currently a candidate for being the outa
   - The flag expires on its own, so a crashed replica cannot pin the others open.
 
 ### Issue 5.3 — Admission control & backpressure
-- **Why:** every existing protection (retry, breaker, dedup) shields the **upstream** from LLMGuard.
+- **Why:** every existing protection (retry, breaker) shields the **upstream** from LLMGuard.
   Nothing shields **LLMGuard from its own callers**. The rate limiter looks like it should, but it
   bounds the arrival *rate* (RPM), not the number of requests running concurrently — and those
   diverge exactly when it matters. At 480 RPM with 20s calls, ~160 are legitimately in flight; if
@@ -722,19 +725,24 @@ fixed-QPS, coordinated-omission-aware latency measured from scheduled send time.
 - **Goal:** a fixed-QPS driver that measures latency from *scheduled* send time (no coordinated omission).
 - **What to do:**
   - Add `bench/` with k6 scripts using constant-arrival-rate executor; support buffered + SSE.
-  - Parameterize target arm (direct / gateway / LiteLLM), QPS, duration, payload.
+  - Parameterize target arm (direct / gateway), QPS, duration, payload.
 - **AC:**
   - k6 run against the mock upstream produces p50/p95/p99 + success rate + throughput.
   - Latency is measured from scheduled time, not send time (documented + verified in the script).
 
-### Issue 6.2 — Three-arm comparative rig
-- **Goal:** apples-to-apples: direct-to-mock, this-gateway→mock, LiteLLM→mock.
+### Issue 6.2 — Comparative rig
+> **LiteLLM arm: WON'T DO.** LiteLLM is a routing and multi-provider layer; LLMGuard is a
+> reliability gateway. Benchmarking them against each other compares the wrong axis — the
+> overhead number would be real and the conclusion drawn from it would not, because neither
+> tool is trying to do what the other does. The direct-vs-gateway arms answer the question
+> that is actually being asked ("what does this hop cost"), and the resilience scenarios in
+> 6.3 answer the one only this gateway can.
+- **Goal:** apples-to-apples: direct-to-mock vs this-gateway→mock.
 - **What to do:**
-  - Add a LiteLLM proxy service (compose) pointed at the same mock upstream.
-  - A runner script that executes all three arms with identical load + fault config, writes per-run JSON
-    (config + results), like the vector lab.
+  - A runner script that executes both arms with identical load + fault config, writes per-run
+    JSON (config + results), like the vector lab. `bench/sweep.sh` does this per QPS step.
 - **AC:**
-  - One command produces comparable JSON for all three arms under the same conditions.
+  - One command produces comparable JSON for both arms under the same conditions.
   - Results record the exact config that produced them (reproducible).
 
 ### Issue 6.3 — Fault-injection scenarios + headline charts
@@ -744,10 +752,10 @@ fixed-QPS, coordinated-omission-aware latency measured from scheduled send time.
   `error_rate=0.5`). Two arms differing in jitter run against **different failure sets**, and the
   latency delta between them is partly a different mix of retried requests rather than the effect
   being measured. Vary the nonce set instead if you need a distribution. See
-  [`mockupstream/README.md`](mockupstream/README.md) → *Jitter shifts the failure verdict* and the
+  [`mockupstream/README.md`](../../backend/llmguard/mockupstream/README.md) → *Jitter shifts the failure verdict* and the
   Findings row below.
 - **What to do:** run and chart:
-  - **A. Overhead:** added p50/p95/p99 = gateway − direct at matched QPS; throughput ceiling vs LiteLLM.
+  - **A. Overhead:** added p50/p95/p99 = gateway − direct at matched QPS, plus the throughput ceiling.
   - **B. Resilience:** 20% injected 503s → client success rate (direct vs gateway); latency-through-an-
     outage-window showing breaker trip → fail-fast → recovery.
   - **C. Retry effectiveness:** injected transient failures → requests rescued by retry vs
@@ -762,13 +770,30 @@ fixed-QPS, coordinated-omission-aware latency measured from scheduled send time.
   - **E. Feature cost:** overhead delta with rate-limit/tracing on vs off. Tracing is the one
     that matters here: the SDK is installed only when the endpoint is set, so off is a genuine
     no-op and the delta is the real cost of exporting 100% of spans.
+  - **F. Calibrate the load balancer.** `nginx/nginx.conf` carries four numbers that were taken
+    as defaults rather than derived, and this is the arm that produces the evidence to set them.
+    Two are only meaningful once `worker_processes` is decided, because `keepalive` and
+    `worker_connections` are **per worker** and nginx defaults to one worker per CPU — so on an
+    8-core host the pool is really 8 x `keepalive`:
+    - `worker_processes` — unset today. Pin it, so the two below mean what they say.
+    - `keepalive 32` — needs to exceed steady-state concurrency per replica, which scenario D
+      measures.
+    - `worker_connections 1024` — each SSE stream holds two connections here (client +
+      upstream), so this is ~512 concurrent streams per worker. Compare against
+      `MAX_IN_FLIGHT` x replica count once D has calibrated the ceiling.
+    - `fail_timeout=10s` against `CIRCUIT_OPEN_FOR=20s` — nginx re-admits traffic to a replica
+      whose own breaker is still open. Decide whether the two windows should match, or whether
+      the earlier probe is wanted; either way it should be a decision.
   - Generate 3–4 charts from the per-run JSON. Latency figures come from the trace store
     (`quantileExact`), not from a histogram — see Phase 4 for why bucket bounds cannot resolve
     the differences these arms are measuring.
 - **AC:**
   - Each scenario yields a reproducible number/chart.
-  - README top shows: overhead-vs-direct/LiteLLM, success-under-fault, latency-through-outage, throughput.
+  - README top shows: overhead-vs-direct, success-under-fault, latency-through-outage, throughput.
   - The north-star story sentence is filled in with real measured numbers.
+  - Every nginx value in **F** is either changed with a measurement behind it or left alone with
+    a comment saying which measurement says it is fine. A default that survives on purpose is a
+    decision; one that survives because nobody looked is not.
 
 ---
 

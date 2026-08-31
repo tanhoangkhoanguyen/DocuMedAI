@@ -30,7 +30,7 @@ type upstreamResult struct {
 
 // isRetryable reports whether a status is worth another attempt — a transient
 // upstream problem, not a client error. 429 = rate limited by the provider
-// itself. Also decides what may trip the circuit breaker; see newBreaker.
+// itself.
 func isRetryable(status int) bool {
 	switch status {
 	case http.StatusTooManyRequests, // 429
@@ -51,7 +51,25 @@ func isUpstreamErr(err error) bool {
 	return errors.As(err, &ue)
 }
 
-// breakerGroup holds one circuit breaker per provider.
+// tripsBreaker reports whether a status is evidence the upstream is UNHEALTHY.
+//
+// Narrower than isRetryable, and 429 is the difference. A 429 means the quota is
+// spent, not that the provider is sick: opening on it would fail fast for
+// CircuitOpenFor and then find the quota still spent, so the breaker never
+// recovers on its own and the outage is self-inflicted. Quota belongs to the rate
+// limiter, which is budgeted per route and refills on a clock.
+func tripsBreaker(status int) bool {
+	switch status {
+	case http.StatusInternalServerError, // 500
+		http.StatusBadGateway,         // 502
+		http.StatusServiceUnavailable, // 503
+		http.StatusGatewayTimeout:     // 504
+		return true
+	}
+	return false
+}
+
+// breakerGroup holds one circuit breaker per ROUTE.
 //
 // Isolation is the point: with a single shared breaker, one sick upstream trips
 // the circuit for every other upstream too, so a Vertex outage would 503 traffic
@@ -66,7 +84,7 @@ type breakerGroup struct {
 	mu       sync.Mutex
 	cfg      Config
 	metrics  *Metrics
-	breakers map[string]*gobreaker.CircuitBreaker
+	breakers map[provider.Route]*gobreaker.CircuitBreaker
 	// sharer propagates trips to other replicas. Nil in a single-replica
 	// deployment and throughout the test suite, where it is a no-op — see
 	// breakershare.go.
@@ -77,7 +95,7 @@ func newBreakerGroup(cfg Config, m *Metrics, sharer *BreakerSharer) *breakerGrou
 	return &breakerGroup{
 		cfg:      cfg,
 		metrics:  m,
-		breakers: map[string]*gobreaker.CircuitBreaker{},
+		breakers: map[provider.Route]*gobreaker.CircuitBreaker{},
 		sharer:   sharer,
 	}
 }
@@ -85,8 +103,8 @@ func newBreakerGroup(cfg Config, m *Metrics, sharer *BreakerSharer) *breakerGrou
 // openElsewhere reports whether another replica has recently found this provider
 // unhealthy. Kept on breakerGroup so proxy.go asks one thing about breaker state
 // rather than reaching into the sharer itself.
-func (g *breakerGroup) openElsewhere(ctx context.Context, providerName string) bool {
-	return g.sharer.isOpenElsewhere(ctx, providerName)
+func (g *breakerGroup) openElsewhere(ctx context.Context, route provider.Route) bool {
+	return g.sharer.isOpenElsewhere(ctx, route)
 }
 
 // get returns the breaker for one provider, creating it on first use.
@@ -94,28 +112,35 @@ func (g *breakerGroup) openElsewhere(ctx context.Context, providerName string) b
 // A plain mutex rather than sync.Map or an RWMutex: this runs once per request
 // and holds the lock only for a map lookup, so contention is not the cost that
 // matters next to an upstream LLM call.
-func (g *breakerGroup) get(providerName string) *gobreaker.CircuitBreaker {
+func (g *breakerGroup) get(route provider.Route) *gobreaker.CircuitBreaker {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	if b, ok := g.breakers[providerName]; ok {
+	if b, ok := g.breakers[route]; ok {
 		return b
 	}
-	b := newBreaker(providerName, g.cfg, g.metrics, g.sharer)
-	g.breakers[providerName] = b
+	b := newBreaker(route, g.cfg, g.metrics, g.sharer)
+	g.breakers[route] = b
 	return b
 }
 
-// newBreaker builds the circuit breaker wrapping one provider's upstream calls.
-// When that provider is failing hard, the breaker OPENS and we fail fast with
-// 503 instead of piling on more doomed requests — protecting both upstream and
-// our own latency.
+// newBreaker builds the circuit breaker wrapping one route's upstream calls.
+// When that route is failing hard, the breaker OPENS and we fail fast with 503
+// instead of piling on more doomed requests.
 func newBreaker(
-	providerName string, cfg Config, m *Metrics, sharer *BreakerSharer,
+	route provider.Route, cfg Config, m *Metrics, sharer *BreakerSharer,
 ) *gobreaker.CircuitBreaker {
 	return gobreaker.NewCircuitBreaker(gobreaker.Settings{
-		Name:    providerName,
+		Name:    route.String(),
 		Timeout: cfg.CircuitOpenFor, // how long to stay open before half-open probe
+		// Roll the counts over a window. gobreaker's zero value means "never
+		// reset while closed", which makes the failure ratio a lifetime average:
+		// a replica that has served 17k requests needs 25k failures to reach 0.6,
+		// so the breaker stops being able to open at all. Measured on the
+		// multi-replica stack — an 80% error rate left it closed indefinitely,
+		// and the same load tripped it in 15 requests after a restart. Longer
+		// uptime meant less protection, which is backwards.
+		Interval: cfg.CircuitInterval,
 		ReadyToTrip: func(c gobreaker.Counts) bool {
 			if c.Requests < cfg.CircuitMinReqs {
 				return false // need a minimum sample before tripping
@@ -128,29 +153,26 @@ func newBreaker(
 		// entirely by the caller's own malformed request. A single buggy client
 		// could then open the breaker for every other user for CircuitOpenFor.
 		//
-		// The breaker exists to detect a sick PROVIDER, so only the statuses
-		// retry already treats as transient (429/5xx) may trip it. A
-		// non-retryable status means the request was bad, not the upstream.
+		// Only a 5xx or a transport failure counts; see tripsBreaker for why 429
+		// does not.
 		IsSuccessful: func(err error) bool {
 			if err == nil {
 				return true
 			}
 			var ue *provider.UpstreamError
 			if errors.As(err, &ue) {
-				return !isRetryable(ue.Status)
+				return !tripsBreaker(ue.Status)
 			}
 			// No status to judge — a transport failure, timeout or context
 			// cancellation. That IS an upstream problem.
 			return false
 		},
-		// name is gobreaker's Name above, i.e. the provider. Taken from the
-		// callback rather than the closure so the gauge cannot drift from the
-		// breaker that actually changed state.
-		OnStateChange: func(name string, _ gobreaker.State, to gobreaker.State) {
-			// Surface breaker state as a gauge for dashboards/alerts, one series
-			// per provider — an unlabelled gauge would let the last provider to
-			// change state overwrite every other provider's reading.
-			gauge := m.circuitState.WithLabelValues(name)
+		// route from the closure rather than gobreaker's name, so the gauge is
+		// labelled with the pair instead of a re-parsed "provider/model" string.
+		OnStateChange: func(_ string, _ gobreaker.State, to gobreaker.State) {
+			// One series per route: an unlabelled gauge would let the last route to
+			// change state overwrite every other route's reading.
+			gauge := m.circuitState.WithLabelValues(route.Provider, route.Model)
 			switch to {
 			case gobreaker.StateClosed:
 				gauge.Set(0)
@@ -174,7 +196,7 @@ func newBreaker(
 				// which is exactly the case where publishing matters most.
 				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 				defer cancel()
-				sharer.publishOpen(ctx, name)
+				sharer.publishOpen(ctx, route)
 			}
 		},
 	})

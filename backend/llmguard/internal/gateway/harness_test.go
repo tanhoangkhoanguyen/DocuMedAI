@@ -151,6 +151,7 @@ func realDefaults() Config {
 		CircuitMinReqs:   10,
 		CircuitFailRatio: 0.6,
 		CircuitOpenFor:   20 * time.Second,
+		CircuitInterval:  60 * time.Second,
 		UpstreamTimeout:  120 * time.Second,
 		MaxIdleConns:     100,
 
@@ -184,7 +185,7 @@ func deadRedis() *redis.Client {
 // requiring a Redis server. Shedding itself is covered separately against a
 // real Redis, because only a live bucket can return "no token".
 func offlineLimiter() *RateLimiter {
-	return newRateLimiter(deadRedis(), 480, 60)
+	return newRateLimiter(deadRedis(), 480, 60, nil)
 }
 
 type harness struct {

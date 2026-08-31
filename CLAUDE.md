@@ -179,8 +179,16 @@ the gateway is full. It sits before the rate limiter (which can block for `RateW
 `llmguard_rate_limited_total`: both are 429s, but one is a caller over quota and the other an operator
 capacity problem.
 
+**The breaker keys on the route, and 429 does not trip it.** Both were per provider and
+`isRetryable`, and both were wrong for the same reason: they conflated "this upstream is sick" with
+something narrower. One bad model took every healthy model on that upstream with it, and a spent
+quota opened a circuit that then found the quota still spent — a self-inflicted outage the breaker
+could not probe its way out of. So `tripsBreaker` is 5xx-and-transport-only (`isRetryable` still
+retries 429), and `llmguard_circuit_state` carries `provider` **and** `model`. Quota is the rate
+limiter's job, budgeted per route in `config.yaml`.
+
 **Breaker state is cross-replica.** `breakershare.go` publishes
-`llmguard:breaker:open:<provider>` (TTL `CIRCUIT_OPEN_FOR`) when a local breaker opens, so N replicas
+`llmguard:breaker:open:<provider>:<model>` (TTL `CIRCUIT_OPEN_FOR`) when a local breaker opens, so N replicas
 don't each burn `CIRCUIT_MIN_REQUESTS` failures learning the same outage. What crosses is the **trip
 signal, not the counters** — sharing counters would put Redis on every request's hot path. Only the
 **positive** reading is cached: caching "healthy" would delay a replica's entry into an outage, which
@@ -333,7 +341,14 @@ MCP endpoint: `http://localhost:8090/mcp/` · metrics: `http://localhost:8090/me
 | `backend/toolcore/core.py` | Tool registry + `call_tool` — the single isolation enforcement point for both surfaces |
 | `backend/mcp_server/__main__.py` | MCP ASGI app: per-request bearer auth → `StreamableHTTPSessionManager`, `/mcp` + `/metrics` |
 | `backend/mcp_server/README.md` | MCP runbook + measured overhead/capacity benchmarks |
-| `docs/mcp-loadtest-runbook.md` | Two-VM GCP setup for the serving-capacity load test |
+| `docs/benchmarks/mcp-procedure.md` | Two-VM GCP setup for the serving-capacity load test |
+
+## Docs
+
+`docs/` holds what spans packages — `deployment.md`, `benchmarks/` (results plus
+the runbooks that reproduce them), `roadmap/` (per-subsystem plans, kept as
+plans). A doc describing one package stays beside that package's code instead,
+so it is edited in the same diff. See `docs/README.md`.
 
 ## Graph Config (run_app.py)
 
@@ -351,17 +366,16 @@ max_workers = 4  # requires ≥8 CPU cores
 
 ## Required Environment Variables
 
-Create `.env` in project root:
-```
-OPENAI_API_KEY=
-GEMINI_API_KEY=
-LANGCHAIN_API_KEY=
-LANGCHAIN_TRACING_V2=true
-SUPABASE_JWT_SECRET=
-AUTH_JWT_SECRET=
-NEXT_PUBLIC_SUPABASE_URL=
-NEXT_PUBLIC_SUPABASE_ANON_KEY=
-```
+Copy `.env.example` to `.env` in the project root — it is the authority, grouped
+by what reads each var (app / auth / LLMGuard / benchmark-only). Two things worth
+knowing before editing it:
+
+- `la-llmguard` and its replicas load the **whole** `.env` via `env_file`, so any
+  var there reaches the gateway even when `docker-compose.yml` never names it.
+  That is how `RATE_LIMIT_RPM` and `MAX_IN_FLIGHT` are set.
+- The benchmark-only block stays commented for normal runs. `MOCK_LATENCY` makes
+  the mock upstream slow on purpose, and a raised `RATE_LIMIT_RPM` disables the
+  limiter — both silently change what any other measurement means.
 
 ## Data Flow: Chat Message
 

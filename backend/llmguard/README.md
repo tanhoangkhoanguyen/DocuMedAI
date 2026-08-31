@@ -8,7 +8,7 @@ client (base_url=…)  →  la-llmguard :8081  →  provider adapter  →  Verte
                          ├ admission control (in-flight ceiling, sheds 429)
                          ├ rate limit (Redis token bucket)
                          ├ retry + backoff (honors Retry-After)
-                         ├ circuit breaker (one per provider, shared across replicas)
+                         ├ circuit breaker (one per route, shared across replicas)
                          └ Prometheus /metrics
 ```
 
@@ -252,8 +252,47 @@ requests_total (Prometheus)  ==  count(DISTINCT TraceId) (ClickHouse)
 ```
 
 A shortfall means spans were dropped; raise `send_batch_size` / the sending queue in
-`otel-collector.yaml`. Those values are deliberately left at their defaults until a real benchmark
-says what the load is — guessing now would just be a different wrong number.
+`otel-collector.yaml`. Measured at **448 spans/s** (320 QPS with 80% shedding, 60s), the
+current `send_batch_size: 1024` and default sending queue lost **nothing** — 19,201 traces
+offered, 19,201 stored. At that rate the 1024-span batch fills in ~2.3s, so the size cap
+binds before `timeout: 5s` does and inserts arrive roughly every 2s. Left as-is on that
+evidence rather than on the absence of it.
+
+The collector exports no telemetry of its own here (no `service.telemetry` block, and the
+image is distroless), so batch and queue occupancy cannot be read directly — the
+trace-count identity above is the only available check, which is why it is the one that
+matters.
+
+### Alerts
+
+`observability/alerts.yml` turns the six kept metrics into rules, mounted into
+Prometheus by the `observability` profile. There is no Alertmanager here, so a firing
+alert shows on `http://localhost:9090/alerts` rather than paging anyone.
+
+One rule per signal nothing else can report:
+
+| Alert | Why a rule and not a dashboard |
+|-------|-------------------------------|
+| `LLMGuardCircuitOpen` | An open breaker is the ABSENCE of requests — no counter moves while it holds |
+| `LLMGuardShedding` | Shares its 429 with quota refusals; only `shed_total` says the gateway is full |
+| `LLMGuardInFlightHigh` | The one signal that predicts shedding *before* `shed_total` moves |
+| `LLMGuardRateLimitingSustained` | Brief refusals are normal; ten minutes means a misconfigured budget |
+| `LLMGuardStreamAbsoluteMaxHit` | Fires only once both inactivity bounds failed — a bug report, not a metric |
+| `LLMGuardErrorRateHigh` | 5xx as a share of traffic, which no single counter expresses |
+
+Thresholds were checked against the benchmark and three were changed; see
+[docs/benchmarks/llmguard-results.md](../../docs/benchmarks/llmguard-results.md).
+The one worth knowing: `LLMGuardCircuitOpen` carried `for: 1m` against a breaker
+that half-opens after 20s, so it could not fire on a single outage — a `for`
+longer than the state's own lifetime is a silent no-op.
+
+`in_flight > 179` is 70% of the default `MAX_IN_FLIGHT=256`, hardcoded because the
+ceiling is an env var, not a metric — re-derive it if the ceiling is retuned.
+
+**Prometheus scrapes replicas directly**, via Compose DNS (`dns_sd_configs`), not through
+nginx: each replica keeps its own registry, so a proxied scrape round-robins and returns a
+different replica's counters each time. The `instance` label separates them, which matters
+because `in_flight` is per process and must never be summed across replicas.
 
 ### Auth
 
@@ -314,7 +353,9 @@ compose is the only supported build path.
 | `internal/gateway/admission.go` | In-flight ceiling (counting semaphore) + shedding |
 | `internal/gateway/ratelimit.go` | Redis token bucket (atomic Lua) |
 | `internal/gateway/tracing.go` | Tracer provider setup + span/attribute vocabulary |
-| `internal/gateway/retry.go` | Backoff + jitter + Retry-After + per-provider circuit breakers |
+| `observability/alerts.yml` | Prometheus alert rules for the six kept metrics |
+| `bench/load.js` | Open-loop k6 driver (fixed arrival rate, no coordinated omission) |
+| `internal/gateway/retry.go` | Backoff + jitter + Retry-After + per-route circuit breakers |
 | `internal/gateway/breakershare.go` | Propagates a breaker trip to other replicas via Redis |
 | `internal/gateway/metrics.go` | Prometheus collectors |
 | `provider/` | What every adapter shares: normalized schema, `Provider` interface + registry, error vocabulary |
@@ -394,6 +435,73 @@ remove. Any Redis error fails open, so a Redis outage can never shed traffic by 
 
 Recovery stays local: nothing clears the flag early, and each replica's own half-open
 probe decides when it trusts the upstream again.
+
+### Running it
+
+A `multi-replica` compose profile stands the whole thing up — nginx in front of N
+replicas, one shared Redis, and the deterministic mock upstream, so it needs no GCP
+project and no spend:
+
+```bash
+docker compose --profile multi-replica up -d   la-redis la-mockupstream la-llmguard-replica la-nginx
+curl localhost:8082/healthz                      # through the load balancer
+docker compose stop la-nginx la-llmguard-replica la-mockupstream
+
+# scale beyond the default 2
+docker compose --profile multi-replica up -d --scale la-llmguard-replica=3   la-redis la-mockupstream la-llmguard-replica la-nginx
+```
+
+Both commands name their services on purpose. `up` with no arguments also starts
+every **profile-less** service — the Python backend, the MCP server, the frontend —
+a full application build nobody wants just to exercise the load balancer. And `stop`
+rather than `down`, because **`down` ignores profiles** and would tear down the
+shared `la-redis` and `la-mongo` with the rest of the project.
+
+nginx listens on **8082**, not 8081, so the profile runs *alongside* the default
+stack. The replicas use `config.multi-replica.yaml`, which routes to the mock; the
+committed `config.yaml` is untouched. `nginx/nginx.conf` documents the three settings
+that are not optional — `proxy_buffering off` above all, since without it
+time-to-first-token silently becomes full completion latency.
+
+Balancing is **least-conn**, not the round-robin default. An LLM request runs for
+seconds and its duration tracks the answer length, so counting requests spreads them
+evenly while leaving one replica holding the long ones — and because `MAX_IN_FLIGHT`
+is per process, that replica sheds with a 429 while its peers sit idle. Least-conn
+tracks the quantity the semaphore actually bounds.
+
+### Proving a replica can die
+
+`cmd/killreplica` opens 12 concurrent SSE streams against a 3-replica stack,
+SIGKILLs one replica mid-delivery, and asserts what the fleet did:
+
+```bash
+go run ./cmd/killreplica              # enforce the threshold
+go run ./cmd/killreplica -threshold 0 # measure only, never fail
+```
+
+Streams pinned to the dying replica **do** drop: nginx can retry only before it has
+forwarded a response header, and the SSE header leaves within milliseconds. So drops
+are reported rather than failed on, and the assertions are fleet-level — every
+*other* stream runs to full length, a post-kill wave still succeeds, and a survivor's
+own `/metrics` shows it absorbed the work.
+
+Measured over four runs: **4 of 12 streams dropped** (the victim's third, severed at
+frames 8–11 of 27) and **84 of 84 post-kill streams succeeded**. The threshold is
+0.90 rather than that measured 1.0 — the property is "the fleet still serves", not
+"nothing ever retries", and losing a third of capacity without nginx's retry would
+land near 67%.
+
+### Two caveats
+
+**The rate limit aggregates; the concurrency ceiling does not.** The token bucket is
+in Redis, so N replicas share one limit — `TestRateLimitSharedAcrossReplicas` pins
+it. `MAX_IN_FLIGHT` is a per-process semaphore, so effective concurrency is **N ×
+256**. Adding a replica does not raise the request rate and does raise how many
+requests run at once; size it per replica.
+
+**Prometheus must scrape replicas directly.** Each keeps its own registry, so a
+scrape through nginx round-robins between replicas and returns different counters
+each time. Point it at the replica tasks and aggregate with `sum()`.
 
 ## Deferred
 
