@@ -6,15 +6,21 @@
 # at startup, so the tuning knobs below come from the environment like every other
 # service's do. Defaults live in docker-compose.yml, overridable from .env.
 #
-# NONE of the four values below is measured. `keepalive` and `worker_connections`
-# are per WORKER, so they only mean what they say because worker_processes is
-# pinned; and fail_timeout is nginx's default rather than a match for the
-# gateway's CIRCUIT_OPEN_FOR. Benchmark scenario F calibrates all four.
+# All four tuning values below were measured on the two-VM GCP stack and kept.
+# `keepalive` and `worker_connections` are per WORKER, so they only mean what they
+# say because worker_processes is pinned. Numbers:
+# docs/benchmarks/llmguard-results.md -> nginx calibration.
+#
+# One worker, measured: 17.4% of one core at 320 QPS against a 2s upstream, so
+# nginx is ~6x from its own ceiling and the pinning costs nothing. Raise this only
+# with a CPU measurement, since it multiplies both numbers below.
 worker_processes ${NGINX_WORKER_PROCESSES};
 
 events {
     # Each SSE stream holds two connections here (client + upstream), so this is
-    # ~half as many concurrent streams.
+    # ~half as many concurrent streams. Measured peak was 128 established upstream
+    # connections (2 replicas x MAX_IN_FLIGHT=64) -- 12% of this -- so the headroom
+    # is real. The bound that binds first is MAX_IN_FLIGHT x replicas, not this.
     worker_connections ${NGINX_WORKER_CONNECTIONS};
 }
 
@@ -33,9 +39,29 @@ http {
         # statelessness this profile exists to demonstrate.
         least_conn;
 
+        # One entry, many peers: nginx resolves the Compose service name at startup
+        # and treats each task IP as its own upstream server, so max_fails marks a
+        # single replica down rather than the whole pool. Measured by stopping one
+        # replica: 10/10 requests still returned 200 through the survivor.
+        #
+        # fail_timeout stays at nginx's 10s default even though CIRCUIT_OPEN_FOR is
+        # 20s. The two windows look like they should match and do not need to: a
+        # locally-open breaker answers 503, and 503 is not in the default
+        # proxy_next_upstream set (error timeout), so nginx never counts it as a
+        # failure and never ejects a replica for having tripped. The windows govern
+        # different events -- nginx watches for a dead process, the breaker for a
+        # sick upstream.
         server la-llmguard-replica:8081
             max_fails=${NGINX_MAX_FAILS} fail_timeout=${NGINX_FAIL_TIMEOUT};
 
+        # Kept at 32 despite a measured steady state of 64 upstream connections per
+        # replica, because raising it changed nothing observable: at 128 (the full
+        # concurrency) p99 moved 2006.0ms -> 2006.3ms and TIME-WAIT over a 30s run
+        # went 593 -> 584. The churn this number looks responsible for is not its
+        # doing -- TIME-WAIT tracks REFUSALS, climbing ~20/s at a 60% shed rate and
+        # sitting flat at 0% shed, because a 429 costs a connection rather than
+        # returning one to the pool.
+        #
         # Must stay under the gateway's SERVER_IDLE_TIMEOUT (120s), or the
         # server closes a pooled connection first and nginx sends a request
         # into a dying socket — a rare, confusing 502.

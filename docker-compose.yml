@@ -160,9 +160,10 @@ services:
     ports:
       # 8082, not 8081: la-llmguard owns 8081 and this runs alongside it.
       - "8082:80"
-    # None of these is measured yet; benchmark scenario F calibrates them. They are
-    # env vars rather than literals in the template so tuning is a restart, not an
-    # edit — and so .env can hold whatever a given machine turned out to need.
+    # All four were measured on the two-VM GCP stack and kept as-is; the template
+    # carries the measurement behind each. They stay env vars rather than literals
+    # so tuning is a restart, not an edit — and so .env can hold whatever a given
+    # machine turned out to need.
     environment:
       # This template is a WHOLE config, not a server block, so it must render to
       # nginx.conf itself. The default output dir is conf.d/, which is included from
@@ -175,9 +176,10 @@ services:
       NGINX_WORKER_CONNECTIONS: ${NGINX_WORKER_CONNECTIONS:-1024}
       NGINX_KEEPALIVE: ${NGINX_KEEPALIVE:-32}
       NGINX_MAX_FAILS: ${NGINX_MAX_FAILS:-3}
-      # nginx's own default. Note it is SHORTER than the gateway's CIRCUIT_OPEN_FOR
-      # (20s), so nginx re-admits traffic to a replica whose breaker is still open —
-      # one of the things scenario F has to decide.
+      # nginx's own default, and shorter than CIRCUIT_OPEN_FOR (20s) without
+      # conflict: a tripped breaker answers 503, and 503 is not in the default
+      # proxy_next_upstream set, so nginx never ejects a replica for it. Measured;
+      # see the template.
       NGINX_FAIL_TIMEOUT: ${NGINX_FAIL_TIMEOUT:-10s}
     networks:
       - documedai-net
