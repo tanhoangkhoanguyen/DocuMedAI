@@ -16,6 +16,7 @@ and so on — so it is edited in the same diff as the thing it describes.
 |---|---|
 | [llmguard-results.md](benchmarks/llmguard-results.md) | Gateway capacity, overhead, breaker, streaming |
 | [llmguard-procedure.md](benchmarks/llmguard-procedure.md) | Commands that produced them |
+| [llmguard-gcp.md](benchmarks/llmguard-gcp.md) | Two-VM GCP setup for the publishable gateway run |
 | [mcp-procedure.md](benchmarks/mcp-procedure.md) | Two-VM GCP setup for MCP serving capacity |
 
 Numbers and method are separate files on purpose: results get replaced each run,
