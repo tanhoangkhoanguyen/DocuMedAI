@@ -5,8 +5,9 @@
 # exported asynchronously and can be dropped silently); these turn them from
 # numbers on a dashboard into something that pages.
 #
-# Thresholds are STARTING POINTS, not measurements — benchmark scenario D
-# calibrates them against real shed rates and p95 latency.
+# Thresholds carry the measurement that set them; see
+# docs/benchmarks/llmguard-results.md. Where a number is still a starting
+# point the rule says so.
 
 groups:
   - name: llmguard
@@ -14,17 +15,23 @@ groups:
       # An upstream is down. The gauge is the only view of a state that is the
       # ABSENCE of requests: an open breaker means traffic stopped being sent, so
       # no counter moves while it is open.
+      #
+      # No `for`, deliberately. It was 1m, which could never fire: the breaker
+      # half-opens after CIRCUIT_OPEN_FOR=20s, so the gauge cannot hold 2 for a
+      # minute unless it re-trips three times over. The alert missed exactly the
+      # event it exists for — an upstream that dies for half a minute and then
+      # recovers. At a 5s evaluation interval the gauge is durable enough to
+      # page on directly.
       - alert: LLMGuardCircuitOpen
         expr: llmguard_circuit_state == 2
-        for: 1m
         labels:
           severity: critical
         annotations:
           summary: "Circuit open for {{ $labels.provider }}/{{ $labels.model }}"
           description: >-
-            The breaker has been open for a minute, so this route is failing fast
-            with 503 instead of dispatching. Keyed per route: other models on the
-            same upstream are unaffected.
+            This route is failing fast with 503 instead of dispatching. Keyed per
+            route: other models on the same upstream are unaffected. Expect it to
+            clear within ~20s (CIRCUIT_OPEN_FOR) if the upstream recovered.
 
       # The gateway is out of capacity. Distinct from the quota alert below even
       # though both surface as 429 — this one is an operator problem (every caller
@@ -51,9 +58,12 @@ groups:
         annotations:
           summary: "In-flight requests above 70% of the ceiling"
           description: >-
-            179 is 70% of the default MAX_IN_FLIGHT=256. Re-derive this threshold
-            if the ceiling is retuned — it is hardcoded here because the ceiling
-            is an env var, not a metric.
+            179 is 70% of the default MAX_IN_FLIGHT=256, hardcoded because the
+            ceiling is an env var, not a metric — re-derive it if the ceiling is
+            retuned. Note 256 is deliberate headroom over the sizing formula,
+            which gives ~55 on measured inputs, so on a route serving its declared
+            rpm this should not fire; if it does, concurrency is climbing for a
+            reason arrival rate does not explain.
 
       # A caller is over quota. Normal in small doses; sustained means a client is
       # mis-configured or the route's rate_limit does not match the vendor's.
@@ -94,12 +104,14 @@ groups:
         expr: >-
           sum by (provider, model) (rate(llmguard_requests_total{status="5xx"}[5m]))
           / clamp_min(sum by (provider, model) (rate(llmguard_requests_total[5m])), 0.001)
-          > 0.1
+          > 0.05
         for: 5m
         labels:
           severity: warning
         annotations:
-          summary: "Over 10% 5xx on {{ $labels.provider }}/{{ $labels.model }}"
+          summary: "Over 5% 5xx on {{ $labels.provider }}/{{ $labels.model }}"
           description: >-
             Includes both upstream 5xx and the breaker's own 503s, which share the
             status label. Check llmguard_circuit_state to tell them apart.
+            Lowered from 10%: a measured 8s total upstream outage left clients at
+            6.2% errors after retry, which 10% would have passed over in silence.

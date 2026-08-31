@@ -252,8 +252,16 @@ requests_total (Prometheus)  ==  count(DISTINCT TraceId) (ClickHouse)
 ```
 
 A shortfall means spans were dropped; raise `send_batch_size` / the sending queue in
-`otel-collector.yaml`. Those values are deliberately left at their defaults until a real benchmark
-says what the load is — guessing now would just be a different wrong number.
+`otel-collector.yaml`. Measured at **448 spans/s** (320 QPS with 80% shedding, 60s), the
+current `send_batch_size: 1024` and default sending queue lost **nothing** — 19,201 traces
+offered, 19,201 stored. At that rate the 1024-span batch fills in ~2.3s, so the size cap
+binds before `timeout: 5s` does and inserts arrive roughly every 2s. Left as-is on that
+evidence rather than on the absence of it.
+
+The collector exports no telemetry of its own here (no `service.telemetry` block, and the
+image is distroless), so batch and queue occupancy cannot be read directly — the
+trace-count identity above is the only available check, which is why it is the one that
+matters.
 
 ### Alerts
 
@@ -272,9 +280,14 @@ One rule per signal nothing else can report:
 | `LLMGuardStreamAbsoluteMaxHit` | Fires only once both inactivity bounds failed — a bug report, not a metric |
 | `LLMGuardErrorRateHigh` | 5xx as a share of traffic, which no single counter expresses |
 
-Thresholds are starting points. `in_flight > 179` is 70% of the default
-`MAX_IN_FLIGHT=256` and is hardcoded because the ceiling is an env var, not a metric —
-re-derive it if the ceiling is retuned.
+Thresholds were checked against the benchmark and three were changed; see
+[docs/benchmarks/llmguard-results.md](../../docs/benchmarks/llmguard-results.md).
+The one worth knowing: `LLMGuardCircuitOpen` carried `for: 1m` against a breaker
+that half-opens after 20s, so it could not fire on a single outage — a `for`
+longer than the state's own lifetime is a silent no-op.
+
+`in_flight > 179` is 70% of the default `MAX_IN_FLIGHT=256`, hardcoded because the
+ceiling is an env var, not a metric — re-derive it if the ceiling is retuned.
 
 **Prometheus scrapes replicas directly**, via Compose DNS (`dns_sd_configs`), not through
 nginx: each replica keeps its own registry, so a proxied scrape round-robins and returns a
