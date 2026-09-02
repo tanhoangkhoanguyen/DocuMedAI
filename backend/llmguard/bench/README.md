@@ -42,6 +42,13 @@ Two sidecars:
   archived as a directory. `STOP_ON_429=1` stops at the first 429 (C2). A step
   whose driver fell behind stops the sweep: higher steps would lie.
 
+`smoke-providers.sh` is not a load driver: it sends one buffered and one
+streaming request per provider against a LIVE upstream and checks the reply
+SHAPE, which nothing else here does — every other arm runs against the mock.
+Key-gated and manual; uncomment the `gemini` entries in `config.yaml` first.
+It reads the SSE frames rather than trusting termination, because a failed
+stream still ends with `data: [DONE]` and reports its error in band.
+
 ## Scenarios and where each number comes from
 
 Every variable must have a source: a config constant, a statistical rule, or a
