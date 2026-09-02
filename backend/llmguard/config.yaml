@@ -35,18 +35,20 @@ providers:
     project_env: GOOGLE_CLOUD_PROJECT
     location: us-central1
 
-  # An OpenAI-compatible upstream needs no adapter code — OpenRouter, Groq,
-  # Together, a self-hosted vLLM, or Gemini's compat endpoint all work by
-  # configuration alone. Uncomment and set OPENROUTER_API_KEY to enable it.
+  # An OpenAI-compatible upstream needs no adapter code — Google AI Studio's
+  # compat endpoint, OpenRouter, Groq, vLLM all work by configuration alone.
+  # base_url carries the vendor's version prefix and omits /chat/completions.
   #
-  # base_url includes the vendor's version prefix and omits /chat/completions.
-  # The api_key_env var must be SET, not merely named: a declared-but-empty key
-  # is the same outage as a wrong one, except it only surfaces on the first call.
+  # Stays commented because a declared-but-empty api_key_env is a startup
+  # error: uncommenting without exporting the key stops the gateway entirely.
+  # Uncomment this and the model_list entry below to reach the same model
+  # through the generic adapter instead of the native one — then a difference
+  # in reply shape is an adapter bug, not a vendor difference.
   #
-  # - name: openrouter
+  # - name: gemini
   #   type: openai-compat
-  #   base_url: https://openrouter.ai/api/v1
-  #   api_key_env: OPENROUTER_API_KEY
+  #   base_url: https://generativelanguage.googleapis.com/v1beta/openai
+  #   api_key_env: GEMINI_API_KEY
 
 # --- Allowed models ----------------------------------------------------------
 # Access is granted per (provider, model) PAIR, because a client names both:
@@ -84,15 +86,25 @@ model_list:
       rpm: 200
       burst: 40
 
-  # The same model through a second upstream. Neither entry shadows the other:
-  # clients reach this one by sending provider "openrouter".
+  # The same model through a second upstream. Neither shadows the other: access
+  # is per (provider, model) PAIR, so a client picks the path with `provider`
+  # alone. Pairs with the commented provider above — uncomment both or neither.
+  #
+  # rpm is deliberately low: a smoke test that trips our own limiter reports a
+  # gateway 429 where the interesting failure is the vendor's.
   #
   # - model_name: gemini-2.5-flash
-  #   provider: openrouter
+  #   provider: gemini
+  #   rate_limit:
+  #     rpm: 60
+  #     burst: 10
 
-  # upstream_model overrides the identifier sent to the vendor when they spell it
-  # differently. Absent means "same as model_name".
+  # upstream_model overrides the identifier sent to the vendor when they spell
+  # it differently. Absent means "same as model_name".
   #
-  # - model_name: gpt-4o-mini
-  #   provider: openrouter
-  #   upstream_model: openai/gpt-4o-mini
+  # A different model on purpose: (provider, model) pairs must be unique, so
+  # reusing gemini-2.5-flash here would make the config invalid.
+  #
+  # - model_name: gemini-2.5-pro
+  #   provider: gemini
+  #   upstream_model: models/gemini-2.5-pro
