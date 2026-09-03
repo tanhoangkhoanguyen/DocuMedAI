@@ -24,6 +24,13 @@ jobs:
           UUID_NAMESPACE="b1343753-a4f3-4be8-94c6-9780ee37ab61"
           AUTH_JWT_SECRET=test-auth-secret
           SUPABASE_JWT_SECRET=test-supabase-secret
+          # docker-compose.yml marks these two required (:?), which fails at
+          # interpolation time for EVERY service -- so without them even
+          # `docker compose down -v` cannot parse the file. The graph is mocked
+          # here (ci_tests/conftest.py), so nothing dials the gateway; these
+          # only need to be non-empty, not reachable.
+          LLM_GATEWAY_URL=http://la-llmguard:8081
+          LLM_GATEWAY_PROVIDER=vertex
           EOF
 
       - name: Start core stack

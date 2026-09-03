@@ -73,7 +73,10 @@ services:
       GOOGLE_CLOUD_PROJECT: ${GOOGLE_CLOUD_PROJECT}
       GOOGLE_CLOUD_LOCATION: ${GOOGLE_CLOUD_LOCATION:-us-central1}
       # ADC: service-account key mounted read-only below. Vertex takes no API key.
-      # GOOGLE_APPLICATION_CREDENTIALS: /secrets/gcp-sa.json            # Vertex AI ADC. Comment out in deployment
+      # Local only — on GCP the attached service account supplies ADC, and this
+      # must be UNSET there or the gateway looks for a file that is not present.
+      # GEMINI_API_KEY needs no entry here: env_file loads it already.
+      GOOGLE_APPLICATION_CREDENTIALS: /secrets/gcp-sa.json
       PROXY_PORT: "8081"
       REDIS_URL: redis://la-redis:6379/1 # DB 1 — separate from the app cache on DB 0
       # Tracing is OFF unless this is set, so the default stack runs untraced and
@@ -93,7 +96,10 @@ services:
       # copy of this same file, so the service still starts if the mount is
       # removed in a deployment that bakes the config in instead.
       - ./backend/llmguard/config.yaml:/config.yaml:ro
-    #   - ${GOOGLE_SA_KEY_PATH:-./gcp-sa.json}:/secrets/gcp-sa.json:ro  # Vertex AI ADC. Comment out in deployment
+      # Pairs with GOOGLE_APPLICATION_CREDENTIALS above: local only, and remove
+      # both together on GCP. Without it the vertex provider fails to resolve
+      # ADC and the gateway restart-loops instead of serving.
+      - ${GOOGLE_SA_KEY_PATH:-./gcp-sa.json}:/secrets/gcp-sa.json:ro
     healthcheck:
       # distroless image has no shell/curl; use the Go binary's own probe.
       test: ["CMD", "/llmguard", "-healthcheck"]
