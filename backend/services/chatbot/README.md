@@ -15,10 +15,10 @@ message ─▶ TopicChecker ─▶ MessageAnalysis ─▶ LongTermMemoryRetrieve
 |------|---------|
 | `workflow.py` | Builds and compiles the LangGraph `StateGraph`. |
 | `nodes.py` | The graph node implementations. |
-| `tools/rag.py` | RAG pipeline: paraphrase → retrieve (Qdrant) → cross-encoder rerank → threshold. |
-| `tools/medical_supporter.py` | Retrieves medical terms from the `MedicalTerms` Qdrant collection. |
-| `tools/pattern_cipher.py` | Cipher for stored messages. |
-| `mcp.py` | In-memory MCP tool registry (medical-term lookup, project-info, …). |
+| `../../utils/rag.py` | RAG pipeline: paraphrase → retrieve (Qdrant) → cross-encoder rerank → threshold. |
+| `../../toolcore/tools/medical_supporter.py` | Retrieves medical terms from the `MedicalTerms` Qdrant collection. |
+| `../../utils/pattern_cipher.py` | Deterministic `uuid5` ids + bcrypt helpers. Despite the name it does **not** encrypt anything. |
+| `../../toolcore/core.py` | In-memory tool registry + `call_tool`, the single isolation enforcement point. |
 | `constants/schemas.py` | Pydantic models (`GraphState`, `ChatMessageState`, `ToolParameter`, …). |
 | `constants/prompts.py` | LLM prompt templates. |
 | `seed_prod_data.py` | Startup seeder that loads `prod_dataset/` into the `MedicalTerms` collection. |

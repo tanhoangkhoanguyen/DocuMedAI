@@ -175,7 +175,8 @@ type Config struct {
 	// Defaults to 1.0 (trace everything), which suits a low-QPS internal gateway
 	// where the interesting request is rare and losing it to a coin flip defeats the
 	// purpose. Note 0 is NOT the cheap way to switch tracing off: the SDK still
-	// builds a span before the sampler drops it, measured at ~17x the no-op path.
+	// builds a span before the sampler drops it, measured at ~2.3x the no-op path
+	// (BenchmarkSpanSDKSampleZero).
 	// Leave TraceEndpoint empty instead.
 	TraceSampleRatio float64
 

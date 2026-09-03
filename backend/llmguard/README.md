@@ -1,5 +1,19 @@
 # LLMGuard
 
+<p align="center">
+  <img src="https://img.shields.io/badge/Go-00ADD8?logo=go&logoColor=white" alt="Go">
+  <img src="https://img.shields.io/badge/OpenAI_API-412991?logo=openai&logoColor=white" alt="OpenAI-compatible">
+  <img src="https://img.shields.io/badge/Vertex_AI-4285F4?logo=googlecloud&logoColor=white" alt="Vertex AI">
+  <img src="https://img.shields.io/badge/Redis-FF4438?logo=redis&logoColor=white" alt="Redis">
+  <img src="https://img.shields.io/badge/Prometheus-E6522C?logo=prometheus&logoColor=white" alt="Prometheus">
+  <img src="https://img.shields.io/badge/OpenTelemetry-425CC7?logo=opentelemetry&logoColor=white" alt="OpenTelemetry">
+  <img src="https://img.shields.io/badge/ClickHouse-FFCC01?logo=clickhouse&logoColor=black" alt="ClickHouse">
+  <img src="https://img.shields.io/badge/nginx-009639?logo=nginx&logoColor=white" alt="nginx">
+  <img src="https://img.shields.io/badge/Grafana-F46800?logo=grafana&logoColor=white" alt="Grafana">
+  <img src="https://img.shields.io/badge/k6-7D64FF?logo=k6&logoColor=white" alt="k6">
+  <img src="https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white" alt="Docker">
+</p>
+
 An **OpenAI-API-compatible** gateway in front of the LLM provider.
 
 ```
@@ -29,6 +43,76 @@ with a 400. Refused rather than ignored on purpose: the fields are not modelled,
 and `encoding/json` drops what it cannot model — so passing such a request through
 would answer a function-calling caller with prose and no indication why.
 
+## Quickstart
+
+Point any OpenAI client at it, add one field. Clients never hold a key.
+
+```bash
+docker compose up -d --build la-llmguard
+curl localhost:8081/healthz          # {"status":"ok"}
+```
+
+```python
+from langchain_openai import ChatOpenAI
+
+llm = ChatOpenAI(
+    model="gemini-2.5-flash",
+    base_url="http://la-llmguard:8081/v1",
+    api_key="unused",                       # the gateway holds the real one
+    model_kwargs={"extra_body": {"provider": "vertex"}},
+)
+```
+
+`provider` is the one non-OpenAI field and it is **required** — the gateway will
+not pick an upstream for you ([why](#the-model-allowlist)). This is how the
+backend's summarisation node reaches Vertex (`backend/utils/llm_config.py`).
+
+Two limits: **chat completions only** (embeddings and the reranker run locally),
+and **no tool calling** — `tools`, `tool_choice`, `role:"tool"` get a 400, so
+`with_structured_output` can't use this path. Hence only one graph node does.
+
+## Why this exists
+
+A reverse proxy forwards bytes; this translates them. Every row below was chosen
+against a measurement, not a default:
+
+| | The usual way | Here | Why |
+|---|---|---|---|
+| **Breaker key** | per upstream | per `(provider, model)` **route** | one bad model took every healthy model on that upstream down with it |
+| **429 handling** | trips the breaker | retried, never trips | a spent quota opened a circuit that then found the quota still spent — a self-inflicted outage |
+| **Stream bound** | total duration | **inactivity**, refreshed per frame | a healthy long generation and a hung one both run long; only the gap between frames separates them |
+| **Overload reply** | 503 | **429 + `Retry-After`** | the upstream is healthy; the *gateway* is full |
+| **Latency store** | Prometheus histogram | ClickHouse spans | a p95 read off a 3s bucket hides any change smaller than the bucket |
+| **Multi-replica** | each learns alone | trip signal shared via Redis | N replicas would each burn `CIRCUIT_MIN_REQUESTS` failures learning the same outage |
+| **Adding a vendor** | one adapter each | **config-only** for OpenAI-compatible | N vendors do not mean N files — see [Adding a provider](#adding-a-provider) |
+
+The shared breaker sends the **trip signal, not the counters** (counters would put
+Redis on the hot path) and caches only the *positive* reading — caching "healthy"
+would delay a replica's entry into an outage.
+
+## Measured
+
+Against a deterministic mock upstream pinned at 2s, driven by an **open-loop** k6
+arrival rate so saturation shows as rising latency, not reduced load.
+
+| | measured |
+|---|---|
+| Gateway overhead vs calling the upstream direct | **+2.6 ms** p50 · +4.3 ms p95 · +7.0 ms p99 |
+| Tracing cost on the request path (off → on) | **0.0 ms** at p50, p95 and p99 |
+| Through an 8s upstream outage | **6.22%** client errors — retry rescued ~⅓ of the failures |
+| Cost of that rescue | p50 flat, p99 doubles to 4.28s — paid **only** in the tail |
+| Goodput past saturation (2× → 8× capacity) | holds **63.8 → 65.3 rps**, served p50 flat at ~2.00s |
+| Span pipeline under load | **19,201 / 19,201** traces stored, nothing dropped (448 spans/s) |
+
+Read the goodput row twice: from 80 to 320 QPS the gateway sheds 20% → 80% of
+traffic while what it serves keeps the latency it had at 40 QPS. It degrades by
+refusing work, never by getting slower for everyone.
+
+**No Vertex baseline on purpose** — `generateContent` measured p50 4.72s / p95
+11.03s with 4-in-60 quota 429s, far too noisy to attribute 2.6ms against.
+Method, caveats and the arm that *measured nothing*:
+[`llmguard-results.md`](../../docs/benchmarks/llmguard-results.md) ·
+[`llmguard-procedure.md`](../../docs/benchmarks/llmguard-procedure.md).
 ## The model allowlist
 
 A request names **both** an upstream and a model:
@@ -134,7 +218,10 @@ Tune it as:
 MAX_IN_FLIGHT ≈ (RATE_LIMIT_RPM / 60) × p95_upstream_seconds × 1.5
 ```
 
-The default 256 is that formula at 480 RPM and a 20s p95, so a bucket-legal burst is never shed. It
+The default 256 is **headroom above** that formula, not its output: on measured inputs (route
+`rpm: 200`, Vertex p95 **11.0s**) it gives ~55, and the original "480 RPM, 20s p95" derivation used
+the worst case as the typical one — see
+[the retraction](../../docs/benchmarks/llmguard-results.md#the-max_in_flight-formula-against-real-inputs). It
 engages when requests drain slower than they arrive, or when Redis is down and the rate limiter is
 failing open. Watch `llmguard_in_flight` against the ceiling; `llmguard_shed_total` is counted apart
 from `llmguard_rate_limited_total` because a caller over quota and a gateway out of capacity are
@@ -185,11 +272,13 @@ That request was slow because it retried three times — not because the provide
 distinguishes those two.
 
 **Off unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set**, and off means nothing is installed: the global
-tracer stays OpenTelemetry's no-op. Two measured notes behind that shape. A no-op span costs ~34ns
-and one allocation against a request that spends *seconds* in an LLM call, so there is no
+tracer stays OpenTelemetry's no-op. Two measured notes behind that shape. A no-op span costs
+**~450ns and 4 allocations** against a request that spends *seconds* in an LLM call, so there is no
 `if enabled` guard anywhere. And installing the SDK with a sample ratio of `0` is **not** the cheap
-way to switch tracing off — the SDK builds a span before the sampler drops it, ~17× the no-op cost.
-Leave the endpoint empty.
+way to switch tracing off — the SDK builds a span before the sampler drops it, **~2.3×** the no-op
+cost. Leave the endpoint empty.
+
+Both from `make bench`; allocation counts are the stable half, ns/op moves with the host.
 
 The endpoint is read by the SDK itself, which appends `/v1/traces`; the sibling
 `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` is used verbatim. Inbound W3C `traceparent` headers are
@@ -334,46 +423,88 @@ curl localhost:8081/v1/chat/completions -H 'Content-Type: application/json' \
        "messages":[{"role":"user","content":"hi"}]}'
 ```
 
-Uncomment the `GOOGLE_APPLICATION_CREDENTIALS` env var and the SA-key volume in
-`docker-compose.yml` to supply credentials from a key file.
+Vertex auth is **ADC only**. Locally, `docker-compose.yml` sets
+`GOOGLE_APPLICATION_CREDENTIALS` and mounts the SA key read-only; on GCP, remove
+both and the attached service account supplies ADC to the same binary with no
+code change. Without either, the vertex provider fails to resolve ADC at startup
+and the container restart-loops rather than serving.
 
-There is no `go.sum` in the repo — the Dockerfile runs `go mod tidy` in-build, so
-compose is the only supported build path.
+The Dockerfile runs `go mod tidy` in-build, so an image build does not depend on
+a committed lockfile; `go.sum` is tracked and `make test` / `make build` work
+locally.
 
-## Files
+## Layout
+
+```
+backend/llmguard/
+├── main.go                  composition root — wiring, HTTP server, graceful shutdown
+├── config.yaml              THE MODEL ALLOWLIST (names env vars, never secrets)
+├── internal/gateway/        the pipeline — nothing outside the module can import it
+├── provider/                wire-format translation, two tiers (see below)
+├── mockupstream/            deterministic fake upstream: every test + the benchmark
+├── observability/           collector, alert rules, ClickHouse bootstrap
+└── bench/                   open-loop k6 driver + scripts
+```
+
+### `internal/gateway/` — the pipeline
+
+Request order is the table order: admit → rate limit → breaker → retry.
 
 | File | Responsibility |
 |------|----------------|
-| `main.go` | Composition root: wiring, HTTP server, graceful shutdown, `-healthcheck` |
-| `internal/gateway/gateway.go` | The package's entire exported surface — what `main` may call |
-| `internal/gateway/config.go` | Env-driven config + defaults |
-| `internal/gateway/modelconfig.go` | Parses + validates `config.yaml` (the allowlist) |
-| `internal/gateway/providers.go` | Adapter construction + installing the allowlist's routes |
-| `internal/gateway/proxy.go` | Admit → rate limit → breaker → retry; SSE translation loop |
-| `internal/gateway/admission.go` | In-flight ceiling (counting semaphore) + shedding |
-| `internal/gateway/ratelimit.go` | Redis token bucket (atomic Lua) |
-| `internal/gateway/tracing.go` | Tracer provider setup + span/attribute vocabulary |
-| `observability/alerts.yml` | Prometheus alert rules for the six kept metrics |
-| `bench/load.js` | Open-loop k6 driver (fixed arrival rate, no coordinated omission) |
-| `internal/gateway/retry.go` | Backoff + jitter + Retry-After + per-route circuit breakers |
-| `internal/gateway/breakershare.go` | Propagates a breaker trip to other replicas via Redis |
-| `internal/gateway/metrics.go` | Prometheus collectors |
+| `gateway.go` | The package's entire exported surface — what `main` may call |
+| `config.go` | Env-driven config + defaults |
+| `modelconfig.go` | Parses + validates `config.yaml` (the allowlist) |
+| `providers.go` | Adapter construction + installing the allowlist's routes |
+| `proxy.go` | The request path end to end; SSE translation loop |
+| `admission.go` | In-flight ceiling (counting semaphore) + shedding |
+| `ratelimit.go` | Redis token bucket (atomic Lua) |
+| `retry.go` | Backoff + jitter + `Retry-After` + per-route circuit breakers |
+| `breakershare.go` | Propagates a breaker trip to other replicas via Redis |
+| `idlewatchdog.go` | Cancels an upstream read after `STREAM_IDLE_TIMEOUT` of silence |
+| `writedeadline.go` | Socket write deadline for a client that stopped reading |
+| `metrics.go` | Prometheus collectors |
+| `tracing.go` | Tracer provider setup + span/attribute vocabulary |
+
+### `provider/` — two tiers, not peers
+
+| Path | Role |
+|------|------|
 | `provider/` | What every adapter shares: normalized schema, `Provider` interface + registry, error vocabulary |
 | `provider/openai/` | The **generic** adapter — every OpenAI-compatible upstream, config-only |
-| `provider/vertex/` | The **native** adapter for Vertex AI `generateContent` (+ golden fixtures) |
-| `mockupstream/` | Deterministic fake provider used by every test (and the benchmark) |
-| `internal/testutil/redis.go` | Live-Redis gate for the Lua token-bucket tests |
-| `internal/testutil/polling.go` | `Eventually` — waits on state that settles asynchronously |
-| `internal/testutil/metrics.go` | Prometheus readers, so tests can assert on instrumentation |
+| `provider/vertex/` | The **native** adapter for Vertex `generateContent` (+ golden fixtures) |
+
+### Support
+
+| Path | Role |
+|------|------|
+| `mockupstream/` | Deterministic fake provider — seeded chaos, byte-identical in-process or standalone |
+| `internal/testutil/` | Live-Redis gate, `Eventually` polling, Prometheus readers for assertions |
 | `observability/otel-collector.yaml` | OTLP in, ClickHouse out — the only place the trace store is named |
-| `observability/clickhouse-user.xml` | The collector's ClickHouse user (the image's `default` is localhost-only) |
-| `observability/clickhouse-init.sql` | Creates the `otel` database; the collector creates its own tables |
+| `observability/alerts.yml` | Prometheus alert rules for the six kept metrics |
+| `observability/clickhouse-*.{xml,sql}` | The collector's ClickHouse user + `otel` database bootstrap |
+| `bench/load.js` | Open-loop k6 driver (fixed arrival rate, no coordinated omission) |
+| `bench/smoke-providers.sh` | Manual, key-gated: does each adapter work against the **live** vendor |
 
 The pipeline sits under `internal/` so nothing outside this module can depend on
 it, leaving it free to change shape. Only `gateway.go` is exported; everything
 else in the package is unexported, and tests live beside the code they exercise
 so no identifier is exported merely to be testable.
 
+## Tech stack
+
+| | |
+|---|---|
+| Language | Go 1.23, stdlib `net/http` — no web framework |
+| Wire format | OpenAI `/v1/chat/completions` in · Vertex `generateContent` or OpenAI-compat out |
+| State | Redis — token bucket (atomic Lua) + cross-replica breaker flag |
+| Resilience | `sony/gobreaker`, hand-rolled backoff + jitter, counting-semaphore admission |
+| Auth | `golang.org/x/oauth2` ADC for Vertex; static key for OpenAI-compat |
+| Metrics | Prometheus `client_golang` → Grafana |
+| Tracing | OpenTelemetry SDK → OTLP/HTTP → Collector → **ClickHouse** |
+| Multi-replica | nginx `least_conn` in front of N replicas |
+| Load testing | k6, open-loop arrival rate |
+| Tests | **142 test funcs** across 22 files (6.4k of 12.7k lines Go), `-race`, no mocks of own code |
 ## Adding a provider
 
 There are two tiers, and the first one covers almost everything. **Start by
@@ -423,7 +554,7 @@ on something the operator chose.
 ## Multi-replica
 
 Breaker state crosses replicas: when a local breaker opens it publishes
-`llmguard:breaker:open:<provider>` with TTL `CIRCUIT_OPEN_FOR`, and the others fail
+`llmguard:breaker:open:<provider>:<model>` with TTL `CIRCUIT_OPEN_FOR`, and the others fail
 fast on that instead of each collecting `CIRCUIT_MIN_REQUESTS` failures of their own
 against an upstream already known to be down.
 

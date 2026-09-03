@@ -16,17 +16,17 @@ DocuMedAI is a full-stack AI-powered medical document analysis system. Users upl
 | Backend API | FastAPI (port 2010) | `backend/services/app/` |
 | Agent workflow | LangGraph StateGraph | `backend/services/chatbot/` |
 | Multi-agent | CrewAI | `nodes.py` — Agents node |
-| RAG pipeline | Qdrant retrieval + BAAI reranker | `backend/services/chatbot/tools/rag.py` |
+| RAG pipeline | Qdrant retrieval + BAAI reranker | `backend/utils/rag.py` |
 | LLMGuard | Go gateway (admission control, rate limit, retry, circuit breaker); OpenAI-compatible API → provider adapter (`openai` generic / `vertex` native) → upstream. Chat completions only — `tools`/`tool_choice` are refused with a 400. Standalone; not in the app's request path | `backend/llmguard/` |
-| Memory cache | Redis (TTL 1800s → flush to MongoDB) | `backend/services/utils/redis_client.py` |
-| Persistence | MongoDB | `backend/services/utils/mongo_client.py` |
+| Memory cache | Redis (TTL 1800s → flush to MongoDB) | `backend/utils/redis_client.py` |
+| Persistence | MongoDB | `backend/utils/mongo_client.py` |
 | Auth | JWT + Supabase SSR | `backend/services/app/auth_api.py`, `frontend/lib/supabase/` |
 | Vector DB | Qdrant (default); alternatives benchmarked in `backend/vector_database_tests/` | `backend/toolcore/tools/` |
 | Tool Core | In-memory tool registry + the single enforcement point (`MCPServer.call_tool`) | `backend/toolcore/core.py` |
 | MCP server | Real MCP protocol (JSON-RPC 2.0 over streamable-HTTP, official `mcp` SDK) at `/mcp` on port 8090 | `backend/mcp_server/` |
-| ID hashing | `pattern_cipher.py` does NOT encrypt — it's `uuid5` deterministic IDs + bcrypt helpers (the bcrypt helpers are currently unused; auth stores plaintext passwords). No message encryption exists anywhere. | `backend/services/utils/pattern_cipher.py` |
+| ID hashing | `pattern_cipher.py` does NOT encrypt — it's `uuid5` deterministic IDs + bcrypt helpers (the bcrypt helpers are currently unused; auth stores plaintext passwords). No message encryption exists anywhere. | `backend/utils/pattern_cipher.py` |
 
-**Important**: `backend/services/app/` holds the FastAPI routes and workspace layer. `backend/services/chatbot/` holds the LangGraph graph, nodes, and tools. `backend/services/utils/` holds shared DB clients (MongoDB, Redis, Supabase).
+**Important**: `backend/services/app/` holds the FastAPI routes and workspace layer. `backend/services/chatbot/` holds the LangGraph graph, nodes, and tools. `backend/utils/` holds shared DB clients (MongoDB, Redis, Supabase), the RAG pipeline and `llm_config.py`.
 
 **Tool Core, one core / two surfaces**: `toolcore/core.py` holds the three RAG tools
 (`identity`, `search_medical_knowledge`, `search_user_documents`) and is reached two ways:
@@ -50,7 +50,7 @@ the shared `services.app.auth_deps.decode_bearer_any` (local HS256 + Supabase) a
 `Principal(source="mcp")` for the request scope. Absent token → anonymous (the two unscoped
 tools still work); invalid token → HTTP 401 before any tool runs.
 
-**LLMGuard**: A standalone Go gateway (port 8081) that exposes an OpenAI-compatible `/v1/chat/completions` and translates it to a vendor's native API via a provider adapter. It is **not currently in the request path** — `backend/services/` calls Vertex directly with `ChatVertexAI(project=…, location=…)` (`backend/utils/llm_config.py`), and `crewai.LLM` reaches Vertex through litellm's `vertex_ai/` prefix. Embeddings and the reranker run locally. Both LLMGuard and the app read the same `GOOGLE_CLOUD_PROJECT` / `GOOGLE_CLOUD_LOCATION` vars and authenticate via ADC. See `backend/llmguard/README.md`.
+**LLMGuard**: A standalone Go gateway (port 8081) that exposes an OpenAI-compatible `/v1/chat/completions` and translates it to a vendor's native API via a provider adapter. It is in the request path for **one node only**: `TopicChecker` builds its client with `build_chat_model` (`backend/utils/llm_config.py`), which returns a `ChatOpenAI` aimed at `LLM_GATEWAY_URL`. Every other node calls Vertex directly with `ChatVertexAI`, and `crewai.LLM` reaches Vertex through litellm's `vertex_ai/` prefix — because the gateway refuses tool calling, which is how LangChain implements `with_structured_output`. `LLM_GATEWAY_URL`/`LLM_GATEWAY_PROVIDER` are required (`:?` in compose): the backend will not start without them. Embeddings and the reranker run locally. Both LLMGuard and the app read the same `GOOGLE_CLOUD_PROJECT` / `GOOGLE_CLOUD_LOCATION` vars and authenticate via ADC. See `backend/llmguard/README.md`.
 
 **Scope: user→model completions only.** LLMGuard does not proxy the model→tool half. `tools`, `tool_choice` and `role:"tool"` messages are **refused with a 400**, not ignored — the fields are absent from `provider.ChatRequest`, and since every adapter re-marshals that struct rather than forwarding raw bytes (`openai.go`'s `json.Marshal(&outbound)`, `vertex.go`'s `toNative`), `encoding/json` would silently drop them and hand a function-calling caller a prose answer with no indication why. The check is a **targeted probe** in `proxy.go` (`unsupportedToolField`), deliberately not `DisallowUnknownFields()`, which would also reject every other OpenAI field the schema does not model (`n`, `seed`, `presence_penalty`, `response_format`, `user`) — pinned by `TestUnmodelledOpenAIFieldsStillPass`. `role:"tool"` is checked separately from the raw-body probe because it survives decoding and would otherwise reach the Vertex adapter's `default:` branch and be reinterpreted as an ordinary user turn.
 
@@ -218,11 +218,12 @@ handler returns.
 
 **Tracing answers “why was THIS request slow”, which no counter can.** Off unless
 `OTEL_EXPORTER_OTLP_ENDPOINT` is set, and off means **nothing is installed** — the global tracer
-stays OpenTelemetry's no-op. That is the whole switch, and two measurements decided its shape: a
-no-op span is ~34ns against a request that spends *seconds* in an LLM call, so there is no
-`if enabled` guard at any of the ~10 call sites; and installing the SDK with sample ratio `0` costs
-**~17×** the no-op path, because the SDK builds a recording span before the sampler drops it — so
-“ratio 0” is the wrong way to disable. `otelhttp` wraps **only** `/v1/chat/completions` (a 10s
+stays OpenTelemetry's no-op. That is the whole switch, and two measurements decided its shape (both
+in `make bench` — `BenchmarkSpanNoop`, `BenchmarkSpanSDKSampleZero`): a no-op span is **~450ns and 4
+allocations** against a request that spends *seconds* in an LLM call, so there is no `if enabled`
+guard at any of the ~10 call sites; and installing the SDK with sample ratio `0` costs **~2.3×** the
+no-op path, because the SDK builds a recording span before the sampler drops it — so “ratio 0” is
+the wrong way to disable. `otelhttp` wraps **only** `/v1/chat/completions` (a 10s
 healthcheck and a Prometheus scrape would bury real traffic) and is what adopts an inbound
 `traceparent`, putting the Python backend's call and the upstream call in **one** trace. Wrapping was
 the real risk, not the spans: `serveStreaming` needs `http.Flusher` and a working
@@ -333,7 +334,7 @@ MCP endpoint: `http://localhost:8090/mcp/` · metrics: `http://localhost:8090/me
 | `backend/services/app/auth_api.py` | Auth endpoints + JWT dependency injection |
 | `backend/services/chatbot/workflow.py` | Builds and compiles the LangGraph StateGraph |
 | `backend/services/chatbot/nodes.py` | All 5 graph node implementations |
-| `backend/services/chatbot/tools/rag.py` | RAG pipeline (paraphrase → retrieve → rerank → threshold) |
+| `backend/utils/rag.py` | RAG pipeline (paraphrase → retrieve → rerank → threshold) |
 | `backend/services/chatbot/constants/schemas.py` | Pydantic models: `GraphState`, `ChatMessageState`, etc. |
 | `backend/services/chatbot/constants/prompts.py` | All LLM prompt templates |
 | `frontend/components/ChatLayout.tsx` | Main chat UI; hand-rolled SSE parser for the streaming endpoint |

@@ -8,18 +8,13 @@ package gateway
 // always "which stage was slow" — retry loop, quota wait, or the upstream itself.
 // That is a per-request timing tree, which is what a trace is.
 //
-// Disabled is the default and it is disabled COMPLETELY: with no endpoint
-// configured this installs nothing, and the global tracer stays the no-op the
-// OpenTelemetry API ships with. Two measured notes behind that choice:
+// Disabled is the default and installs NOTHING: the global tracer stays the
+// API's no-op. Two figures from `make bench` shape that:
 //
-//   - The no-op path is not free but is irrelevant: ~34ns and one allocation per
-//     span, against a request that spends seconds inside an LLM call. Guarding
-//     every span with an `if enabled` would save ~32ns at the cost of a branch at
-//     every call site, so there is no such flag.
-//   - Installing the SDK with a zero sample ratio is NOT the cheap way to switch
-//     tracing off. The SDK builds a recording span before the sampler drops it,
-//     which measured ~17x the no-op cost. Leaving TraceEndpoint empty is the
-//     switch.
+//   - no-op span ~450ns / 4 allocs, against a request spending seconds in an LLM
+//     call -- so no `if enabled` guard at any call site.
+//   - sample ratio 0 costs ~2.3x that (the SDK records the span, then drops it),
+//     so an empty TraceEndpoint is the switch, not a zero ratio.
 
 import (
 	"context"

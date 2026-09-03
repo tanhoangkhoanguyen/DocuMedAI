@@ -185,9 +185,10 @@ control that makes a silent export failure visible, and it holds.
 
 The delta is zero rather than small because export is **off the request path**:
 the SDK batches spans and flushes them from its own goroutine. What the request
-pays is span creation, measured elsewhere at ~34ns against a 2s upstream. This is
-the measurement behind sampling 100% of traces instead of a ratio — there is
-nothing here to sample away.
+pays is span creation, measured by `make bench` at **~450ns** (no-op) to **~1020ns**
+(SDK, recording) — against a 2s upstream, four to five orders of magnitude below
+the signal. This is the measurement behind sampling 100% of traces instead of a
+ratio: there is nothing here to sample away.
 
 ## nginx calibration — four defaults
 

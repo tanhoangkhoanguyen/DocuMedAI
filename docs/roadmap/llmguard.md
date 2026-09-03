@@ -7,6 +7,23 @@
 > provider adapter (`provider/`). Phase 2's provider abstraction is **implemented**; its
 > first adapter is Vertex.
 >
+> **Every `file:line` in Phase 0 is stale.** The pipeline moved to `internal/gateway/`,
+> so `proxy.go`, `retry.go`, `ratelimit.go` and `metrics.go` are no longer at the module
+> root (only `main.go` is) and every line number has drifted — e.g. `Proxy` is at
+> `internal/gateway/proxy.go:102`, not `proxy.go:18`. Read Phase 0 for the *concepts*,
+> grep for the symbol. Deleted since: `dedup.go`/`Deduper`, `apiKeyHint`, `copyHeaders`,
+> `buildUpstreamRequest`, `recordUsage`, `finish`.
+>
+> **Phase 2 shipped a different shape than Phase 2 plans.** The `Provider` interface is
+> four methods (`Name`, `BuildRequest`, `TranslateResponse`, `TranslateStreamChunk`) —
+> `ExtractUsage`, `MapError` and `PriceOf` were never built; usage rides on the translated
+> response, errors on `provider/errors.go`, pricing is config-only and unread. Routing is
+> by the **(provider, model) pair** with an explicit `provider` field, not by model name;
+> the adapters are packages `provider/openai` (generic) and `provider/vertex` (native),
+> not `openaiCompatProvider`/`geminiNativeProvider`. Rate-limit and breaker keys are
+> per-route too: `llmguard:breaker:open:<provider>:<model>`, and `circuit_state` carries
+> both labels. The plan text below is kept as written.
+>
 > **Phase 1 is now complete.** `make test` / `make lint` run in CI on every PR touching
 > `backend/llmguard/**`; `mockupstream/` exists with its own tests pinning the determinism
 > Phase 6 depends on; and the proxy pipeline has characterization tests sitting beside
@@ -770,8 +787,11 @@ fixed-QPS, coordinated-omission-aware latency measured from scheduled send time.
   - **E. Feature cost:** overhead delta with rate-limit/tracing on vs off. Tracing is the one
     that matters here: the SDK is installed only when the endpoint is set, so off is a genuine
     no-op and the delta is the real cost of exporting 100% of spans.
-  - **F. Calibrate the load balancer.** `nginx/nginx.conf` carries four numbers that were taken
-    as defaults rather than derived, and this is the arm that produces the evidence to set them.
+  - **F. Calibrate the load balancer.** `nginx/nginx.conf.template` carries four numbers that were
+    taken as defaults rather than derived, and this is the arm that produces the evidence to set
+    them. (This arm has since reported — all four were measured and kept, and the values are now
+    `${NGINX_*}` substitutions rather than literals: see
+    [nginx calibration](../benchmarks/llmguard-results.md#nginx-calibration--four-defaults).)
     Two are only meaningful once `worker_processes` is decided, because `keepalive` and
     `worker_connections` are **per worker** and nginx defaults to one worker per CPU — so on an
     8-core host the pool is really 8 x `keepalive`:

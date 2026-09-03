@@ -12,7 +12,7 @@ GCP Console → Compute Engine → Create instance.
 
 - **OS:** Ubuntu 22.04 LTS (not 24.04/26.04 Minimal)
 - **Machine:** ≥ 8 vCPU / 16 GB RAM
-- **Access scopes:** *Allow full access to all Cloud APIs* (needed for Vertex AI, §7)
+- **Access scopes:** *Allow full access to all Cloud APIs* (needed for Vertex AI, §4)
 - **Static external IP:** *Network interfaces → External IPv4 → Reserve* (survives reboots)
 
 ## 2. Install Docker
@@ -73,9 +73,9 @@ GOOGLE_CLOUD_LOCATION=us-central1
 ```
 
 - **HF_TOKEN** pre-caches the embedding model at build time — a free HF *read* token.
-- **No `gcp-sa.json` on a GCP VM** — it's already commented out in `docker-compose.yml`; auth uses the VM's service account (§7).
+- **No `gcp-sa.json` on a GCP VM** — comment out `GOOGLE_APPLICATION_CREDENTIALS` and the SA-key volume under `la-llmguard` in `docker-compose.yml` (both are set for local runs); auth then uses the VM's service account.
 
-## 4. Grant Vertex AI access (§7 — the usual 403 source)
+## 4. Grant Vertex AI access (the usual 403 source)
 
 Grab the values first (on the VM):
 

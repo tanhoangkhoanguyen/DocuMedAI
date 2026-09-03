@@ -27,6 +27,7 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace/noop"
 
 	"documedai/llmguard/internal/testutil"
 	"documedai/llmguard/mockupstream"
@@ -37,8 +38,8 @@ import (
 //
 // The global provider is captured and compared by identity. A future change that
 // "helpfully" installs an SDK with a zero sample ratio when tracing is off would
-// pass a status-code test but fail here — and it matters, because that path was
-// measured at ~17x the no-op cost per span.
+// pass a status-code test but fail here — and it matters, because that path
+// measures ~2.3x the no-op cost per span (BenchmarkSpanSDKSampleZero below).
 func TestTracingDisabledInstallsNothing(t *testing.T) {
 	before := otel.GetTracerProvider()
 
@@ -800,4 +801,53 @@ func TestRateLimitWaitIsSpanned(t *testing.T) {
 	if !granted {
 		t.Errorf("%s = false on a request that got its token", attrGranted)
 	}
+}
+
+// --- Benchmarks ---------------------------------------------------------------
+//
+// These back the two numbers tracing.go cites, so "measured" is reproducible
+// rather than remembered. They drive startAttempt (a real call site, whose
+// attributes are part of the cost) and mutate the PROCESS-WIDE provider, so
+// like the tests above they must not run in parallel.
+
+// benchStartAttempt times one startAttempt/End pair under the installed provider.
+func benchStartAttempt(b *testing.B) {
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, span := startAttempt(ctx, "vertex", "gemini-2.5-flash", 1)
+		span.End()
+	}
+}
+
+// BenchmarkSpanNoop measures the disabled path: the API's no-op tracer, which is
+// what stays installed when TraceEndpoint is empty.
+func BenchmarkSpanNoop(b *testing.B) {
+	otel.SetTracerProvider(noop.NewTracerProvider())
+	benchStartAttempt(b)
+}
+
+// BenchmarkSpanSDKSampleZero measures the trap: an SDK provider sampling 0% of
+// traces. If this were free, "ratio 0" would be a legitimate way to switch
+// tracing off; it is not, because the SDK builds a recording span and only then
+// consults the sampler.
+func BenchmarkSpanSDKSampleZero(b *testing.B) {
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithSampler(sdktrace.TraceIDRatioBased(0)),
+	)
+	defer func() { _ = tp.Shutdown(context.Background()) }()
+	otel.SetTracerProvider(tp)
+	benchStartAttempt(b)
+}
+
+// BenchmarkSpanSDKAlwaysSample is the upper bound: every span recorded, with no
+// exporter attached so only span construction is timed.
+func BenchmarkSpanSDKAlwaysSample(b *testing.B) {
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithSampler(sdktrace.AlwaysSample()),
+	)
+	defer func() { _ = tp.Shutdown(context.Background()) }()
+	otel.SetTracerProvider(tp)
+	benchStartAttempt(b)
 }
