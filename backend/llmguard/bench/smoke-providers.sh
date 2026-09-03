@@ -162,7 +162,9 @@ if docker exec "$CLICKHOUSE" clickhouse-client -d otel -q 'SELECT 1' >/dev/null 
     SELECT SpanName, count() AS spans, uniqExact(TraceId) AS traces,
            round(avg(Duration)/1e9, 3) AS avg_s
     FROM otel_traces WHERE Timestamp > now() - INTERVAL 5 MINUTE
-    GROUP BY SpanName ORDER BY spans DESC FORMAT PrettyCompact" 2>&1 | sed 's/^/  /'
+    GROUP BY SpanName ORDER BY spans DESC" 2>&1 |
+    awk -F'\t' '{ printf("  %-22s %4s spans  %4s traces  %7s s avg\n", $1, $2, $3, $4) }'
+  echo "  query one request: SELECT SpanName, Duration FROM otel_traces WHERE TraceId='<trace above>'"
 else
   echo "spans: skipped -- $CLICKHOUSE unreachable (needs the observability"
   echo "       profile and OTEL_EXPORTER_OTLP_ENDPOINT set)"
