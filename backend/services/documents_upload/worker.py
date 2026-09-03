@@ -1,10 +1,15 @@
 """
 arq worker for asynchronous document ingestion.
 
-Runs as its own process (`arq services.documents_upload.worker.WorkerSettings`) in the
-la-doc-worker container. The upload API writes the file bytes to a shared bind
-mount and enqueues an `ingest_task` job (deduped by _job_id=doc_id). This worker
-parses/chunks/embeds/stores the document and updates its status in MongoDB.
+Runs as its own process (`arq services.documents_upload.worker.WorkerSettings`),
+started by `backend/entrypoint.sh` beside the API in the SAME container — there is
+no separate worker service. A process rather than an asyncio task inside the API,
+so an ingest crash cannot take the event loop with it; entrypoint.sh stops the
+container if the worker dies, so Docker restarts a clean pair.
+
+The upload API writes the file bytes to a shared bind mount and enqueues an
+`ingest_task` job (deduped by _job_id=doc_id). This worker parses/chunks/embeds/
+stores the document and updates its status in MongoDB.
 
 Job status lifecycle (persisted in Mongo `documents.status`):
     queued -> processing -> ready        (success)

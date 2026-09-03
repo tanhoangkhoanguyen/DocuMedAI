@@ -47,7 +47,9 @@ async def lifespan(app: FastAPI):
     workspace = ChatbotWorkspace(app.state.graph)
     app.state.workspace = workspace                                                # Reference
 
-    # arq pool for enqueuing async document-ingestion jobs (la-doc-worker).
+    # arq pool for enqueuing async document-ingestion jobs. The consumer is the
+    # `arq` process entrypoint.sh starts beside this API in the same container,
+    # not a separate service — see backend/entrypoint.sh.
     from arq import create_pool
     app.state.arq_pool = await create_pool(REDIS_SETTINGS)
     _LOGGER.info("Chatbot FastAPI on.")
