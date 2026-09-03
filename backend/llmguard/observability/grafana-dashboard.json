@@ -1,0 +1,252 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "panels": [
+    {
+      "description": "Per attempt, buffered path, upstream 2xx only â€” retry backoff and every gateway refusal are excluded. The honest reading for \"is the provider slow\".",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (le, provider) (rate(llmguard_upstream_duration_seconds_bucket{status=\"2xx\"}[5m])))",
+          "legendFormat": "p50 {{provider}}",
+          "refId": "P50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, provider) (rate(llmguard_upstream_duration_seconds_bucket{status=\"2xx\"}[5m])))",
+          "legendFormat": "p95 {{provider}}",
+          "refId": "P95"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le, provider) (rate(llmguard_upstream_duration_seconds_bucket{status=\"2xx\"}[5m])))",
+          "legendFormat": "p99 {{provider}}",
+          "refId": "P99"
+        }
+      ],
+      "title": "Upstream latency P50 / P95 / P99 (successful attempts)",
+      "type": "timeseries"
+    },
+    {
+      "description": "The gap is gateway overhead: retry backoff plus rate-limit wait. Read the gap, not either line. request_duration_seconds has no status label and is observed for refusals too â€” sheds included, which carry real provider names and land near 0s â€” so heavy shedding pulls it DOWN and the two lines cross. The upstream line is the clean one.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "id": 2,
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(llmguard_request_duration_seconds_bucket[5m])))",
+          "legendFormat": "p95 client-observed",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(llmguard_upstream_duration_seconds_bucket{status=\"2xx\"}[5m])))",
+          "legendFormat": "p95 upstream",
+          "refId": "B"
+        }
+      ],
+      "title": "Client-observed vs upstream latency (P95)",
+      "type": "timeseries"
+    },
+    {
+      "description": "status is a category â€” 2xx|4xx|429|5xx, with 429 carved out of 4xx. provider=\"unknown\" covers requests rejected before provider resolution (bad JSON, missing model): client errors, not gateway faults. An open breaker hides inside 5xx â€” read the breaker panel alongside.",
+      "fieldConfig": {
+        "defaults": {
+          "max": 1,
+          "min": 0,
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 9
+      },
+      "id": 3,
+      "targets": [
+        {
+          "expr": "sum by (provider) (rate(llmguard_requests_total{status=\"2xx\"}[5m])) / clamp_min(sum by (provider) (rate(llmguard_requests_total[5m])), 0.0001)",
+          "legendFormat": "{{provider}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Success rate (by provider)",
+      "type": "timeseries"
+    },
+    {
+      "description": "Do NOT sum these. shed = the gateway is out of capacity (operator problem, every caller affected); rate limited = one caller over quota (expected). Both also land inside requests_total{status=\"429\"}, and upstream 429s do too, so 429s cannot be decomposed from requests_total alone. A breaker refusal has no counter of its own â€” it only appears in 5xx.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 9
+      },
+      "id": 4,
+      "targets": [
+        {
+          "expr": "sum by (provider) (rate(llmguard_shed_total[5m]))",
+          "legendFormat": "shed â€” at capacity {{provider}}",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (provider) (rate(llmguard_rate_limited_total[5m]))",
+          "legendFormat": "rate limited â€” over quota {{provider}}",
+          "refId": "B"
+        },
+        {
+          "expr": "sum by (provider) (rate(llmguard_requests_total{status=\"5xx\"}[5m]))",
+          "legendFormat": "5xx incl. breaker {{provider}}",
+          "refId": "C"
+        }
+      ],
+      "title": "Refusals: capacity vs quota vs breaker",
+      "type": "timeseries"
+    },
+    {
+      "description": "MAX_IN_FLIGHT is an env var, not a metric, so the ceiling cannot be queried â€” the thresholds and axis max below assume the default 256 and are retuned by hand if the env var is. Saturation here predicts shedding before shed_total moves.",
+      "fieldConfig": {
+        "defaults": {
+          "max": 256,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 179
+              },
+              {
+                "color": "red",
+                "value": 230
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 18
+      },
+      "id": 5,
+      "targets": [
+        {
+          "expr": "llmguard_in_flight",
+          "legendFormat": "in flight",
+          "refId": "A"
+        }
+      ],
+      "title": "In-flight occupancy vs the ceiling",
+      "type": "timeseries"
+    },
+    {
+      "description": "0=closed, 1=half-open, 2=open. Every provider gets a series from its first served request, so a flat 0 means observed-healthy rather than never-observed. A provider that has never served a request has no series â€” by design: the registry, not the breaker group, decides which providers exist.",
+      "fieldConfig": {
+        "defaults": {
+          "max": 2,
+          "min": 0,
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 18
+      },
+      "id": 6,
+      "targets": [
+        {
+          "expr": "llmguard_circuit_state",
+          "legendFormat": "{{provider}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Circuit breaker state (by provider)",
+      "type": "timeseries"
+    },
+    {
+      "description": "An aborted stream is otherwise invisible: the header left with the first frame, so requests_total already recorded a 2xx and the failure reaches the client as an in-band SSE frame no counter sees. upstream_idle = the provider went quiet; write_idle = the client stopped reading. absolute_max is different in kind â€” it only fires once both inactivity bounds failed to, so any value means the protection itself is broken. Treat it as a bug report, not a trend.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 27
+      },
+      "id": 7,
+      "targets": [
+        {
+          "expr": "sum by (provider, reason) (rate(llmguard_stream_aborts_total{reason!=\"absolute_max\"}[5m]))",
+          "legendFormat": "{{reason}} {{provider}}",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (provider) (rate(llmguard_stream_aborts_total{reason=\"absolute_max\"}[5m]))",
+          "legendFormat": "absolute_max {{provider}} â€” the deadlines are broken",
+          "refId": "B"
+        }
+      ],
+      "title": "Stream aborts (by reason)",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 39,
+  "tags": [
+    "documedai",
+    "llmguard",
+    "reliability"
+  ],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-15m",
+    "to": "now"
+  },
+  "title": "DocuMedAI â€” LLMGuard Reliability",
+  "uid": "ffw2wh3ryhb0gf"
+}

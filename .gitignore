@@ -32,3 +32,8 @@ gcp-sa.json
 # Keep Go golden fixtures. These are hand-authored test inputs, not output —
 # without this the **.json rule above drops them and CI fails on a missing file.
 !/backend/llmguard/provider/vertex/testdata/**
+
+# Provisioned Grafana dashboard -- config, not a result. The blanket **.json above
+# is why this was never committed: the compose mount then created a 0-byte file
+# where Grafana expected JSON.
+!/backend/llmguard/observability/*.json
