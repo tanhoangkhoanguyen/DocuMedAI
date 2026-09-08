@@ -18,11 +18,11 @@ Queries are issued in a SHUFFLED order (fixed seed, via registry.shuffled_order)
 window is discarded, so no engine's query-result cache can bias the numbers. The query path is
 exactly registry.get_client(db).retrieve_ids(...), the same call recall.py / sweep.py use.
 
-Run:  BENCH_DB=qdrant python -m vector_database_tests.throughput \
+Run:  BENCH_DB=qdrant python -m VectorBench.throughput \
           --qps 50 100 200 400 800 --duration 30 --warmup 5
 """
 from logger import get_logger
-from vector_database_tests.utils import registry
+from VectorBench.utils import registry
 
 import os, json, time, argparse, threading, queue, statistics
 
@@ -30,9 +30,9 @@ _LOGGER = get_logger(
     name = "vectordb_lab_throughput",
     level = "INFO"
 )
-SWEEP_DIR = "vector_database_tests/sweep_results"
-RESULTS_DIR = "vector_database_tests/throughput_results"
-QUERIES_DIR = "vector_database_tests/generated_queries"
+SWEEP_DIR = "VectorBench/sweep_results"
+RESULTS_DIR = "VectorBench/throughput_results"
+QUERIES_DIR = "VectorBench/generated_queries"
 
 DEFAULT_QPS_LADDER = [50, 100, 200, 400, 800]
 

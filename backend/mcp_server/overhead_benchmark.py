@@ -17,7 +17,7 @@ Serving CAPACITY under concurrent load (throughput vs offered QPS, tail latency 
 error breakdown) is a separate axis — see loadtest_mcp.py, which runs against a remote VM.
 
 Uses `identity` by default (no RAG/LLM, no uploaded docs) so the number is transport cost,
-not retrieval cost. Coordinated-omission discipline is echoed from vector_database_tests/
+not retrieval cost. Coordinated-omission discipline is echoed from VectorBench/
 (latency measured from each request's ideal send time), not imported.
 """
 import argparse, asyncio, json, os, statistics, time, uuid
@@ -40,7 +40,7 @@ _PERCENTILES = ("p50", "p95", "p99")
 
 
 def _percentile(sorted_vals, q: float) -> float:
-    # Nearest-rank via truncated index — matches vector_database_tests/throughput.py so the
+    # Nearest-rank via truncated index — matches VectorBench/throughput.py so the
     # two harnesses report percentiles the same way.
     if not sorted_vals:
         return 0.0

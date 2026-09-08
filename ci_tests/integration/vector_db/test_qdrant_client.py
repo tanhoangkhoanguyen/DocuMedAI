@@ -6,7 +6,7 @@ from ci_tests.fixtures.vector_db import (
     EMBEDDED_QUERY,
     run_vector_db_test,
 )
-from vector_database_tests.utils.qdrant_client import QdrantClient
+from utils.qdrant_client import QdrantClient
 
 
 pytestmark = pytest.mark.integration

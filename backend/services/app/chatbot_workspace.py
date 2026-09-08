@@ -8,7 +8,7 @@ from services.chatbot.constants.schemas import GraphState, UserInfo, UserDocumen
 from utils.pattern_cipher import PatternCipher
 from utils.mongo_client import get_mongo_client
 from utils.redis_client import get_redis_client
-from vector_database_tests.utils.qdrant_client import get_qdrant_client
+from utils.qdrant_client import get_qdrant_client
 from services.documents_upload.constants import (
     USER_DOCUMENTS_COLLECTION, 
     EMBEDDING_MODEL, 

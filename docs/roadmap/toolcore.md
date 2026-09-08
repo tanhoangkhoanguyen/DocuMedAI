@@ -34,7 +34,7 @@ A shared **Tool Core** consumed two ways — the internal agent calls it **direc
 - The internal agent/runtime **must NOT call MCP over the network** — it keeps direct in-process tool execution.
 - MCP exists **only** as an external protocol interface over the *same shared execution core*.
 - **JWT enforced for external MCP clients**; internal execution keeps using the existing authenticated app context.
-- Observability must **not duplicate** the [`vector_database_tests/`](../../backend/vector_database_tests/) ann-benchmarks method. That lab measures vector-engine recall/latency; this harness measures MCP **serving/protocol** overhead — a different axis.
+- Observability must **not duplicate** the [`VectorBench/`](../../backend/VectorBench/) ann-benchmarks method. That lab measures vector-engine recall/latency; this harness measures MCP **serving/protocol** overhead — a different axis.
 
 ### Out of scope (covered by other projects)
 Guardrails, rate limiting, circuit breakers, dynamic/hot-loadable registries, governance. Optimize purely for **capability serving, MCP interoperability, protocol design, resource serving, and observability**. Résumé audience: **AI Infra / Platform**.
@@ -112,7 +112,7 @@ Both adapters call the **same** `ToolCore.call_tool`. That single fact is the en
   - stdio: accept the token via env var / init option (stdio has no HTTP headers), verified through the same function.
   - **Enforcement lives in the MCP adapter only** — internal `source="internal"` calls bypass it entirely.
 - **Criteria:** unauthenticated external `search_user_documents` is refused; a valid user's token returns only that user's chunks; a second user's token cannot read the first's docs; `identity` works with no token.
-- **Tech:** shared `auth_deps.decode_bearer_any`; per-session principal binding; the three existing isolation layers (Core `requires_principal`, Qdrant `user_id` filter [`qdrant_client.py:205`](../../backend/vector_database_tests/utils/qdrant_client.py#L205), empty-user short-circuit) all still fire.
+- **Tech:** shared `auth_deps.decode_bearer_any`; per-session principal binding; the three existing isolation layers (Core `requires_principal`, Qdrant `user_id` filter [`qdrant_client.py:205`](../../backend/utils/qdrant_client.py#L205), empty-user short-circuit) all still fire.
 
 ### Issue 2.3 — Package the MCP server as a compose service
 - **Problem:** must run and be demoable without polluting the app runtime.
@@ -158,7 +158,7 @@ Both adapters call the **same** `ToolCore.call_tool`. That single fact is the en
 
 ## Phase 4 — Self-hosted MCP observability harness (headline feat)
 
-**Phase goal:** measure MCP *serving* characteristics — a **different axis** from the `vector_database_tests/` recall/latency lab. That lab benchmarks vector engines; this measures **protocol/serving overhead and reliability of the MCP surface**. Do not reuse its ann-benchmarks harness.
+**Phase goal:** measure MCP *serving* characteristics — a **different axis** from the `VectorBench/` recall/latency lab. That lab benchmarks vector engines; this measures **protocol/serving overhead and reliability of the MCP surface**. Do not reuse its ann-benchmarks harness.
 
 ### Issue 4.1 — Per-call instrumentation in the Tool Core
 - **Problem:** no app-level latency measurement exists anywhere (only the Go proxy has metrics, and nothing scrapes it).
@@ -210,7 +210,7 @@ Collected in Phase 3 (correctness) + Phase 4 (performance). Fill `<>` from real 
 | **New** | [`backend/toolcore/core.py`](../../backend/toolcore/core.py), [`contracts.py`](../../backend/toolcore/contracts.py) | Tool Core: `list_tools` / `call_tool` / `ToolSpec` / `Principal` / `ToolResult` |
 | Modify | [`backend/services/chatbot/constants/schemas.py:52-67`](../../backend/services/chatbot/constants/schemas.py#L52-L67) | replace `McpToolDefinition`/`ToolParameter` with typed `ToolSpec` + per-tool arg models |
 | Removed | `backend/services/chatbot/mcp.py` | the adapter did not survive as a file — `execute_tool_call` in [`core.py`](../../backend/toolcore/core.py) is the string-in/string-out shim the planner still calls, and `get_mcp_client` returns the cached core |
-| Reuse (unchanged) | [`medical_supporter.py:71`](../../backend/toolcore/tools/medical_supporter.py#L71), [`user_document_supporter.py:84`](../../backend/toolcore/tools/user_document_supporter.py#L84), [`rag.py`](../../backend/utils/rag.py), [`qdrant_client.py`](../../backend/vector_database_tests/utils/qdrant_client.py) | Core wraps these; do not touch execution/isolation |
+| Reuse (unchanged) | [`medical_supporter.py:71`](../../backend/toolcore/tools/medical_supporter.py#L71), [`user_document_supporter.py:84`](../../backend/toolcore/tools/user_document_supporter.py#L84), [`rag.py`](../../backend/utils/rag.py), [`qdrant_client.py`](../../backend/utils/qdrant_client.py) | Core wraps these; do not touch execution/isolation |
 | Touch (import only) | [`backend/services/chatbot/nodes.py:233-277`](../../backend/services/chatbot/nodes.py#L233-L277) | still calls the adapter; behavior identical |
 | **New** | [`backend/mcp_server/server.py`](../../backend/mcp_server/server.py), [`__main__.py`](../../backend/mcp_server/__main__.py), [`auth.py`](../../backend/mcp_server/auth.py), [`README.md`](../../backend/mcp_server/README.md) | MCP `Server` + handlers, ASGI app, bearer auth, runbook |
 | Reuse | [`backend/services/app/auth_deps.py:72-116`](../../backend/services/app/auth_deps.py#L72-L116) | `decode_bearer_any` for external MCP JWT — do not fork |

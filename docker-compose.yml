@@ -1,5 +1,5 @@
 # Default: DocuMedAI app (Mongo + Redis + Qdrant + API + Next.js).
-# Optional vector stores for backend/vector_database_tests benchmarks:
+# Optional vector stores for backend/VectorBench benchmarks:
 #   docker compose --profile vectordb-lab up -d --build
 
 services:
@@ -12,7 +12,7 @@ services:
     networks:
       - documedai-net
     volumes:
-      - ./backend/vector_database_tests/utils/data_storage/qdrant_data:/qdrant/storage
+      - ./backend/VectorBench/utils/data_storage/qdrant_data:/qdrant/storage
     # Equal resource budget across all perf DBs (see la-milvus/weaviate/vespa).
     mem_limit: 8g
     cpus: 4.0
@@ -251,7 +251,7 @@ services:
     networks:
       - documedai-net
     volumes:
-      - ./backend/vector_database_tests/utils/data_storage/milvus_data:/var/lib/milvus
+      - ./backend/VectorBench/utils/data_storage/milvus_data:/var/lib/milvus
     mem_limit: 8g
     cpus: 4.0
 
@@ -267,8 +267,8 @@ services:
     networks:
       - documedai-net
     volumes:
-      - ./backend/vector_database_tests/utils/vespa_config:/app
-      - ./backend/vector_database_tests/utils/data_storage/vespa_data:/opt/vespa/var
+      - ./backend/VectorBench/utils/vespa_config:/app
+      - ./backend/VectorBench/utils/data_storage/vespa_data:/opt/vespa/var
     mem_limit: 8g
     cpus: 4.0
     healthcheck:
@@ -294,7 +294,7 @@ services:
     networks:
       - documedai-net
     volumes:
-      - ./backend/vector_database_tests/utils/data_storage/weaviate_data:/var/lib/weaviate
+      - ./backend/VectorBench/utils/data_storage/weaviate_data:/var/lib/weaviate
     mem_limit: 8g
     cpus: 4.0
 
@@ -308,7 +308,7 @@ services:
     networks:
       - documedai-net
     volumes:
-      - ./backend/vector_database_tests/utils/data_storage/chroma_data:/data
+      - ./backend/VectorBench/utils/data_storage/chroma_data:/data
     mem_limit: 8g
     cpus: 4.0
 
@@ -368,8 +368,11 @@ services:
     # DocuMedAI's Tool Core exposed over real MCP (JSON-RPC 2.0, streamable-HTTP) for
     # external MCP hosts (Claude Desktop, MCP Inspector). Same code + image as la-documedai,
     # different command (skips entrypoint.sh; serves /mcp instead of the FastAPI app).
-    # The app does NOT depend on this — la-documedai runs identically whether it is up or
-    # not. See backend/mcp_server/.
+    #
+    # Profile-gated: the graph reaches the Tool Core by Python import, so this surface
+    # exists only for EXTERNAL callers and nothing in the app depends on it.
+    #   docker compose --profile mcp up -d la-mcp-server
+    profiles: ["mcp"]
     build:
       context: ./backend
       dockerfile: Dockerfile

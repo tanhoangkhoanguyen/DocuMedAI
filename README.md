@@ -60,7 +60,7 @@ Each message flows: **TopicChecker → MessageAnalysis → LongTermMemory → Ag
 
 ## Vector DB benchmark
 
-Five engines (Qdrant, Milvus, Weaviate, Vespa, ChromaDB) benchmarked the honest way - [ann-benchmarks](https://github.com/erikbern/ann-benchmarks) style, latency compared at equal recall. Lab lives in [`backend/vector_database_tests/`](backend/vector_database_tests/).
+Five engines (Qdrant, Milvus, Weaviate, Vespa, ChromaDB) benchmarked the honest way - [ann-benchmarks](https://github.com/erikbern/ann-benchmarks) style, latency compared at equal recall. Lab lives in [`backend/VectorBench/`](backend/VectorBench/).
 
 ## LLMGuard
 
@@ -96,7 +96,7 @@ the baseline that was *rejected* as too noisy to use:
 The RAG tools exposed over real **Model Context Protocol** (JSON-RPC 2.0, streamable-HTTP) so external hosts - Claude Desktop, MCP Inspector - can call them. **One core, two surfaces**: the same `toolcore` executes for both the in-process LangGraph agent and remote MCP clients, so per-user isolation is enforced once, in `call_tool`. Lives in [`backend/mcp_server/`](backend/mcp_server/).
 
 ```bash
-docker compose up -d --build la-mcp-server     # http://localhost:8090/mcp
+docker compose --profile mcp up -d --build la-mcp-server     # http://localhost:8090/mcp
 ```
 
 Benchmarked on the same open-loop discipline as the vector DB lab - latency charged from each request's *ideal* send time, so saturation shows as rising latency, not reduced load:

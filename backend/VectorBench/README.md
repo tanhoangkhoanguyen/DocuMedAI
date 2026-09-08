@@ -81,7 +81,7 @@ docker compose exec la-documedai pip install -r /backend/requirements-dev.txt
 docker compose exec la-vespa vespa deploy --wait 300 /app
 
 # 1. Exact-kNN ground truth — ONCE (depends only on corpus+queries+cosine)
-docker compose exec -d la-documedai sh -c "cd /backend && python -m vector_database_tests.ground_truth --top-k 100 2>> /backend/logs/gt_stderr.log"
+docker compose exec -d la-documedai sh -c "cd /backend && python -m VectorBench.ground_truth --top-k 100 2>> /backend/logs/gt_stderr.log"
 
 docker compose exec la-documedai tail -f /backend/logs/vectordb_lab_ground_truth_20260626.log
 
@@ -90,12 +90,12 @@ docker compose exec la-documedai tail -f /backend/logs/vectordb_lab_ground_truth
 $databases = "qdrant", "milvus", "weaviate", "chromadb", "vespa"
 foreach ($db in $databases) {
   docker compose exec -e BENCH_DB=$db -w /backend la-documedai `
-    python -m vector_database_tests.data_uploading
+    python -m VectorBench.data_uploading
   if (-not $?) { continue }
   docker compose exec -e BENCH_DB=$db -w /backend la-documedai `
-    python -m vector_database_tests.sweep --k 10 --recall-target 0.95
+    python -m VectorBench.sweep --k 10 --recall-target 0.95
   docker compose exec -e BENCH_DB=$db -w /backend la-documedai `
-    python -m vector_database_tests.throughput --qps 50 100 200 400 800 --duration 30
+    python -m VectorBench.throughput --qps 50 100 200 400 800 --duration 30
 }
 ```
 
@@ -178,7 +178,7 @@ Full per-rung ladders in `throughput_results/{db}.json`.
 
 ## Folder structure
 ```
-vector_database_tests/
+VectorBench/
 ├── dataset/                # 1M-vector corpus (jsonl)
 ├── generated_queries/      # query set (jsonl)
 ├── ground_truth/           # exact-kNN ground truth (generated)
@@ -199,7 +199,9 @@ vector_database_tests/
     ├── data_storage/
     ├── chromadb_client.py
     ├── milvus_client.py
-    ├── qdrant_client.py
     ├── vespa_client.py
     └── weaviate_client.py
 ```
+
+The Qdrant client is the exception: it lives in `backend/utils/qdrant_client.py` because the
+app runs on it too. That keeps this lab detachable — nothing here is imported by production.

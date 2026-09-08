@@ -2,11 +2,11 @@
 Indexing benchmark: insert the 1M-vector corpus into the selected DB and record total
 indexing time (insert + index build), excluding dataset loading from disk.
 
-Run per DB:  BENCH_DB=qdrant python -m vector_database_tests.data_uploading
-         or  python -m vector_database_tests.data_uploading --db qdrant
+Run per DB:  BENCH_DB=qdrant python -m VectorBench.data_uploading
+         or  python -m VectorBench.data_uploading --db qdrant
 """
 from logger import get_logger
-from vector_database_tests.utils import registry
+from VectorBench.utils import registry
 
 import os, sys, json, time, argparse, warnings
 warnings.filterwarnings("ignore")
@@ -16,7 +16,7 @@ _LOGGER = get_logger(
     level = "INFO",
 )
 
-RESULTS_DIR = "vector_database_tests/upload_results"
+RESULTS_DIR = "VectorBench/upload_results"
 MAX_UPLOAD_SECONDS = 3600                                         # Abort this DB's upload and move on to the next
 
 
@@ -35,7 +35,7 @@ class DataUploading:
 
     def upload_dataset(
             self,
-            folder_path: str = "vector_database_tests/dataset",
+            folder_path: str = "VectorBench/dataset",
             max_seconds: float = MAX_UPLOAD_SECONDS,
         ) -> dict:
         try:

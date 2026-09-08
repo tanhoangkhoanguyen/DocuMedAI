@@ -9,7 +9,7 @@ piece that makes the latency comparison meaningful.
 The ground truth depends ONLY on (corpus, queries, cosine) — not on any DB — so it is
 computed a single time and reused for every DB.
 
-Run:  python -m vector_database_tests.ground_truth --top-k 100
+Run:  python -m VectorBench.ground_truth --top-k 100
 """
 from logger import get_logger
 
@@ -22,9 +22,9 @@ _LOGGER = get_logger(
     level = "INFO",
 )
 
-DATASET_DIR = "vector_database_tests/dataset"
-QUERIES_DIR = "vector_database_tests/generated_queries"
-OUT_PATH = "vector_database_tests/ground_truth/ground_truth.jsonl"
+DATASET_DIR = "VectorBench/dataset"
+QUERIES_DIR = "VectorBench/generated_queries"
+OUT_PATH = "VectorBench/ground_truth/ground_truth.jsonl"
 
 
 def _jsonl_files(folder: str):

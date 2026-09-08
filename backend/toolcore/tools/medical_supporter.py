@@ -1,7 +1,7 @@
 from typing import List
 
 from toolcore.contracts import RuntimeConfig
-from vector_database_tests.utils.qdrant_client import get_qdrant_client
+from utils.qdrant_client import get_qdrant_client
 from utils.rag import get_rag_client
 
 

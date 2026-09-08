@@ -6,11 +6,11 @@ recall@k and serial latency at each value, then pick the LOWEST-latency config t
 reaches the recall target. The headline latency for each DB is then reported AT EQUAL RECALL,
 so a DB can't look fast merely by searching fewer candidates.
 
-Run:  BENCH_DB=qdrant python -m vector_database_tests.sweep --k 10 --recall-target 0.95
+Run:  BENCH_DB=qdrant python -m VectorBench.sweep --k 10 --recall-target 0.95
 """
 from logger import get_logger
-from vector_database_tests.utils import registry
-from vector_database_tests.recall import evaluate_db
+from VectorBench.utils import registry
+from VectorBench.recall import evaluate_db
 
 import os, json, argparse
 
@@ -18,7 +18,7 @@ _LOGGER = get_logger(
     name = "vectordb_lab_sweep",
     level = "INFO",
 )
-RESULTS_DIR = "vector_database_tests/sweep_results"
+RESULTS_DIR = "VectorBench/sweep_results"
 
 # Query-time effort grids. ef-style DBs share a grid; Vespa's targetHits is the candidate
 # pool (semantically similar role). Grids should bracket the recall target from below.

@@ -6,7 +6,7 @@ direct?" on loopback. This asks "how much concurrent load can the MCP server sus
 how does tail latency degrade as offered load rises?" — so it is meant to run against a
 REMOTE server (a GCP VM), client and server on separate machines, over a real network.
 
-Method (mirrors vector_database_tests/throughput.py, adapted to the async MCP SDK):
+Method (mirrors VectorBench/throughput.py, adapted to the async MCP SDK):
   * OPEN-LOOP: an async scheduler dispatches requests at a TARGET arrival rate (QPS),
     independent of when prior responses return. Each request's latency is measured from its
     SCHEDULED send time, so a saturated server shows up as rising latency (the truth), not

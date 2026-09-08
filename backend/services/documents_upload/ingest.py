@@ -9,7 +9,7 @@ same doc_id never creates duplicate chunks.
 from typing import List
 
 from logger import get_logger
-from vector_database_tests.utils.qdrant_client import get_qdrant_client
+from utils.qdrant_client import get_qdrant_client
 from services.documents_upload.constants import (
     USER_DOCUMENTS_COLLECTION,
     EMBEDDING_MODEL,

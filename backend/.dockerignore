@@ -7,6 +7,6 @@ venv/
 chroma/
 logs/
 services/**/data_storage/
-vector_database_tests/
+VectorBench/
 
 .git

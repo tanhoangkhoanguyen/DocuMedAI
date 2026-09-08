@@ -93,7 +93,7 @@ AUTH_JWT_SECRET=replace-with-a-long-shared-secret-at-least-32-bytes
 UUID_NAMESPACE="b1343753-a4f3-4be8-94c6-9780ee37ab61"
 EOF
 
-docker compose up -d --build la-mcp-server la-qdrant la-mongo la-redis
+docker compose --profile mcp up -d --build la-mcp-server la-qdrant la-mongo la-redis
 docker compose logs -f la-mcp-server     # wait for: serving streamable-HTTP at http://0.0.0.0:8090/mcp
 ```
 
@@ -183,7 +183,7 @@ mv capacity.json ~/DocuMedAI/backend/mcp_server/benchmark/
   from ideal send time, exactly what a real client blocked on a slow server experiences.
 - **Outcomes:** `transport_error` spiking = resets/timeouts; `tool_error` = the tool returned
   `isError`; all-`transport_error` from the start = secret mismatch.
-- Compare against [`throughput_results/qdrant.json`](../../backend/vector_database_tests/throughput_results/qdrant.json),
+- Compare against [`throughput_results/qdrant.json`](../../backend/VectorBench/throughput_results/qdrant.json),
   the same open-loop method on a different component, for the shape of a healthy cliff.
 
 Optional live view, on the server:

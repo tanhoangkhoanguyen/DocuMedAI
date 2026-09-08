@@ -735,7 +735,7 @@ nothing bounds it — so the gateway is currently a candidate for being the outa
 ## Phase 6 — Benchmark framework (the thesis)
 
 **Why:** the reliability claims are only credible if measured. This phase produces the charts that
-answer "why pull this repo." Reuse the `backend/vector_database_tests/` discipline: **open-loop,
+answer "why pull this repo." Reuse the `backend/VectorBench/` discipline: **open-loop,
 fixed-QPS, coordinated-omission-aware latency measured from scheduled send time.**
 
 ### Issue 6.1 — k6 open-loop load scripts

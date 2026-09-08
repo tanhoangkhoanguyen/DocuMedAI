@@ -17,16 +17,37 @@ DocuMedAI is a full-stack AI-powered medical document analysis system. Users upl
 | Agent workflow | LangGraph StateGraph | `backend/services/chatbot/` |
 | Multi-agent | CrewAI | `nodes.py` — Agents node |
 | RAG pipeline | Qdrant retrieval + BAAI reranker | `backend/utils/rag.py` |
-| LLMGuard | Go gateway (admission control, rate limit, retry, circuit breaker); OpenAI-compatible API → provider adapter (`openai` generic / `vertex` native) → upstream. Chat completions only — `tools`/`tool_choice` are refused with a 400. Standalone; not in the app's request path | `backend/llmguard/` |
+| LLMGuard | Go gateway (admission control, rate limit, retry, circuit breaker); OpenAI-compatible API → provider adapter (`openai` generic / `vertex` native) → upstream. Chat completions only — `tools`/`tool_choice` are refused with a 400. Standalone service; in the request path for `TopicChecker` only | `backend/llmguard/` |
 | Memory cache | Redis (TTL 1800s → flush to MongoDB) | `backend/utils/redis_client.py` |
 | Persistence | MongoDB | `backend/utils/mongo_client.py` |
 | Auth | JWT + Supabase SSR | `backend/services/app/auth_api.py`, `frontend/lib/supabase/` |
-| Vector DB | Qdrant (default); alternatives benchmarked in `backend/vector_database_tests/` | `backend/toolcore/tools/` |
+| Vector DB | Qdrant (default); alternatives benchmarked in `backend/VectorBench/` | `backend/toolcore/tools/` |
 | Tool Core | In-memory tool registry + the single enforcement point (`MCPServer.call_tool`) | `backend/toolcore/core.py` |
 | MCP server | Real MCP protocol (JSON-RPC 2.0 over streamable-HTTP, official `mcp` SDK) at `/mcp` on port 8090 | `backend/mcp_server/` |
 | ID hashing | `pattern_cipher.py` does NOT encrypt — it's `uuid5` deterministic IDs + bcrypt helpers (the bcrypt helpers are currently unused; auth stores plaintext passwords). No message encryption exists anywhere. | `backend/utils/pattern_cipher.py` |
 
-**Important**: `backend/services/app/` holds the FastAPI routes and workspace layer. `backend/services/chatbot/` holds the LangGraph graph, nodes, and tools. `backend/utils/` holds shared DB clients (MongoDB, Redis, Supabase), the RAG pipeline and `llm_config.py`.
+**Important**: `backend/services/app/` holds the FastAPI routes and workspace layer. `backend/services/chatbot/` holds the LangGraph graph, nodes, and tools. `backend/utils/` holds the shared DB clients (Qdrant, MongoDB, Redis, Supabase), the RAG pipeline and `llm_config.py` — anything more than one service needs lives here.
+
+## Three standalone services
+
+`VectorBench`, `mcp_server` and `llmguard` each run on their own and each contributes
+something to DocuMedAI. None of them imports the app, so the app boots without any of
+them running:
+
+| Service | Contributes | Runs on `docker compose up`? |
+|---------|-------------|------------------------------|
+| `backend/llmguard/` | Reliability in front of Vertex (retry, breaker, rate limit) for `TopicChecker` | **Yes** — `la-llmguard` |
+| `backend/mcp_server/` | The Tool Core over real MCP, for external hosts | No — `--profile mcp` |
+| `backend/VectorBench/` | The measurement that chose Qdrant | No — `--profile vectordb-lab` |
+
+The Tool Core needs no service of its own: the `Agents` node reaches it by Python import
+(`from toolcore.core import get_mcp_client`), so `docker compose up` covers it. `mcp_server`
+is a second *surface* on that same core, for callers outside this process.
+
+`VectorBench` is a benchmark, not a dependency — the Qdrant client the app runs on lives in
+`backend/utils/qdrant_client.py`, and VectorBench imports it like everyone else. Moving it
+there is what made the lab detachable (it was `VectorBench/utils/qdrant_client.py`, which
+put a benchmark directory in the app's import path).
 
 **Tool Core, one core / two surfaces**: `toolcore/core.py` holds the three RAG tools
 (`identity`, `search_medical_knowledge`, `search_user_documents`) and is reached two ways:
@@ -81,6 +102,27 @@ and panics `Register` on a second instance (the bug fixed in `5c9f5f6`, pinned b
 JSON key file locally via `GOOGLE_APPLICATION_CREDENTIALS` and the attached service
 account on GCP, with no code change and no `credentials_file` config field.
 
+**The model allowlist is `config.yaml`, and it is required.** `modelconfig.go` parses
+`LLMGUARD_CONFIG` (default `config.yaml`, mounted at `/config.yaml` in compose) into
+`providers` + `model_list`, and a missing or invalid file is a **startup error** — the
+alternative is a gateway that 400s every request while its healthcheck stays green. The
+unit of access is the **(provider, model) pair**, not the model, because a client names
+both: enabling `gemini-2.5-flash` on `vertex` does not enable it anywhere else, and the
+same model under two providers is two independent routes rather than a duplicate.
+Matching is **exact** — no prefix matching, no fallback upstream, since an allowlist
+whose entries are prefixes is not an allowlist. Two levels rather than one flat list so
+`base_url`/`api_key_env` aren't repeated per model, where a typo in one copy would
+silently split routing in two.
+
+The file **names env vars** (`project_env`, `api_key_env`) and never holds secrets, so a
+committed config cannot carry a credential. Two of its fields are asymmetric on purpose:
+`pricing` is recorded for a later consumer to attribute spend and LLMGuard does nothing
+with it (no budgets, no cost metrics), while `rate_limit` **is** enforced, per route via
+`mc.Limits()`, falling back to `RATE_LIMIT_RPM`/`RATE_LIMIT_BURST`. It belongs on the
+route because that is the granularity a vendor publishes quota at. Vertex is the
+exception: pay-as-you-go uses dynamic shared quota and publishes no per-minute limit, so
+the committed number is a self-imposed ceiling, not a vendor figure.
+
 ## Common Commands
 
 ### Docker (primary workflow)
@@ -90,12 +132,12 @@ docker compose down                   # Stop all services
 docker compose logs -f la-documedai     # Tail backend logs
 docker compose --profile vectordb-lab up -d  # Include optional vector DB lab services
 
-docker compose up -d --build la-mcp-server   # MCP surface on http://localhost:8090/mcp
+docker compose --profile mcp up -d la-mcp-server  # MCP surface on http://localhost:8090/mcp
 docker compose --profile observability up -d la-prometheus la-grafana
 ```
 `la-mcp-server` reuses the `la-documedai` image with a different command (`python -m
-mcp_server`), skipping `entrypoint.sh`. The app does **not** depend on it — the backend
-stack runs identically whether it is up or not.
+mcp_server`), skipping `entrypoint.sh`. It is profile-gated because nothing in the app
+depends on it — see **Three standalone services** below.
 
 ### Frontend development
 ```bash
@@ -164,8 +206,38 @@ make lint              # go vet + pinned golangci-lint (auto-installs via `make 
 make bench             # benchmarks only, with -benchmem
 go test -run TestRetry ./...              # single test
 go test -run TestX -count=1 .             # single test, root package only
-make run-mock          # standalone mockupstream on :8090
+make run-mock          # standalone mockupstream on :8090 (collides with la-mcp-server —
+                       #   stop it or override MOCK_ADDR)
 ```
+
+### Fleet resilience (`multi-replica` profile)
+
+```bash
+docker compose --profile multi-replica up -d --build   # nginx :8082 → N replicas → mock upstream
+go run ./cmd/killreplica              # from backend/llmguard/ — enforce the threshold
+go run ./cmd/killreplica -threshold 0 # measure only, never fail
+```
+
+nginx listens on **8082**, so this runs *alongside* the default stack on 8081; the
+replicas mount `config.multi-replica.yaml` (routed to the mock) and the committed
+`config.yaml` is untouched. Balancing is **least-conn**, not round-robin: an LLM
+request runs for seconds in proportion to answer length, so counting requests leaves
+one replica holding the long ones — and `MAX_IN_FLIGHT` is per process, so that
+replica sheds 429s while its peers idle. `nginx/nginx.conf.template` (a template —
+the image runs `envsubst` at startup, so the knobs come from compose/`.env`) documents
+the non-optional settings, `proxy_buffering off` above all, since without it
+time-to-first-token silently becomes full completion latency.
+
+`cmd/killreplica` opens 12 concurrent SSE streams, SIGKILLs one replica mid-delivery
+and asserts **fleet-level** properties. Streams pinned to the dying replica *do* drop
+— nginx can only retry before it has forwarded a response header, and an SSE header
+leaves within milliseconds — so drops are **reported, not failed on**, and a run with
+zero drops fails instead, because it means the kill missed the streams and proved
+nothing. What is asserted: every other stream reaches full frame count, a post-kill
+wave still succeeds, and a survivor's `/metrics` shows it absorbed the work. The
+killed replica is never asserted on (recovery is a separate question; nginx resolves
+upstream names once at startup, so a revived container on a new IP is invisible to it
+— **restart nginx after any `--force-recreate` of the replicas**).
 
 **Self-protection vs upstream-protection.** Retry and the breaker shield the *upstream* from
 LLMGuard. `admission.go` shields *LLMGuard from its callers*, and it bounds a different quantity than
@@ -247,8 +319,8 @@ leaks a span that is never exported.
 
 **Spans land in ClickHouse, not a trace UI.** An OTel Collector (`llmguard/observability/otel-collector.yaml`) receives OTLP and writes `otel.otel_traces`, so the Go code names no backend and swapping stores is a config change. The reason is the benchmark: `quantileExact` over exact nanosecond durations replaces a quantile interpolated between pre-declared histogram bounds, where a p95 read off a 3-second bucket hides any change smaller than the bucket. What this costs is that export is asynchronous and bounded at three points — the SDK batch queue, the collector sending queue, ClickHouse itself — and an overflow at any of them drops spans **silently**. `requests_total` is the control, being incremented in-process: it must equal `count(DISTINCT TraceId)`, and a shortfall means the numbers are incomplete.
 
-The pipeline lives in `internal/gateway/` (config, proxy, admission, retry, breakershare,
-ratelimit, metrics, idlewatchdog, writedeadline, tracing);
+The pipeline lives in `internal/gateway/` (config, modelconfig, providers, proxy, admission,
+retry, breakershare, ratelimit, metrics, idlewatchdog, writedeadline, tracing);
 `main.go` at the module root is a thin composition root, and `internal/gateway/gateway.go` is the
 entire exported surface between them. Everything else in the package stays unexported, and tests
 sit beside the code they exercise so nothing is exported merely to be testable.
@@ -311,11 +383,12 @@ Redis-backed tests (the rate limiter's Lua token bucket) use **DB 15** via
 | MongoDB | 27017 |
 | Redis | 6379 |
 | LLMGuard (Go) | 8081 |
-| MCP server | 8090 (`observability` scrape target; always available) |
+| MCP server | 8090 (`mcp` profile; also an `observability` scrape target) |
 | Prometheus | 9090 (`observability` profile) |
 | Grafana | 3000 (`observability` profile) |
 | OTel Collector | 4318 OTLP/HTTP (`observability` profile) |
 | ClickHouse | 8123 HTTP, 9000 native (`observability` profile) |
+| nginx → LLMGuard replicas | 8082 (`multi-replica` profile; 8081 stays the single-replica gateway) |
 
 Swagger UI: `http://localhost:2010/docs`
 LLMGuard metrics: `http://localhost:8081/metrics`
@@ -343,6 +416,8 @@ MCP endpoint: `http://localhost:8090/mcp/` · metrics: `http://localhost:8090/me
 | `backend/mcp_server/__main__.py` | MCP ASGI app: per-request bearer auth → `StreamableHTTPSessionManager`, `/mcp` + `/metrics` |
 | `backend/mcp_server/README.md` | MCP runbook + measured overhead/capacity benchmarks |
 | `docs/benchmarks/mcp-procedure.md` | Two-VM GCP setup for the serving-capacity load test |
+| `backend/llmguard/config.yaml` | Model allowlist — the only authority over which (provider, model) pairs are servable; missing/invalid = startup failure |
+| `backend/llmguard/internal/gateway/gateway.go` | The entire exported surface between `main.go` and the pipeline |
 
 ## Docs
 
@@ -389,18 +464,16 @@ knowing before editing it:
 
 ## Data Flow: Document Upload
 
-1. PDFs processed by `backend/vector_database_tests/data_processing.py`
+1. PDFs processed by `backend/VectorBench/data_processing.py`
 2. Uploaded via `data_uploading.py` to Qdrant (and optionally other vector DBs)
 3. Indexed with `all-MiniLM-L6-v2` embeddings (dim 384)
 
-## Vector DB Benchmark Lab (`backend/vector_database_tests/`)
+## Vector DB Benchmark Lab (`backend/VectorBench/`)
 
 A benchmark to choose which engine to self-host (Qdrant default vs Milvus,
-Weaviate, Vespa, ChromaDB). The benchmark *pipeline* is a decision tool, but note this
-directory is **load-bearing for prod**: the running app imports its Qdrant client
-(`from vector_database_tests.utils.qdrant_client import get_qdrant_client` in
-`chatbot_workspace.py:11`). Treat `vector_database_tests/utils/qdrant_client.py` as
-production code, not throwaway benchmark code.
+Weaviate, Vespa, ChromaDB). **Detachable**: the app imports nothing from here. The Qdrant
+client both sides share is `backend/utils/qdrant_client.py` — production code, and the one
+file here that must keep the client-wrapper contract when edited.
 Methodology follows [ann-benchmarks](https://github.com/erikbern/ann-benchmarks): latency is
 only comparable **at equal recall**, so a fast-looking engine isn't rewarded for silently
 searching fewer candidates.
@@ -454,7 +527,7 @@ The repo carries Cursor rules that apply to work here regardless of which assist
   start writing.
 
 `patterns/client-wrapper-pattern.mdc` (globs `backend/**/*_client.py`) — new or edited
-`*_client.py` SDK wrappers must mirror `backend/vector_database_tests/utils/qdrant_client.py`:
+`*_client.py` SDK wrappers must mirror `backend/utils/qdrant_client.py`:
 one primary wrapper class; SDK client and heavy deps constructed in `__init__` and stored on
 `self.__private` / `self._protected`; snake_case type-hinted public methods; external I/O wrapped
 in `try / except Exception as e` logging `LOGGER.error(f"<short context>\n\t{str(e)}")`. Retrieval

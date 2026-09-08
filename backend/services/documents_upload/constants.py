@@ -10,7 +10,7 @@ USER_DOCUMENTS_COLLECTION = "UserDocuments"
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 EMBEDDING_DIMENSION = 384
 
-# Chunking — mirrors backend/vector_database_tests/data_processing.py
+# Chunking — mirrors backend/VectorBench/data_processing.py
 CHUNK_SIZE = 512
 CHUNK_OVERLAP = 64
 

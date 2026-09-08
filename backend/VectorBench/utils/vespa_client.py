@@ -2,7 +2,7 @@
 # docker exec -it la-vespa-service curl -s http://localhost:19071/state/v1/health
 # docker exec -it la-vespa-service curl -s http://localhost:8080/state/v1/health
 # docker exec -it la-vespa-service vespa deploy /app
-# docker exec -it la-documedai-service python -m vector_database_tests.data_uploading
+# docker exec -it la-documedai-service python -m VectorBench.data_uploading
 from logger import get_logger
 
 import torch, requests, asyncio, aiohttp, warnings

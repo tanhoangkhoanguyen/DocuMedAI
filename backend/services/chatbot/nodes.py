@@ -27,7 +27,7 @@ from services.chatbot.constants.prompts import (
     DRAFT_AGENT_PROMPT,
     CRITIC_AGENT_PROMPT
 )
-from vector_database_tests.utils.qdrant_client import get_qdrant_client
+from utils.qdrant_client import get_qdrant_client
 from toolcore.core import get_mcp_client
 from utils.rag import get_rag_client
 from utils.pattern_cipher import get_pattern_cipher

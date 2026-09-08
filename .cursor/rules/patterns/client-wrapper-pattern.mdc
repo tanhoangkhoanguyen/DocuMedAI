@@ -7,7 +7,7 @@ alwaysApply: false
 
 # Client-wrapper coding pattern
 
-When **adding** or **editing** **SDK wrapper modules** named `*_client.py` under `backend/`, follow the same structure and conventions as the reference: `backend/vector_database_tests/utils/qdrant_client.py`
+When **adding** or **editing** **SDK wrapper modules** named `*_client.py` under `backend/`, follow the same structure and conventions as the reference: `backend/utils/qdrant_client.py`
 
 ## Module layout (top to bottom)
 

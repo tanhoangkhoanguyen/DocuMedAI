@@ -24,11 +24,11 @@ class DataProcessing:
             # self.raw_dataset = dataset["train"].shuffle(seed = 42)
             self.raw_dataset = load_dataset(self.dataset_name, split = "train", streaming = True)
             print(f"""
-                [INFO] [backend.vector_database_tests.data_processing] Loaded dataset '{self.dataset_name}'
+                [INFO] [backend.VectorBench.data_processing] Loaded dataset '{self.dataset_name}'
             """)
         except Exception as e:
             print(f"""
-                [ERROR] [backend.vector_database_tests.data_processing] Failed to load dataset '{self.dataset_name}'
+                [ERROR] [backend.VectorBench.data_processing] Failed to load dataset '{self.dataset_name}'
             """)
     
     def embed_query(
@@ -41,7 +41,7 @@ class DataProcessing:
     def generated_queries(
             self,
             num_queries: int,
-            output_path: str = "vector_database_tests/generated_queries"
+            output_path: str = "VectorBench/generated_queries"
         ):
         try:
             output_path = f"{output_path}/{self.dataset_name.replace('/', '-')}.jsonl"
@@ -59,11 +59,11 @@ class DataProcessing:
                     if num_queries == 0:
                         break
             print(f"""
-                [INFO] [backend.vector_database_tests.data_processing] Generated queries for dataset '{self.dataset_name}'
+                [INFO] [backend.VectorBench.data_processing] Generated queries for dataset '{self.dataset_name}'
             """)
         except Exception as e:
             print(f"""
-                [ERROR] [backend.vector_database_tests.data_processing] Failed to create queries for dataset '{self.dataset_name}'
+                [ERROR] [backend.VectorBench.data_processing] Failed to create queries for dataset '{self.dataset_name}'
                 \t{str(e)}
             """)
 
@@ -90,11 +90,11 @@ class DataProcessing:
                         "split_text": chunk,
                     }
             print(f"""
-                [INFO] [backend.vector_database_tests.data_processing] Split dataset '{self.dataset_name}'
+                [INFO] [backend.VectorBench.data_processing] Split dataset '{self.dataset_name}'
             """)
         except Exception as e:
             print(f"""
-                [ERROR] [backend.vector_database_tests.data_processing] Failed to split dataset '{self.dataset_name}'
+                [ERROR] [backend.VectorBench.data_processing] Failed to split dataset '{self.dataset_name}'
                 \t{str(e)}
             """)
 
@@ -107,11 +107,11 @@ class DataProcessing:
                 chunk["embedded_test"] = self.embed_query(chunk["split_text"]) # embedded_text
                 yield chunk                    
             print(f"""
-                [INFO] [backend.vector_database_tests.data_processing] Embedded dataset '{self.dataset_name}'
+                [INFO] [backend.VectorBench.data_processing] Embedded dataset '{self.dataset_name}'
             """)
         except Exception as e:
             print(f"""
-                [ERROR] [backend.vector_database_tests.data_processing] Failed to embedded dataset '{self.dataset_name}'
+                [ERROR] [backend.VectorBench.data_processing] Failed to embedded dataset '{self.dataset_name}'
                 \t{str(e)}
             """)
 
@@ -119,7 +119,7 @@ class DataProcessing:
             self,
             embedded_chunks,
             batch_size: int = 50000,
-            output_path: str = "vector_database_tests/dataset"
+            output_path: str = "VectorBench/dataset"
         ):
         try:
             base_path = f"{output_path}/{self.dataset_name.replace('/', '-')}"
@@ -137,11 +137,11 @@ class DataProcessing:
                     count = 0
                     f = open(f"{base_path}-{file_count}.jsonl", 'w', encoding = "utf-8")
             print(f"""
-                [INFO] [backend.vector_database_tests.data_processing] Saved dataset '{self.dataset_name}'
+                [INFO] [backend.VectorBench.data_processing] Saved dataset '{self.dataset_name}'
             """)
         except Exception as e:
             print(f"""
-                [ERROR] [backend.vector_database_tests.data_processing] Failed to save dataset '{self.dataset_name}'
+                [ERROR] [backend.VectorBench.data_processing] Failed to save dataset '{self.dataset_name}'
                 \t{str(e)}
             """)
     
@@ -170,13 +170,13 @@ class DataProcessing:
                             seen.add(text)
                         count += 1
             print(f"""
-                [INFO] [backend.vector_database_tests.data_processing]
+                [INFO] [backend.VectorBench.data_processing]
                 \tCount:     {count}
                 \tDuplicate: {duplicate}
             """)
         except Exception as e:
             print(f"""
-                [ERROR] [backend.vector_database_tests.data_processing] Failed to describe dataset folder
+                [ERROR] [backend.VectorBench.data_processing] Failed to describe dataset folder
                 \t{str(e)}
             """)
 
@@ -189,11 +189,11 @@ class DataProcessing:
         self.__save_to_jsonl(embedded_chunks)
 
         self.describe_folder(
-            folder_path = "vector_database_tests/generated_queries",
+            folder_path = "VectorBench/generated_queries",
             field = "query"
         )
         self.describe_folder(
-            folder_path = "vector_database_tests/dataset",
+            folder_path = "VectorBench/dataset",
             field = "split_text"
         )
 

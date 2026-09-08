@@ -20,9 +20,9 @@ gcp-sa.json
 **.jsonl
 
 # Vector database benchmark results files
-!/backend/vector_database_tests/sweep_results/**
-!/backend/vector_database_tests/throughput_results/**
-!/backend/vector_database_tests/upload_results/**
+!/backend/VectorBench/sweep_results/**
+!/backend/VectorBench/throughput_results/**
+!/backend/VectorBench/upload_results/**
 
 # Keep project manifests that tooling (npm, tsc) requires.
 !**/package.json

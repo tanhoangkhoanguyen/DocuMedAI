@@ -16,7 +16,7 @@ execution core the internal agent uses — one core, two surfaces (in-process + 
 From the repo root. Requires `AUTH_JWT_SECRET` in `.env`:
 
 ```powershell
-docker compose up -d --build la-mcp-server
+docker compose --profile mcp up -d --build la-mcp-server
 docker compose logs -f la-mcp-server    # wait for: serving streamable-HTTP at http://0.0.0.0:8090/mcp
 ```
 
@@ -141,7 +141,7 @@ overhead is one PromQL query.
 Optional compose profile. Needs `la-mcp-server` up:
 
 ```powershell
-docker compose up -d --build la-mcp-server                 # exposes /metrics
+docker compose --profile mcp up -d --build la-mcp-server                 # exposes /metrics
 docker compose --profile observability up -d la-prometheus la-grafana
 ```
 
@@ -157,7 +157,7 @@ server from an MCP host) to populate them.
 Two benchmarks measure two orthogonal things: **per-call protocol cost** (what does wrapping
 the core in MCP cost?) and **serving capacity** (how much load holds, and how does it fail?).
 Both write a JSON report (`--out`) and inherit the coordinated-omission discipline of
-`vector_database_tests/` — latency is charged from each request's *ideal* send time, so a
+`VectorBench/` — latency is charged from each request's *ideal* send time, so a
 saturated server shows rising latency (the truth) rather than reduced load (the lie).
 
 Both drive `identity`, which returns a constant string and does no I/O. That is deliberate:
@@ -190,7 +190,7 @@ Reading this honestly:
   4.8 ms into a tool that does real work and the ratio collapses. Quoting +532% without that
   caveat would be dishonest in the flattering direction *and* the alarming one.
 - **For scale**, Qdrant search at recall@10 ≥ 0.95 is 4.383 ms median
-  ([`sweep_results/qdrant.json`](../vector_database_tests/sweep_results/qdrant.json)) — so
+  ([`sweep_results/qdrant.json`](../VectorBench/sweep_results/qdrant.json)) — so
   protocol cost is the *same order* as the vector search it wraps. Rerank and LLM latency are
   **not yet measured**, so the share of a full RAG call is unknown and is not claimed here.
 - **p99 overhead % (267%) is lower than p50 (532%)** because the direct arm's own p99 degrades

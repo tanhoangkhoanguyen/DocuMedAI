@@ -21,7 +21,7 @@ Run standalone:  python -m services.chatbot.seed_prod_data
 import os, json
 
 from logger import get_logger
-from vector_database_tests.utils.qdrant_client import get_qdrant_client
+from utils.qdrant_client import get_qdrant_client
 
 
 _LOGGER = get_logger(

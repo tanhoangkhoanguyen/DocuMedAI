@@ -5,7 +5,7 @@ warnings.filterwarnings("ignore")
 
 from services.chatbot.workflow import build_graph
 from services.chatbot.constants.schemas import GraphState, UserInfo
-from vector_database_tests.utils.qdrant_client import get_qdrant_client
+from utils.qdrant_client import get_qdrant_client
 from logger import get_logger
 
 
@@ -91,7 +91,7 @@ if __name__ == "__main__":
         ids, queries, embedded_queries = [], [], []
         total_indexing_time = 0
 
-        with open("vector_database_tests/dataset/gamino-wiki_medical_terms-1.jsonl", 'r', encoding = "utf-8") as f:
+        with open("VectorBench/dataset/gamino-wiki_medical_terms-1.jsonl", 'r', encoding = "utf-8") as f:
             for obj in f:
                 object = json.loads(obj)
                 ids.append(object["id"])
